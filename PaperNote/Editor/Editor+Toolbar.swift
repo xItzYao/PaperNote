@@ -487,6 +487,11 @@ extension NotebookViewController {
                 self?.applyInsets(PageInsets(), pageIndex: i, toAll: false)
             })
         }
+        let trashed = session.trashedPages.count
+        items.append(UIAction(title: trashed > 0 ? "最近刪除的頁面（\(trashed)）…" : "最近刪除的頁面…",
+                              image: UIImage(systemName: "trash.slash")) { [weak self] _ in
+            self?.presentTrashedPages(from: nil)
+        })
         items.append(UIAction(title: "刪除此頁", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
             self?.deletePage(i)
         })

@@ -773,15 +773,37 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             showMessage("至少要保留一頁")
             return
         }
-        let a = UIAlertController(title: "刪除第 \(index + 1) 頁？", message: "這頁的筆跡和物件都會一起刪除，無法復原。", preferredStyle: .alert)
-        a.addAction(UIAlertAction(title: "取消", style: .cancel))
-        a.addAction(UIAlertAction(title: "刪除", style: .destructive) { [weak self] _ in
-            guard let self else { return }
-            self.performLayoutChange {
-                self.session.document.pages.remove(at: index)
-            }
-        })
-        present(a, animated: true)
+        // 移到「最近刪除的頁面」，30 天內可以還原
+        performLayoutChange {
+            session.trashPage(at: index)
+        }
+        showToast("第 \(index + 1) 頁已移到「頁面 → 最近刪除的頁面」，30 天內可以還原")
+    }
+
+    func presentTrashedPages(from source: UIView?) {
+        saveNow()
+        var host: UIHostingController<TrashedPagesHost>?
+        let view = TrashedPagesHost(
+            items: TrashedPageItem.make(from: session),
+            onRestore: { [weak self] id in
+                guard let self else { return }
+                var restored: Int?
+                self.performLayoutChange { restored = self.session.restoreTrashedPage(id) }
+                if let i = restored { self.scrollToPage(i, animated: true) }
+                host?.rootView.items = TrashedPageItem.make(from: self.session)
+            },
+            onDelete: { [weak self] id in
+                guard let self else { return }
+                self.session.deleteTrashedPage(id)
+                self.saveNow()
+                host?.rootView.items = TrashedPageItem.make(from: self.session)
+            },
+            onDone: { host?.dismiss(animated: true) }
+        )
+        let h = UIHostingController(rootView: view)
+        h.modalPresentationStyle = .formSheet
+        host = h
+        present(h, animated: true)
     }
 
     func presentJumpToPage() {
@@ -856,5 +878,24 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     @objc private func keyboardWillHide(_ n: Notification) {
         keyboardInset = 0
         updateZoomLayout()
+    }
+}
+
+/// 編輯畫面裡的「最近刪除的頁面」
+struct TrashedPagesHost: View {
+    var items: [TrashedPageItem]
+    let onRestore: (UUID) -> Void
+    let onDelete: (UUID) -> Void
+    let onDone: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            TrashedPagesList(items: items, onRestore: onRestore, onDelete: onDelete)
+                .navigationTitle("最近刪除的頁面")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) { Button("完成", action: onDone) }
+                }
+        }
     }
 }

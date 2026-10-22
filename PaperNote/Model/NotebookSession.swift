@@ -45,6 +45,76 @@ final class NotebookSession {
                 savedDrawingData[page.id] = d
             }
         }
+        // 垃圾桶裡頁面的筆跡留在磁碟上；記錄起來，存檔時才不會被當成孤兒刪掉
+        for t in document.trash ?? [] {
+            if let d = try? Data(contentsOf: drawingURL(t.page.id)) { savedDrawingData[t.page.id] = d }
+        }
+        purgeExpiredPages()
+    }
+
+    // MARK: 最近刪除的頁面
+
+    var trashedPages: [TrashedPage] { document.trash ?? [] }
+
+    /// 頁面移到垃圾桶（筆跡先寫到磁碟保留）
+    func trashPage(at index: Int) {
+        guard document.pages.indices.contains(index) else { return }
+        let page = document.pages.remove(at: index)
+        if let d = drawings[page.id], !d.strokes.isEmpty {
+            let data = d.dataRepresentation()
+            try? data.write(to: drawingURL(page.id), options: .atomic)
+            savedDrawingData[page.id] = data
+        }
+        var trash = document.trash ?? []
+        trash.insert(TrashedPage(page: page, deletedAt: Date(), originalIndex: index), at: 0)
+        document.trash = trash
+    }
+
+    /// 還原頁面，回傳放回的位置
+    @discardableResult
+    func restoreTrashedPage(_ id: UUID) -> Int? {
+        guard var trash = document.trash, let i = trash.firstIndex(where: { $0.page.id == id }) else { return nil }
+        let t = trash.remove(at: i)
+        document.trash = trash
+        let at = min(max(0, t.originalIndex), document.pages.count)
+        document.pages.insert(t.page, at: at)
+        if let drawing = loadDrawingFromDisk(t.page.id) { drawings[t.page.id] = drawing }
+        return at
+    }
+
+    func deleteTrashedPage(_ id: UUID) {
+        document.trash?.removeAll { $0.page.id == id }
+    }
+
+    func emptyPageTrash() {
+        document.trash = []
+    }
+
+    func purgeExpiredPages() {
+        document.trash?.removeAll { Trash.isExpired($0.deletedAt) }
+    }
+
+    func loadDrawingFromDisk(_ pageID: UUID) -> PKDrawing? {
+        guard let d = try? Data(contentsOf: drawingURL(pageID)) else { return nil }
+        return try? PKDrawing(data: d)
+    }
+
+    func trashedPageThumbnail(_ id: UUID, width: CGFloat = 160) -> UIImage? {
+        guard let t = trashedPages.first(where: { $0.page.id == id }) else { return nil }
+        let page = t.page
+        let had = drawings[page.id]
+        if had == nil, let d = loadDrawingFromDisk(page.id) { drawings[page.id] = d }
+        defer { if had == nil { drawings[page.id] = nil } }
+        let size = fullSize(of: page)
+        guard size.width > 0 else { return nil }
+        let scale = width / size.width
+        let fmt = UIGraphicsImageRendererFormat()
+        fmt.scale = 1
+        fmt.opaque = true
+        return UIGraphicsImageRenderer(size: CGSize(width: width, height: (size.height * scale).rounded()), format: fmt).image { rc in
+            rc.cgContext.scaleBy(x: scale, y: scale)
+            PageRenderer.drawFullPage(page, session: self, in: rc.cgContext, inkScale: max(scale * 2, 0.5))
+        }
     }
 
     private func drawingURL(_ pageID: UUID) -> URL {
@@ -144,7 +214,7 @@ final class NotebookSession {
         } catch {
             print("Save document failed: \(error)")
         }
-        let ids = Set(document.pages.map(\.id))
+        let ids = Set(document.pages.map(\.id) + trashedPages.map(\.page.id))
         for page in document.pages {
             let d = drawings[page.id] ?? PKDrawing()
             if d.strokes.isEmpty && savedDrawingData[page.id] == nil { continue }
@@ -159,6 +229,7 @@ final class NotebookSession {
             savedDrawingData[pid] = nil
             drawings[pid] = nil
         }
+        let trashedCount = trashedPages.count
         let favorites = document.pages.enumerated().compactMap { i, p -> FavoriteRef? in
             p.favorite ? FavoriteRef(pageId: p.id, pageNumber: i + 1, note: p.note) : nil
         }
@@ -167,6 +238,7 @@ final class NotebookSession {
             meta.pageCount = count
             meta.modified = Date()
             meta.favorites = favorites
+            meta.trashedPageCount = trashedCount
         }
     }
 

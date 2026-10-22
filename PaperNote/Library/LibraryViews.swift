@@ -111,6 +111,7 @@ struct FolderView: View {
     @State private var exporting = false
     @State private var showAbout = false
     @State private var showBackup = false
+    @State private var showTrash = false
     @State private var dropTarget: UUID?
     @State private var selecting = false
     @State private var selection: Set<UUID> = []
@@ -137,7 +138,7 @@ struct FolderView: View {
 
     private var notebooks: [NotebookMeta] {
         let list = search.isEmpty ? store.notebooks(in: folderID)
-            : store.index.notebooks.filter { $0.title.localizedCaseInsensitiveContains(search) }
+            : store.visibleNotebooks.filter { $0.title.localizedCaseInsensitiveContains(search) }
         switch sortMode {
         case "name": return list.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
         case "created": return list.sorted { $0.created > $1.created }
@@ -190,6 +191,7 @@ struct FolderView: View {
                     Label("我的最愛頁面", systemImage: "star")
                 }
                 Menu {
+                    Button { showTrash = true } label: { Label("垃圾桶", systemImage: "trash") }
                     Button { showBackup = true } label: { Label("雲端備份（Google Drive）", systemImage: "icloud.and.arrow.up") }
                     Button { showAbout = true } label: { Label("關於我", systemImage: "person.crop.circle") }
                 } label: {
@@ -445,6 +447,7 @@ struct FolderView: View {
         } message: {
             Text("選取的筆記本（以及資料夾裡的所有內容）會被永久刪除，無法復原。")
         }
+        .sheet(isPresented: $showTrash) { TrashView().environmentObject(store) }
         .sheet(isPresented: $showAbout) { AboutView() }
         .sheet(isPresented: $showBackup) { BackupView() }
         .sheet(item: $shareItem) { item in
@@ -561,7 +564,11 @@ struct FolderView: View {
                 }
                 selection = []
             } label: { Label("複製", systemImage: "plus.square.on.square") }
-            Button(role: .destructive) { confirmBatchDelete = true } label: { Label("刪除", systemImage: "trash") }
+            Button(role: .destructive) {
+                moveToTrash(selectedItems)
+                selection = []
+                selecting = false
+            } label: { Label("刪除", systemImage: "trash") }
             }
             .disabled(selection.isEmpty)
         }
@@ -569,6 +576,18 @@ struct FolderView: View {
         .padding(.vertical, 12)
         .background(.bar)
         .overlay(alignment: .top) { Divider() }
+    }
+
+    /// 刪除＝移到垃圾桶（30 天後才永久刪除）
+    private func moveToTrash(_ items: [LibraryItem]) {
+        for item in items {
+            switch item {
+            case let .folder(f): store.trashFolder(f.id)
+            case let .notebook(n):
+                store.trashNotebook(n.id)
+                TabStore.shared.close(n.id)
+            }
+        }
     }
 
     private var deleteTitle: String {
@@ -598,7 +617,7 @@ struct FolderView: View {
             Button { export(n.id) } label: { Label("匯出 PDF", systemImage: "square.and.arrow.up") }
         }
         Divider()
-        Button(role: .destructive) { deleteTarget = item } label: { Label("刪除", systemImage: "trash") }
+        Button(role: .destructive) { moveToTrash([item]) } label: { Label("刪除", systemImage: "trash") }
     }
 
     private func export(_ id: UUID) {
@@ -782,7 +801,7 @@ struct FavoritesView: View {
 
     private var groups: [(notebook: NotebookMeta, favorites: [FavoriteRef])] {
         var result: [(notebook: NotebookMeta, favorites: [FavoriteRef])] = []
-        for nb in store.index.notebooks.sorted(by: { $0.modified > $1.modified }) where !nb.favorites.isEmpty {
+        for nb in store.visibleNotebooks.sorted(by: { $0.modified > $1.modified }) where !nb.favorites.isEmpty {
             let favs = nb.favorites
                 .filter { search.isEmpty || $0.note.localizedCaseInsensitiveContains(search) || nb.title.localizedCaseInsensitiveContains(search) }
                 .sorted { $0.pageNumber < $1.pageNumber }

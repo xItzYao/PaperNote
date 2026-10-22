@@ -40,6 +40,7 @@ final class LibraryStore: ObservableObject {
             index = idx
         }
         recoverOrphans()
+        purgeExpiredTrash()
     }
 
     private func save() {
@@ -93,13 +94,32 @@ final class LibraryStore: ObservableObject {
     // MARK: Queries
 
     func folders(in parent: UUID?) -> [Folder] {
-        index.folders.filter { $0.parentId == parent }
+        index.folders.filter { $0.parentId == parent && $0.deletedAt == nil }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
     func notebooks(in folder: UUID?) -> [NotebookMeta] {
-        index.notebooks.filter { $0.folderId == folder }.sorted { $0.modified > $1.modified }
+        index.notebooks.filter { $0.folderId == folder && $0.deletedAt == nil }.sorted { $0.modified > $1.modified }
     }
+
+    /// 資料夾本身或上層資料夾在垃圾桶裡
+    func isFolderTrashed(_ id: UUID?) -> Bool {
+        var cur = id
+        var guardCount = 0
+        while let c = cur, guardCount < 1000 {
+            guard let f = folder(c) else { return false }
+            if f.deletedAt != nil { return true }
+            cur = f.parentId
+            guardCount += 1
+        }
+        return false
+    }
+
+    /// 筆記本在垃圾桶裡（自己被刪，或所在資料夾被刪）
+    func isHidden(_ nb: NotebookMeta) -> Bool { nb.deletedAt != nil || isFolderTrashed(nb.folderId) }
+
+    /// 資料庫看得到的筆記本（不含垃圾桶）
+    var visibleNotebooks: [NotebookMeta] { index.notebooks.filter { !isHidden($0) } }
 
     func folder(_ id: UUID) -> Folder? { index.folders.first { $0.id == id } }
     func notebook(_ id: UUID) -> NotebookMeta? { index.notebooks.first { $0.id == id } }
@@ -158,9 +178,69 @@ final class LibraryStore: ObservableObject {
         return true
     }
 
+    // MARK: 垃圾桶
+
+    func trashFolder(_ id: UUID) {
+        guard let i = index.folders.firstIndex(where: { $0.id == id }) else { return }
+        index.folders[i].deletedAt = Date()
+        save()
+    }
+
+    func trashNotebook(_ id: UUID) {
+        updateMeta(id) { $0.deletedAt = Date() }
+    }
+
+    /// 還原；原本的資料夾不在了就放回最上層
+    func restoreFolder(_ id: UUID) {
+        guard let i = index.folders.firstIndex(where: { $0.id == id }) else { return }
+        index.folders[i].deletedAt = nil
+        if let p = index.folders[i].parentId, folder(p) == nil || isFolderTrashed(p) { index.folders[i].parentId = nil }
+        save()
+    }
+
+    func restoreNotebook(_ id: UUID) {
+        guard let nb = notebook(id) else { return }
+        // 先判斷好，避免在修改 index 的同時又讀取它
+        let folderGone = nb.folderId.map { folder($0) == nil || isFolderTrashed($0) } ?? false
+        updateMeta(id) { meta in
+            meta.deletedAt = nil
+            if folderGone { meta.folderId = nil }
+        }
+    }
+
+    /// 垃圾桶裡最上層的項目（資料夾裡的東西跟著資料夾，不另外列）
+    var trashedFolders: [Folder] {
+        index.folders.filter { $0.deletedAt != nil && !isFolderTrashed($0.parentId) }
+            .sorted { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }
+    }
+
+    var trashedNotebooks: [NotebookMeta] {
+        index.notebooks.filter { $0.deletedAt != nil && !isFolderTrashed($0.folderId) }
+            .sorted { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }
+    }
+
+    /// 有「最近刪除的頁面」的筆記本
+    var notebooksWithTrashedPages: [NotebookMeta] {
+        visibleNotebooks.filter { $0.trashedPageCount > 0 }.sorted { $0.modified > $1.modified }
+    }
+
+    /// 超過 30 天的項目永久刪除（頁面的部分在打開筆記本時處理）
+    func purgeExpiredTrash() {
+        for f in index.folders where f.deletedAt.map(Trash.isExpired) == true { deleteFolder(f.id) }
+        for nb in index.notebooks where nb.deletedAt.map(Trash.isExpired) == true { deleteNotebook(nb.id) }
+    }
+
+    func emptyTrash() {
+        for f in trashedFolders { deleteFolder(f.id) }
+        for nb in trashedNotebooks { deleteNotebook(nb.id) }
+    }
+
+    // MARK: 永久刪除
+
     func deleteFolder(_ id: UUID) {
-        for sub in folders(in: id) { deleteFolder(sub.id) }
-        for nb in notebooks(in: id) { deleteNotebook(nb.id) }
+        // 包含已經在垃圾桶裡的子項目
+        for sub in index.folders where sub.parentId == id { deleteFolder(sub.id) }
+        for nb in index.notebooks where nb.folderId == id { deleteNotebook(nb.id) }
         index.folders.removeAll { $0.id == id }
         save()
     }
@@ -271,7 +351,7 @@ final class LibraryStore: ObservableObject {
 
     func allFavorites() -> [(notebook: NotebookMeta, favorite: FavoriteRef)] {
         var result: [(notebook: NotebookMeta, favorite: FavoriteRef)] = []
-        for nb in index.notebooks.sorted(by: { $0.modified > $1.modified }) {
+        for nb in visibleNotebooks.sorted(by: { $0.modified > $1.modified }) {
             for fav in nb.favorites.sorted(by: { $0.pageNumber < $1.pageNumber }) {
                 result.append((notebook: nb, favorite: fav))
             }

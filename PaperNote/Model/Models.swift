@@ -97,9 +97,32 @@ struct Page: Codable, Equatable, Identifiable {
     }
 }
 
+/// 被刪除的頁面（30 天內可以還原）
+struct TrashedPage: Codable, Identifiable {
+    var page: Page
+    var deletedAt: Date
+    var originalIndex: Int
+
+    var id: UUID { page.id }
+}
+
 struct NotebookDocument: Codable {
     var version = 1
     var pages: [Page]
+    /// 最近刪除的頁面（舊版存檔沒有這個欄位）
+    var trash: [TrashedPage]? = nil
+}
+
+enum Trash {
+    static let retentionDays = 30
+
+    static func isExpired(_ date: Date) -> Bool {
+        Date().timeIntervalSince(date) > Double(retentionDays) * 86_400
+    }
+
+    static func daysLeft(_ date: Date) -> Int {
+        max(0, retentionDays - Int(Date().timeIntervalSince(date) / 86_400))
+    }
 }
 
 // MARK: - Library
@@ -109,6 +132,8 @@ struct Folder: Codable, Equatable, Identifiable {
     var name: String
     var parentId: UUID?
     var created = Date()
+    /// 有值＝在垃圾桶裡
+    var deletedAt: Date? = nil
 }
 
 struct FavoriteRef: Codable, Equatable, Hashable {
@@ -126,6 +151,10 @@ struct NotebookMeta: Codable, Equatable, Identifiable {
     var coverHex: String
     var pageCount = 0
     var favorites: [FavoriteRef] = []
+    /// 有值＝在垃圾桶裡
+    var deletedAt: Date? = nil
+    /// 這本筆記本「最近刪除的頁面」數量
+    var trashedPageCount = 0
 
     init(title: String, folderId: UUID?, coverHex: String) {
         self.title = title
@@ -134,7 +163,7 @@ struct NotebookMeta: Codable, Equatable, Identifiable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, title, folderId, created, modified, coverHex, pageCount, favorites
+        case id, title, folderId, created, modified, coverHex, pageCount, favorites, deletedAt, trashedPageCount
     }
 
     init(from decoder: Decoder) throws {
@@ -147,6 +176,8 @@ struct NotebookMeta: Codable, Equatable, Identifiable {
         coverHex = try c.decodeIfPresent(String.self, forKey: .coverHex) ?? "#2654A0FF"
         pageCount = try c.decodeIfPresent(Int.self, forKey: .pageCount) ?? 0
         favorites = try c.decodeIfPresent([FavoriteRef].self, forKey: .favorites) ?? []
+        deletedAt = try c.decodeIfPresent(Date.self, forKey: .deletedAt)
+        trashedPageCount = try c.decodeIfPresent(Int.self, forKey: .trashedPageCount) ?? 0
     }
 }
 

@@ -75,7 +75,7 @@ final class TabsViewController: UIViewController {
             container.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
 
-        store.prune(existing: Set(LibraryStore.shared.index.notebooks.map(\.id)))
+        store.prune(existing: Set(LibraryStore.shared.visibleNotebooks.map(\.id)))
         if let a = store.state.active {
             show(a)
         } else {

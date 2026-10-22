@@ -55,7 +55,7 @@ struct HelpView: View {
                 }
                 Section("其他") {
                     row(Item(symbol: "star", title: "我的最愛", detail: "把目前這頁加入我的最愛並寫備註；資料庫的「我的最愛頁面」可以搜尋所有備註。"))
-                    row(Item(symbol: "doc.on.doc", title: "頁面", detail: "跳頁、新增空白頁、刪除頁面。"))
+                    row(Item(symbol: "doc.on.doc", title: "頁面", detail: "跳頁、新增空白頁、刪除頁面；刪除的頁面 30 天內可以在「最近刪除的頁面」還原。"))
                     row(Item(symbol: "ellipsis.circle", title: "設定", detail: "手指書寫、停住變直線、螢光筆對齊文字、點三下叫出筆盤、筆刷列靠右、匯出 PDF。"))
                 }
                 Section("關於我") {
