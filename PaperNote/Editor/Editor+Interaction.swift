@@ -103,16 +103,18 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
     func isPalmTouch(_ t: UITouch) -> Bool {
         let mode = settings.palmRejection
         guard mode != "off", t.type == .direct else { return false }
-        // 接觸面積很大（手掌、手側）
-        if t.majorRadius > 30 { return true }
+        // 只擋很大面積的觸碰（整個手掌）；一般手指平放也不會超過
+        if t.majorRadius > 55 { return true }
         let now = CACurrentMediaTime()
-        // 正在寫字或剛離開螢幕
-        if pencilDown || now - lastPencilTime < 0.8 { return true }
-        // 寫字後幾秒內，筆尖右下方（右手）／左下方（左手）的觸碰
-        guard now - lastPencilTime < 5, let pp = lastPencilPoint else { return false }
+        // 筆尖正在接觸螢幕，或剛離開不到 0.3 秒
+        // （超過 3 秒沒收到筆尖移動就不算「正在寫字」，避免狀態卡住讓頁面一直沒反應）
+        if (pencilDown && now - lastPencilTime < 3) || now - lastPencilTime < 0.3 { return true }
+        // 剛寫完 1.5 秒內，筆尖附近下方、寫字那一側的觸碰（手掌常壓的位置）
+        guard now - lastPencilTime < 1.5, let pp = lastPencilPoint else { return false }
         let p = t.location(in: view)
-        if mode == "left" { return p.x < pp.x + 60 && p.y > pp.y - 80 }
-        return p.x > pp.x - 60 && p.y > pp.y - 80
+        guard p.y > pp.y - 40, p.y < pp.y + 320 else { return false }
+        if mode == "left" { return p.x < pp.x + 40 && p.x > pp.x - 320 }
+        return p.x > pp.x - 40 && p.x < pp.x + 320
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
