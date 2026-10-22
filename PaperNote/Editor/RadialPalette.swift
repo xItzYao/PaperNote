@@ -308,9 +308,16 @@ extension NotebookViewController {
         editMenu.dismissMenu()
         let point = p ?? lastPencilPoint ?? CGPoint(x: view.bounds.midX, y: view.bounds.midY)
         // 直接打開：以筆尖為中心；小圖示：放在筆尖右上方一點，不會被筆擋住
-        // 小圖示放在筆尖右上方，不會被手和筆擋住；點了之後以筆尖位置為中心打開
-        let at = open ? point : CGPoint(x: point.x + 70, y: point.y - 70)
-        let overlay = PaletteOverlay(frame: view.bounds, at: at, currentTool: tool, startOpen: open, paletteCenter: point)
+        // 調色盤中心：筆尖位置，依手掌防誤觸的設定往寫字的手那側偏 35pt
+        var center = point
+        switch settings.palmRejection {
+        case "right": center.x += 35
+        case "left": center.x -= 35
+        default: break
+        }
+        // 小圖示放在筆尖右上方約 40pt；點了之後以上面的中心打開
+        let at = open ? center : CGPoint(x: point.x + 40, y: point.y - 40)
+        let overlay = PaletteOverlay(frame: view.bounds, at: at, currentTool: tool, startOpen: open, paletteCenter: center)
         overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         overlay.onSelectPreset = { [weak self] preset in
             guard let self else { return }
