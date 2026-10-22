@@ -41,8 +41,21 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         pencilPointTracker = TouchTracker(target: nil, action: nil)
         pencilPointTracker.coordinateView = view
         pencilPointTracker.delegate = self
-        pencilPointTracker.onPoint = { [weak self] p in self?.lastPencilPoint = p }
+        pencilPointTracker.onPoint = { [weak self] p in
+            self?.lastPencilPoint = p
+            self?.lastPencilTime = CACurrentMediaTime()
+        }
+        pencilPointTracker.onBegan = { [weak self] _ in self?.pencilDown = true }
+        pencilPointTracker.onEnded = { [weak self] in
+            self?.pencilDown = false
+            self?.lastPencilTime = CACurrentMediaTime()
+        }
         canvas.addGestureRecognizer(pencilPointTracker)
+
+        palmBlocker = PalmBlocker(target: nil, action: nil)
+        palmBlocker.delegate = self
+        palmBlocker.isPalm = { [weak self] t in self?.isPalmTouch(t) ?? false }
+        canvas.addGestureRecognizer(palmBlocker)
 
         holdRecognizer = PencilHoldRecognizer(target: nil, action: nil)
         holdRecognizer.coordinateView = pagesContainer
@@ -86,7 +99,28 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         return true
     }
 
+    /// 這個手指觸碰是不是手掌（寫字時壓在螢幕上的手）
+    func isPalmTouch(_ t: UITouch) -> Bool {
+        let mode = settings.palmRejection
+        guard mode != "off", t.type == .direct else { return false }
+        // 接觸面積很大（手掌、手側）
+        if t.majorRadius > 30 { return true }
+        let now = CACurrentMediaTime()
+        // 正在寫字或剛離開螢幕
+        if pencilDown || now - lastPencilTime < 0.8 { return true }
+        // 寫字後幾秒內，筆尖右下方（右手）／左下方（左手）的觸碰
+        guard now - lastPencilTime < 5, let pp = lastPencilPoint else { return false }
+        let p = t.location(in: view)
+        if mode == "left" { return p.x < pp.x + 60 && p.y > pp.y - 80 }
+        return p.x > pp.x - 60 && p.y > pp.y - 80
+    }
+
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        // 手掌只擋畫布的捲動與縮放，其他手勢（含 PencilKit 書寫）照常
+        if g === palmBlocker || other === palmBlocker {
+            let o = g === palmBlocker ? other : g
+            return !(o === canvas.panGestureRecognizer || o === canvas.pinchGestureRecognizer)
+        }
         // 偵測停住的辨識器要和 PencilKit 同時運作
         let passive: [UIGestureRecognizer?] = [holdRecognizer, eraserTracker, pencilPointTracker]
         return passive.contains { $0 === g || $0 === other }
@@ -101,6 +135,8 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        // 手掌的觸碰不觸發點選、長按、拖曳物件
+        if g !== palmBlocker, touch.type == .direct, isPalmTouch(touch) { return false }
         // 編輯文字時，點文字框內部交給 UITextView
         if let tv = editingTextView, touch.view?.isDescendant(of: tv) == true { return false }
         if g === textLongPress {

@@ -266,6 +266,8 @@ final class TouchTracker: UIGestureRecognizer {
     var allowFinger = false
     weak var coordinateView: UIView?
     var onPoint: ((CGPoint) -> Void)?
+    var onBegan: ((CGPoint) -> Void)?
+    var onEnded: (() -> Void)?
     private var tracked: UITouch?
 
     override init(target: Any?, action: Selector?) {
@@ -279,6 +281,7 @@ final class TouchTracker: UIGestureRecognizer {
         guard tracked == nil, let t = touches.first else { return }
         guard t.type == .pencil || (allowFinger && t.type == .direct) else { return }
         tracked = t
+        onBegan?(t.location(in: coordinateView))
         onPoint?(t.location(in: coordinateView))
     }
 
@@ -290,17 +293,66 @@ final class TouchTracker: UIGestureRecognizer {
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
         guard let t = tracked, touches.contains(t) else { return }
         tracked = nil
+        onEnded?()
         state = .failed
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
         guard let t = tracked, touches.contains(t) else { return }
         tracked = nil
+        onEnded?()
         state = .failed
     }
 
     override func reset() {
         super.reset()
+        if tracked != nil { onEnded?() }
         tracked = nil
+    }
+}
+
+/// 手掌防誤觸：判定為手掌的觸碰一出現就「辨識成功」，讓畫布的捲動、縮放無法開始。
+/// 不攔截 Pencil，也不影響 PencilKit 書寫。
+final class PalmBlocker: UIGestureRecognizer {
+    var isPalm: ((UITouch) -> Bool)?
+    private var palmTouches = Set<UITouch>()
+
+    override init(target: Any?, action: Selector?) {
+        super.init(target: target, action: action)
+        cancelsTouchesInView = false
+        delaysTouchesBegan = false
+        delaysTouchesEnded = false
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        for t in touches {
+            if isPalm?(t) == true {
+                palmTouches.insert(t)
+            } else if palmTouches.isEmpty {
+                ignore(t, for: event)
+            }
+        }
+        if !palmTouches.isEmpty && state == .possible { state = .began }
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        if state == .began || state == .changed { state = .changed }
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        palmTouches.subtract(touches)
+        guard palmTouches.isEmpty else { return }
+        state = (state == .began || state == .changed) ? .ended : .failed
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        palmTouches.subtract(touches)
+        guard palmTouches.isEmpty else { return }
+        state = (state == .began || state == .changed) ? .cancelled : .failed
+    }
+
+    override func reset() {
+        super.reset()
+        palmTouches.removeAll()
     }
 }

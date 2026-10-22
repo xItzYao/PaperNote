@@ -95,6 +95,11 @@ final class EditorSettings {
         get { bool("paletteOnDoubleTap", true) }
         set { d.set(newValue, forKey: "paletteOnDoubleTap") }
     }
+    /// 手掌防誤觸："right"（右手寫字）、"left"（左手寫字）、"off"
+    var palmRejection: String {
+        get { d.string(forKey: "palmRejection") ?? "right" }
+        set { d.set(newValue, forKey: "palmRejection") }
+    }
     /// 常用筆刷列靠右（左撇子／右撇子）
     var presetsOnRight: Bool {
         get { bool("presetsOnRight", false) }
@@ -151,6 +156,9 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var textLongPress: UILongPressGestureRecognizer!
     var pencilPointTracker: TouchTracker!
     var lastPencilPoint: CGPoint?
+    var pencilDown = false
+    var lastPencilTime: CFTimeInterval = 0
+    var palmBlocker: PalmBlocker!
     // 自訂套索
     var lassoPoints: [CGPoint] = []
     var lassoSel: LassoSelection?

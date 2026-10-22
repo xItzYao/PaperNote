@@ -510,6 +510,11 @@ extension NotebookViewController {
             UIAction(title: "Pencil 點兩下時顯示調色盤圖示", image: UIImage(systemName: "paintpalette"), state: s.paletteOnDoubleTap ? .on : .off) { _ in
                 s.paletteOnDoubleTap.toggle()
             },
+            UIMenu(title: "手掌防誤觸", image: UIImage(systemName: "hand.raised"), children: [
+                UIAction(title: "右手寫字", state: s.palmRejection == "right" ? .on : .off) { _ in s.palmRejection = "right" },
+                UIAction(title: "左手寫字", state: s.palmRejection == "left" ? .on : .off) { _ in s.palmRejection = "left" },
+                UIAction(title: "關閉", state: s.palmRejection == "off" ? .on : .off) { _ in s.palmRejection = "off" },
+            ]),
             UIAction(title: "筆刷列靠右", image: UIImage(systemName: "arrow.right.to.line"), state: s.presetsOnRight ? .on : .off) { [weak self] _ in
                 s.presetsOnRight.toggle()
                 self?.applyPresetAlignment()
