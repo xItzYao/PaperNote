@@ -58,31 +58,44 @@ extension NotebookViewController {
         return CGPoint(x: p.x + o.x, y: p.y + o.y)
     }
 
-    /// p 附近的電路圖（目前正在編輯的優先）
-    func circuitAt(_ p: CGPoint, margin: CGFloat) -> ElementRef? {
+    /// p 附近所有的電路圖（目前正在編輯的排第一，其餘由上往下）
+    func circuitsAt(_ p: CGPoint, margin: CGFloat) -> [ElementRef] {
+        var out: [ElementRef] = []
         if let t = circuitTarget, let info = circuitInfo(t),
            docFrame(of: info.element, pageIndex: info.pi).insetBy(dx: -margin, dy: -margin).contains(p) {
-            return t
+            out.append(t)
         }
-        guard let pi = pageIndex(containing: p) else { return nil }
+        guard let pi = pageIndex(containing: p) else { return out }
         for e in pages[pi].elements.reversed() {
             guard case .circuit = e.content else { continue }
-            if docFrame(of: e, pageIndex: pi).insetBy(dx: -margin, dy: -margin).contains(p) {
-                return ElementRef(pageID: pages[pi].id, elementID: e.id)
+            let ref = ElementRef(pageID: pages[pi].id, elementID: e.id)
+            if ref != circuitTarget, docFrame(of: e, pageIndex: pi).insetBy(dx: -margin, dy: -margin).contains(p) {
+                out.append(ref)
             }
         }
-        return nil
+        return out
     }
 
-    /// 點到的元件或導線
+    /// p 附近的電路圖（目前正在編輯的優先）
+    func circuitAt(_ p: CGPoint, margin: CGFloat) -> ElementRef? {
+        circuitsAt(p, margin: margin).first
+    }
+
+    /// 點到的元件或導線：重疊的電路圖都找，元件優先於導線
     func circuitHit(at p: CGPoint) -> (ref: ElementRef, selection: CircuitSelection)? {
-        guard let ref = circuitAt(p, margin: 10), let info = circuitInfo(ref) else { return nil }
-        let local = circuitLocal(p, ref)
+        let refs = circuitsAt(p, margin: 10)
         let tol = max(6, 12 / canvas.zoomScale)
-        for c in info.data.components.reversed() where CircuitGeometry.bounds(c).insetBy(dx: -tol / 2, dy: -tol / 2).contains(local) {
-            return (ref, .component(c.id))
+        for ref in refs {
+            guard let info = circuitInfo(ref) else { continue }
+            let local = circuitLocal(p, ref)
+            for c in info.data.components.reversed() where CircuitGeometry.bounds(c).insetBy(dx: -tol / 2, dy: -tol / 2).contains(local) {
+                return (ref, .component(c.id))
+            }
         }
-        if case let (id, _)? = wireSegmentHit(local, in: info.data, tolerance: tol) { return (ref, .wire(id)) }
+        for ref in refs {
+            guard let info = circuitInfo(ref) else { continue }
+            if case let (id, _)? = wireSegmentHit(circuitLocal(p, ref), in: info.data, tolerance: tol) { return (ref, .wire(id)) }
+        }
         return nil
     }
 
@@ -159,10 +172,42 @@ extension NotebookViewController {
         } else {
             var e = info.element
             e.content = .circuit(data)
-            let n = normalizedCircuit(e)
-            updatePage(info.pi, undoable: undoable) { $0.elements[info.ei] = n }
+            commitCircuit(normalizedCircuit(e), pageIndex: info.pi, undoable: undoable)
         }
         updateCircuitChrome()
+    }
+
+    /// 把和 e 外框重疊（含接上線）的其他電路圖併進來，回傳合併後的電路圖與被併掉的物件
+    private func mergingOverlaps(_ e: PageElement, pageIndex pi: Int) -> (PageElement, Set<UUID>) {
+        var merged = e
+        var absorbed = Set<UUID>()
+        var grew = true
+        while grew {
+            grew = false
+            guard case var .circuit(d) = merged.content else { break }
+            for other in pages[pi].elements where other.id != e.id && !absorbed.contains(other.id) && !other.locked {
+                guard case var .circuit(od) = other.content, other.frame.intersects(merged.frame) else { continue }
+                od.offset(by: CGPoint(x: other.frame.minX - merged.frame.minX, y: other.frame.minY - merged.frame.minY))
+                d.components += od.components
+                d.wires += od.wires
+                absorbed.insert(other.id)
+                grew = true
+            }
+            if grew {
+                merged.content = .circuit(d)
+                merged = normalizedCircuit(merged)
+            }
+        }
+        return (merged, absorbed)
+    }
+
+    /// 存回頁面（一次復原），順便合併重疊的電路圖
+    private func commitCircuit(_ e: PageElement, pageIndex pi: Int, undoable: Bool = true) {
+        let (merged, absorbed) = mergingOverlaps(e, pageIndex: pi)
+        updatePage(pi, undoable: undoable) { page in
+            page.elements.removeAll { absorbed.contains($0.id) }
+            if let i = page.elements.firstIndex(where: { $0.id == merged.id }) { page.elements[i] = merged }
+        }
     }
 
     /// 在 p 建立新的電路圖（p 會是內容座標 (60, 60) 的位置）
@@ -173,8 +218,12 @@ extension NotebookViewController {
         let q = CircuitData.snap(CGPoint(x: p.x - o.x, y: p.y - o.y))
         let e = normalizedCircuit(PageElement(frame: CGRect(x: q.x - 60, y: q.y - 60, width: 120, height: 120),
                                               content: .circuit(data)))
-        updatePage(pi) { $0.elements.append(e) }
-        return ElementRef(pageID: pages[pi].id, elementID: e.id)
+        let (merged, absorbed) = mergingOverlaps(e, pageIndex: pi)
+        updatePage(pi) { page in
+            page.elements.removeAll { absorbed.contains($0.id) }
+            page.elements.append(merged)
+        }
+        return ElementRef(pageID: pages[pi].id, elementID: merged.id)
     }
 
     // MARK: 放置元件
@@ -279,7 +328,7 @@ extension NotebookViewController {
             // 先還原再正式更新，才能復原（e 已經整理過外框，直接整個換掉）
             session.document.pages[pi].elements[ei] = d.original
             pageViews[pages[pi].id]?.liveUpdate(d.original)
-            updatePage(pi) { $0.elements[ei] = e }
+            commitCircuit(e, pageIndex: pi)
             if case let .wire(id)? = circuitSel, case let .circuit(data) = e.content, !data.wires.contains(where: { $0.id == id }) {
                 circuitSel = nil
                 rebuildSubBar()
@@ -332,9 +381,21 @@ extension NotebookViewController {
         return normalizedCircuit(e)
     }
 
+    /// ref 的電路圖，加上 p 附近其他電路圖的元件與導線（換算到 ref 的座標），吸附用
+    private func circuitSnapData(near p: CGPoint, in ref: ElementRef) -> CircuitData? {
+        guard var d = circuitInfo(ref)?.data, let o = circuitOrigin(ref) else { return nil }
+        for other in circuitsAt(p, margin: 40) where other != ref {
+            guard var od = circuitInfo(other)?.data, let oo = circuitOrigin(other) else { continue }
+            od.offset(by: CGPoint(x: oo.x - o.x, y: oo.y - o.y))
+            d.components += od.components
+            d.wires += od.wires
+        }
+        return d
+    }
+
     private func wireSnap(_ p: CGPoint, ref: ElementRef?) -> CGPoint {
         let tol = max(10, 20 / canvas.zoomScale)
-        if let ref, let data = circuitInfo(ref)?.data {
+        if let ref, let data = circuitSnapData(near: p, in: ref) {
             return circuitDoc(data.snapTarget(for: circuitLocal(p, ref), within: tol), ref)
         }
         // 沒有電路圖：對齊頁面格點
