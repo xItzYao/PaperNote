@@ -78,22 +78,16 @@ PaperNote 沒有上架 App Store，需要用 [Sideloadly](https://sideloadly.io)
 - **更新或重新安裝時，直接安裝覆蓋即可，不要先刪除 App**，刪除 App 會連筆記一起刪除。
 - 每次都用同一個 Apple ID、不要更改 Bundle ID，才會沿用原本的筆記。
 
-## Google Drive 備份設定（選用）
+## Google Drive 備份（選用）
 
-為了不讓任何人共用同一組金鑰，App 不內建 Google 用戶端 ID，需要用你自己的 Google 帳號申請一組（約 5 分鐘，免費）：
+1. 在 App 的資料庫右上角「⋯」→「**雲端備份**」。
+2. 按「**連結 Google Drive**」，選擇你的 Google 帳號 →「**允許**」。
+   如果出現「Google 尚未驗證這個應用程式」，點「進階 → 前往 PaperNote」即可。
+3. 完成。App 會在你的 Google Drive 建立「PaperNoteBackup」資料夾，每 10 分鐘以及關閉筆記本後自動備份；
+   換新 iPad 時，在同一頁按「從 Google Drive 還原」即可。
 
-1. 打開 [Google Cloud Console](https://console.cloud.google.com)，建立新專案（例如 `PaperNote`）。
-2. 搜尋「**Google Drive API**」→ 啟用。
-3. 搜尋「**OAuth**」→ 進入 **Google Auth Platform** → 開始使用：
-   - 應用程式名稱、支援信箱填自己的；目標對象選「**外部**」。
-   - 左側「**目標對象**」→「**發布應用程式**」（App 只用 `drive.file` 權限，不需要 Google 審核；
-     如果停在「測試中」，要把自己加成測試使用者，而且每 7 天要重新登入）。
-4. 左側「**用戶端**」→ 建立用戶端 → 類型選 **iOS** → 軟體包 ID 填 `com.papernote.app`。
-5. 複製產生的用戶端 ID（`xxxx.apps.googleusercontent.com`）。
-6. 在 App 的資料庫右上角「⋯」→「**雲端備份**」→ 貼上用戶端 ID → 按「**連結 Google Drive**」。
-   出現「Google 尚未驗證這個應用程式」時，點「進階 → 前往 PaperNote」即可。
-
-App 只能存取它自己在 Google Drive 建立的檔案，看不到你雲端硬碟裡的其他東西。
+App 只使用 `drive.file` 權限，**只能存取它自己建立的檔案**，看不到你雲端硬碟裡的其他東西；
+備份直接在你的 iPad 和你的 Google Drive 之間傳輸，不經過任何第三方伺服器。詳見[隱私權政策](PRIVACY.md)。
 
 ## 自己編譯
 
@@ -114,7 +108,8 @@ open PaperNote.xcodeproj
 ## 隱私
 
 - 所有筆記都存在 iPad 本機，不會上傳到任何伺服器。
-- 只有在你自己設定 Google Drive 備份後，才會把筆記檔上傳到**你自己的** Google Drive。
+- 只有在你自己連結 Google Drive 後，才會把筆記檔上傳到**你自己的** Google Drive。
+- 完整說明請見[隱私權政策](PRIVACY.md)。
 
 ## 支持
 

@@ -48,8 +48,8 @@ enum Keychain {
 final class GoogleAuth: NSObject, ASWebAuthenticationPresentationContextProviding {
     static let shared = GoogleAuth()
 
-    /// 你在 Google Cloud 建立的 iOS OAuth 用戶端 ID（也可以在 App 的備份設定裡貼上）
-    static let builtInClientID = ""
+    /// 內建的 iOS OAuth 用戶端 ID（iOS 用戶端沒有密鑰，這串本來就是公開的）
+    static let builtInClientID = "690341226153-isrph8gpe8nuiu72fsen66p363k4hn3s.apps.googleusercontent.com"
 
     private static let scope = "https://www.googleapis.com/auth/drive.file"
     private var accessToken: String?
@@ -57,12 +57,17 @@ final class GoogleAuth: NSObject, ASWebAuthenticationPresentationContextProvidin
     private var session: ASWebAuthenticationSession?
 
     var clientID: String {
-        let custom = UserDefaults.standard.string(forKey: "google.clientID")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return custom.isEmpty ? Self.builtInClientID : custom
+        if !Self.builtInClientID.isEmpty { return Self.builtInClientID }
+        return UserDefaults.standard.string(forKey: "google.clientID")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
     var hasClientID: Bool { clientID.hasSuffix(".apps.googleusercontent.com") }
-    var isSignedIn: Bool { Keychain.get("refreshToken") != nil }
+
+    /// 登入時用的用戶端 ID 和現在的不同（例如之前貼過別的 ID）→ 當作沒登入，請使用者重新連結
+    var isSignedIn: Bool {
+        guard Keychain.get("refreshToken") != nil else { return false }
+        return UserDefaults.standard.string(forKey: "google.signedInClientID") == clientID
+    }
 
     /// iOS 用戶端的 redirect：反轉的 client ID
     private var redirectScheme: String {
@@ -131,13 +136,14 @@ final class GoogleAuth: NSObject, ASWebAuthenticationPresentationContextProvidin
         ])
         guard let refresh = json["refresh_token"] as? String else { throw BackupError.authFailed("沒有取得 refresh token") }
         Keychain.set("refreshToken", refresh)
+        UserDefaults.standard.set(clientID, forKey: "google.signedInClientID")
         store(json)
     }
 
     /// 取得有效的 access token（過期就用 refresh token 換新的）
     func validAccessToken() async throws -> String {
         if let t = accessToken, expiry > Date().addingTimeInterval(60) { return t }
-        guard let refresh = Keychain.get("refreshToken") else { throw BackupError.notSignedIn }
+        guard isSignedIn, let refresh = Keychain.get("refreshToken") else { throw BackupError.notSignedIn }
         let json = try await tokenRequest([
             "refresh_token": refresh, "client_id": clientID, "grant_type": "refresh_token",
         ])
