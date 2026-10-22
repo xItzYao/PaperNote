@@ -93,7 +93,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             case .lasso:
                 return true
             case .circuit:
-                return circuitPanShouldBegin(at: g.location(in: pagesContainer))
+                return circuitPanShouldBegin(at: panTouchDownPoint(g))
             default:
                 return false
             }
@@ -161,6 +161,14 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             return hitElement(at: touch.location(in: pagesContainer)) != nil
         }
         return true
+    }
+
+    /// 拖曳手勢要移動一小段才會開始，這裡扣掉已移動的距離，得到筆尖剛碰到的位置
+    func panTouchDownPoint(_ g: UIGestureRecognizer) -> CGPoint {
+        let p = g.location(in: pagesContainer)
+        guard let pan = g as? UIPanGestureRecognizer else { return p }
+        let t = pan.translation(in: pagesContainer)
+        return CGPoint(x: p.x - t.x, y: p.y - t.y)
     }
 
     @objc func handleToolPan(_ g: UIPanGestureRecognizer) {

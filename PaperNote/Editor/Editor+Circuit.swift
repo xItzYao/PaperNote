@@ -232,6 +232,18 @@ extension NotebookViewController {
     // MARK: 拖曳：移動元件／接線
 
     func handleCircuitPan(_ g: UIPanGestureRecognizer, _ p: CGPoint) {
+        if g.state == .began {
+            // 起點用筆尖剛碰到的位置，接線才會從碰到的那條線開始
+            let start = panTouchDownPoint(g)
+            switch circuitMode {
+            case .wire:
+                wireDraft = WireDraft(ref: circuitAt(start, margin: 80), ink: [start])
+                handleWirePan(g, p)
+            case .select: handleSelectDrag(g, start)
+            case .place: break
+            }
+            return
+        }
         switch circuitMode {
         case .wire: handleWirePan(g, p)
         case .select: handleSelectDrag(g, p)
@@ -311,7 +323,7 @@ extension NotebookViewController {
             var others = data
             others.wires.remove(at: wi)
             let local = CGPoint(x: p.x - d.origin.x, y: p.y - d.origin.y)
-            let target = others.snapTarget(for: local, within: max(8, 16 / canvas.zoomScale))
+            let target = others.snapTarget(for: local, within: max(10, 20 / canvas.zoomScale))
             data.wires[wi].points = CircuitData.movingEnd(data.wires[wi].points, first: first, to: target)
         }
         data.wires.removeAll { $0.points.count < 2 }
@@ -321,7 +333,7 @@ extension NotebookViewController {
     }
 
     private func wireSnap(_ p: CGPoint, ref: ElementRef?) -> CGPoint {
-        let tol = max(8, 16 / canvas.zoomScale)
+        let tol = max(10, 20 / canvas.zoomScale)
         if let ref, let data = circuitInfo(ref)?.data {
             return circuitDoc(data.snapTarget(for: circuitLocal(p, ref), within: tol), ref)
         }
@@ -353,9 +365,7 @@ extension NotebookViewController {
 
     private func handleWirePan(_ g: UIPanGestureRecognizer, _ p: CGPoint) {
         switch g.state {
-        case .began:
-            wireDraft = WireDraft(ref: circuitAt(p, margin: 80), ink: [p])
-        case .changed:
+        case .began, .changed:
             guard var w = wireDraft else { return }
             w.ink.append(p)
             wireDraft = w

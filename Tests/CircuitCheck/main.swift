@@ -106,5 +106,21 @@ let snappedPins = CircuitGeometry.pins(off.components[0])
 check("component snapped to grid", off.components[0].position == P(100, 100))
 check("wire still on pin after snapping", off.wires[0].points.first == snappedPins[0])
 
+// 12. 從導線中間接出去
+var mid = CircuitData()
+mid.wires = [CircuitWire(points: [P(0, 100), P(300, 100)])]
+check("snap onto middle of a horizontal wire", mid.snapTarget(for: P(143, 108), within: 12) == P(140, 100))
+check("far from the wire falls back to grid", mid.snapTarget(for: P(143, 130), within: 12) == P(140, 130))
+check("snap clamps to the wire's end", mid.snapTarget(for: P(306, 104), within: 12) == P(300, 100))
+var vmid = CircuitData()
+vmid.wires = [CircuitWire(points: [P(50, 0), P(50, 200)])]
+check("snap onto middle of a vertical wire", vmid.snapTarget(for: P(45, 77), within: 12) == P(50, 80))
+// 從中間拉下去再往右：起點落在線上，會出現接點圓點
+let s0 = mid.snapTarget(for: P(142, 104), within: 12)
+mid.wires.append(CircuitWire(points: CircuitData.penRoute([s0, P(141, 150), P(140, 200), P(250, 201)], from: s0, to: P(250, 200))))
+check("branch wire starts on the line", mid.wires[1].points == [P(140, 100), P(140, 200), P(250, 200)])
+check("branch from mid-wire gets a dot", mid.junctions().map(PointKey.init) == [PointKey(P(140, 100))])
+check("branch from mid-wire is not a crossing", mid.crossings().isEmpty)
+
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

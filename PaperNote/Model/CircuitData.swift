@@ -300,13 +300,31 @@ extension CircuitData {
         return best
     }
 
-    /// 也可以吸附到既有導線的端點或線上
+    /// 吸附順序：接腳 → 導線的端點／轉角 → 導線中間（T 字接點） → 格點
     func snapTarget(for p: CGPoint, within r: CGFloat) -> CGPoint {
         if let pin = nearestPin(to: p, within: r) { return pin }
         var best: CGPoint?
         var bestD = r
         for w in wires {
             for q in w.points {
+                let d = hypot(q.x - p.x, q.y - p.y)
+                if d <= bestD { bestD = d; best = q }
+            }
+        }
+        if let best { return best }
+        // 投影到最近的一段線上，沿線方向對齊格點
+        bestD = r
+        for w in wires where w.points.count >= 2 {
+            for i in 0..<(w.points.count - 1) {
+                let a = w.points[i], b = w.points[i + 1]
+                var q: CGPoint
+                if a.y == b.y {
+                    q = CGPoint(x: min(max(Self.snap(p).x, min(a.x, b.x)), max(a.x, b.x)), y: a.y)
+                } else if a.x == b.x {
+                    q = CGPoint(x: a.x, y: min(max(Self.snap(p).y, min(a.y, b.y)), max(a.y, b.y)))
+                } else {
+                    continue
+                }
                 let d = hypot(q.x - p.x, q.y - p.y)
                 if d <= bestD { bestD = d; best = q }
             }
