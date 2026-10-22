@@ -68,7 +68,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
 
     func updateGestureAvailability() {
         let nonDrawing = tool == .capture || tool == .select || tool == .textSelect || tool == .pageResize
-            || tool == .tableDraw || tool == .lasso
+            || tool == .tableDraw || tool == .lasso || tool == .circuit
         toolPan.isEnabled = nonDrawing
         // 筆／橡皮擦／套索模式下，手指點物件也能直接選取（見 shouldReceive）
         tapGesture.isEnabled = true
@@ -92,6 +92,8 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
                 return pageHandle(at: g.location(in: pagesContainer)) != nil
             case .lasso:
                 return true
+            case .circuit:
+                return circuitPanShouldBegin(at: g.location(in: pagesContainer))
             default:
                 return false
             }
@@ -133,7 +135,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
-        g === toolPan && other === canvas.panGestureRecognizer && (tool == .select || tool == .pageResize || tool == .lasso)
+        g === toolPan && other === canvas.panGestureRecognizer && (tool == .select || tool == .pageResize || tool == .lasso || tool == .circuit)
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
@@ -148,7 +150,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             return clipboardHasContent || session.pdfPage(for: pages[i]) != nil
         }
         // 截圖、PDF 文字、手繪表格、套索：沒開「用手指書寫」時只接受 Pencil，手指只用來捲動
-        if g === toolPan, tool == .capture || tool == .textSelect || tool == .tableDraw || tool == .lasso {
+        if g === toolPan, tool == .capture || tool == .textSelect || tool == .tableDraw || tool == .lasso || tool == .circuit {
             return touch.type == .pencil || settings.fingerDrawing
         }
         // 套索模式下 Pencil 或手指點鎖頭都可以
@@ -170,6 +172,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         case .pageResize: handlePageResizePan(g, p)
         case .lasso: handleLassoPan(g, p)
         case .tableDraw: handleTableDrawPan(g, p)
+        case .circuit: handleCircuitPan(g, p)
         default: break
         }
     }
@@ -229,6 +232,8 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             }
         case .tableDraw:
             break
+        case .circuit:
+            handleCircuitTap(at: p)
         }
     }
 
@@ -246,7 +251,16 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             beginTextEditing(hit, cell: nil)
         case .image:
             presentMenu(elementMenu(hit, at: p), atDocPoint: p)
+        case .circuit:
+            editCircuit(hit)
         }
+    }
+
+    /// 切到電路工具編輯這個電路圖
+    func editCircuit(_ ref: ElementRef) {
+        setTool(.circuit)
+        circuitTarget = ref
+        updateCircuitChrome()
     }
 
     /// 筆模式下手指長按 PDF 文字 → 選取單字並顯示翻譯選單
@@ -358,6 +372,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             updateTableHandlesChrome()
             updateTableCellChrome()
             updateLockChrome()
+            updateCircuitChrome()
         }
         guard let ref = selected, case let (pi, ei)? = locate(ref) else {
             overlay.showSelection(nil, locked: false, handle: nil)
@@ -401,7 +416,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             return nil
         }
         guard !e.locked else { return nil }
-        if p.distance(to: CGPoint(x: r.maxX, y: r.maxY)) < tol * 1.5 { return (ref, .resize) }
+        if !e.isCircuit, p.distance(to: CGPoint(x: r.maxX, y: r.maxY)) < tol * 1.5 { return (ref, .resize) }
         guard r.insetBy(dx: -tol, dy: -tol).contains(p) else { return nil }
         return (ref, .move)
     }
@@ -459,6 +474,8 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
                 t.scale(to: CGSize(width: o.width + dx, height: o.height + dy))
                 e.content = .table(t)
                 e.frame.size = t.size
+            case .circuit:
+                break
             }
         case let .colLine(c):
             if case var .table(t) = e.content {
@@ -588,6 +605,10 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
                 guard let self, let img = self.session.image(named: d.file) else { return }
                 self.pinOverlay.addPin(image: img, near: self.docRectInView(self.docFrame(of: e, pageIndex: pi)))
             })
+        case .circuit:
+            items.append(UIAction(title: "編輯電路", image: UIImage(systemName: "bolt")) { [weak self] _ in
+                self?.editCircuit(ref)
+            })
         }
         items.append(UIMenu(options: .displayInline, children: [
             UIAction(title: "拷貝", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in self?.copyElement(ref) },
@@ -640,6 +661,8 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             pb.string = t.text
         case let .table(t):
             pb.string = t.cells.map { $0.joined(separator: "\t") }.joined(separator: "\n")
+        case .circuit:
+            if let img = renderRegion(UIBezierPath(rect: docFrame(of: e, pageIndex: pi))) { pb.image = img }
         }
         clipboardElement = (e, pb.changeCount)
     }
@@ -791,7 +814,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             text = t.text
             fontSize = t.fontSize
             rect.size.height = max(rect.height, 80)
-        case .image:
+        case .image, .circuit:
             return
         }
         let z = canvas.zoomScale
@@ -832,7 +855,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
                 t.text = text
                 e.content = .text(t)
                 e.frame.size.height = max(44, ElementRenderer.textHeight(t, width: e.frame.width))
-            case .image:
+            case .image, .circuit:
                 break
             }
             page.elements[ei] = e

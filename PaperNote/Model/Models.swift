@@ -54,6 +54,7 @@ enum ElementContent: Codable, Equatable {
     case image(ImageData)
     case table(TableData)
     case text(TextBoxData)
+    case circuit(CircuitData)
 }
 
 /// 頁面上的物件（圖片、表格、文字框）。frame 使用頁面內容座標。
@@ -66,6 +67,7 @@ struct PageElement: Codable, Equatable, Identifiable {
 
     var isTable: Bool { if case .table = content { return true }; return false }
     var isImage: Bool { if case .image = content { return true }; return false }
+    var isCircuit: Bool { if case .circuit = content { return true }; return false }
 }
 
 struct Page: Codable, Equatable, Identifiable {

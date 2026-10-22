@@ -162,6 +162,8 @@ enum ElementRenderer {
             drawTable(t, in: rect)
         case let .text(t):
             drawText(t, in: rect)
+        case let .circuit(c):
+            CircuitRenderer.draw(c, in: rect)
         }
     }
 

@@ -4,7 +4,7 @@ import PDFKit
 import SwiftUI
 
 enum EditorTool: Equatable {
-    case pen, highlighter, eraser, lasso, capture, select, textSelect, pageResize, tableDraw
+    case pen, highlighter, eraser, lasso, capture, select, textSelect, pageResize, tableDraw, circuit
 
     /// 筆或螢光筆
     var isInking: Bool { self == .pen || self == .highlighter }
@@ -159,6 +159,14 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var pencilDown = false
     var lastPencilTime: CFTimeInterval = 0
     var palmBlocker: PalmBlocker!
+    // 電路圖
+    var circuitMode: CircuitMode = .select
+    var circuitTarget: ElementRef?
+    var circuitSel: CircuitSelection?
+    var circuitDrag: CircuitDrag?
+    var wireDraft: WireDraft?
+    var circuitGateInputs: [CircuitPart: Int] = [:]
+
     // 自訂套索
     var lassoPoints: [CGPoint] = []
     var lassoSel: LassoSelection?

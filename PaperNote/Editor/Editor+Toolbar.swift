@@ -71,6 +71,7 @@ extension NotebookViewController {
             (.select, "hand.point.up.left", "選取"),
             (.textSelect, "character.cursor.ibeam", "PDF文字"),
             (.pageResize, "arrow.up.left.and.arrow.down.right", "擴展"),
+            (.circuit, "bolt", "電路"),
         ]
         let center = UIStackView()
         center.spacing = 4
@@ -192,6 +193,10 @@ extension NotebookViewController {
             tableDrawTarget = nil
             resizeDrag = nil
             clearLassoSelection()
+            circuitSel = nil
+            circuitMode = .select
+            wireDraft = nil
+            overlay.showCircuitDraft(nil)
         }
         if t == .pageResize, resizePageIndex == nil || t != tool { resizePageIndex = currentPageIndex }
         if t == .eraser, tool.isInking || tool == .lasso { toolBeforeEraser = tool }
@@ -200,6 +205,7 @@ extension NotebookViewController {
         updateSelectionChrome()
         updatePageResizeChrome()
         updateTableDraftChrome()
+        updateCircuitChrome()
     }
 
     func applyTool() {
@@ -219,7 +225,7 @@ extension NotebookViewController {
         canvas.drawingPolicy = settings.fingerDrawing ? .anyInput : .pencilOnly
         // 只有開啟「用手指書寫」時，手指才用來截圖、選字、畫表格線、圈選；否則單指捲動
         let fingerUsedByTool = settings.fingerDrawing
-            && (tool == .capture || tool == .textSelect || tool == .tableDraw || tool == .lasso)
+            && (tool == .capture || tool == .textSelect || tool == .tableDraw || tool == .lasso || tool == .circuit)
         canvas.panGestureRecognizer.minimumNumberOfTouches = fingerUsedByTool ? 2 : 1
         updateGestureAvailability()
         configurePencilKitGestures()
@@ -314,6 +320,9 @@ extension NotebookViewController {
         case .select:
             // 選到表格時顯示表格工具列
             for v in buildTableRibbon() { subBarStack.addArrangedSubview(v) }
+
+        case .circuit:
+            for v in buildCircuitRibbon() { subBarStack.addArrangedSubview(v) }
 
         case .textSelect:
             break

@@ -128,7 +128,7 @@ final class PageContainerView: UIView {
             iv.contentMode = .scaleToFill
             iv.isUserInteractionEnabled = false
             return iv
-        case .table, .text:
+        case .table, .text, .circuit:
             return DrawnElementView(element: e, session: session)
         }
     }
@@ -167,6 +167,9 @@ final class OverlayView: UIView {
     let draftLayer = CAShapeLayer()
     let liveShapeLayer = CAShapeLayer()
     let lassoPathLayer = CAShapeLayer()
+    let circuitFrameLayer = CAShapeLayer()
+    let circuitSelLayer = CAShapeLayer()
+    let circuitDraftLayer = CAShapeLayer()
     let lassoSelLayer = CAShapeLayer()
     let lassoPreviewLayer = CALayer()
     let cellSelLayer = CAShapeLayer()
@@ -325,6 +328,20 @@ final class OverlayView: UIView {
         draftLayer.lineCap = .round
         layer.addSublayer(draftLayer)
 
+        circuitFrameLayer.fillColor = UIColor.clear.cgColor
+        circuitFrameLayer.strokeColor = UIColor.systemGray3.cgColor
+        layer.addSublayer(circuitFrameLayer)
+        circuitSelLayer.fillColor = UIColor.systemBlue.withAlphaComponent(0.08).cgColor
+        circuitSelLayer.strokeColor = UIColor.systemBlue.withAlphaComponent(0.6).cgColor
+        circuitSelLayer.lineCap = .round
+        circuitSelLayer.lineJoin = .round
+        layer.addSublayer(circuitSelLayer)
+        circuitDraftLayer.fillColor = UIColor.clear.cgColor
+        circuitDraftLayer.strokeColor = UIColor.systemBlue.cgColor
+        circuitDraftLayer.lineWidth = 2
+        circuitDraftLayer.lineCap = .round
+        circuitDraftLayer.lineJoin = .round
+        layer.addSublayer(circuitDraftLayer)
         lassoPreviewLayer.contentsGravity = .resize
         lassoPreviewLayer.isHidden = true
         layer.addSublayer(lassoPreviewLayer)
@@ -361,12 +378,39 @@ final class OverlayView: UIView {
         pageOutlineLayer.lineDashPattern = [NSNumber(value: Double(8 * lineScale)), NSNumber(value: Double(5 * lineScale))]
         pageHandleLayer.lineWidth = 2 * lineScale
         cellSelLayer.lineWidth = 2 * lineScale
+        circuitFrameLayer.lineWidth = 1 * lineScale
+        circuitFrameLayer.lineDashPattern = [NSNumber(value: Double(5 * lineScale)), NSNumber(value: Double(4 * lineScale))]
+        circuitSelLayer.lineWidth = 6 * lineScale
         for l in [lassoPathLayer, lassoSelLayer] {
             l.lineWidth = 1.5 * lineScale
             l.lineDashPattern = [NSNumber(value: Double(6 * lineScale)), NSNumber(value: Double(4 * lineScale))]
         }
         moveHandleLayer.lineWidth = 1.5 * lineScale
         moveHandleMarks.lineWidth = 2 * lineScale
+        CATransaction.commit()
+    }
+
+    // MARK: 電路圖
+
+    func showCircuit(frame: CGRect?, selection: UIBezierPath?) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        circuitFrameLayer.path = frame.map { UIBezierPath(rect: $0).cgPath }
+        circuitSelLayer.path = selection?.cgPath
+        CATransaction.commit()
+    }
+
+    func showCircuitDraft(_ pts: [CGPoint]?) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if let pts, let first = pts.first {
+            let p = UIBezierPath()
+            p.move(to: first)
+            for q in pts.dropFirst() { p.addLine(to: q) }
+            circuitDraftLayer.path = p.cgPath
+        } else {
+            circuitDraftLayer.path = nil
+        }
         CATransaction.commit()
     }
 
