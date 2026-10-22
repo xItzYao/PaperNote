@@ -21,7 +21,7 @@ struct HelpView: View {
         Item(symbol: "lasso", title: "套索",
              detail: "用 Pencil 圈選筆跡、表格、圖片、文字框、螢光標示，拖曳可以一起移動；選單有拷貝、剪下、複製一份、刪除。圈到一部分就會選到。表格（右上角）與圖片（左上角）的鎖頭可以鎖定位置，鎖定後不會被圈到。"),
         Item(symbol: "camera.viewfinder", title: "截圖",
-             detail: "用 Pencil 或單指框選範圍（雙指捲動），可以釘選在畫面上、拷貝、翻譯圖中文字、存到照片。釘選的圖片換頁、換筆記本都會留著，拖右下角可以調整大小。"),
+             detail: "用 Pencil 框選範圍（開啟「用手指書寫」時手指也可以），可以釘選在畫面上、拷貝、翻譯圖中文字、存到照片。釘選的圖片換頁、換筆記本都會留著，拖右下角可以調整大小。"),
         Item(symbol: "hand.point.up.left", title: "選取",
              detail: "點一下選取表格、圖片、文字框，再拖曳移動、拉右下角縮放；長按開啟選單，可以固定位置。在筆模式下用手指點物件也會直接選取。"),
         Item(symbol: "character.cursor.ibeam", title: "PDF 文字",

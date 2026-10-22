@@ -217,7 +217,9 @@ extension NotebookViewController {
             break
         }
         canvas.drawingPolicy = settings.fingerDrawing ? .anyInput : .pencilOnly
-        let fingerUsedByTool = tool == .capture || tool == .textSelect || tool == .tableDraw || (tool == .lasso && settings.fingerDrawing)
+        // 只有開啟「用手指書寫」時，手指才用來截圖、選字、畫表格線、圈選；否則單指捲動
+        let fingerUsedByTool = settings.fingerDrawing
+            && (tool == .capture || tool == .textSelect || tool == .tableDraw || tool == .lasso)
         canvas.panGestureRecognizer.minimumNumberOfTouches = fingerUsedByTool ? 2 : 1
         updateGestureAvailability()
         configurePencilKitGestures()

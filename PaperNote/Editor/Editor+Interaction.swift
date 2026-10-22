@@ -142,13 +142,15 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         // 編輯文字時，點文字框內部交給 UITextView
         if let tv = editingTextView, touch.view?.isDescendant(of: tv) == true { return false }
         if g === textLongPress {
-            // 筆模式下手指長按 PDF 頁面
-            guard tool.isDrawing, touch.type == .direct, !settings.fingerDrawing else { return false }
+            // 手指長按：剪貼簿有東西就能貼上；PDF 頁面上也可以選字（選取工具有自己的長按選單）
+            guard tool != .select, touch.type == .direct, !(settings.fingerDrawing && tool.isDrawing) else { return false }
             guard let i = pageIndex(containing: touch.location(in: pagesContainer)) else { return false }
-            return session.pdfPage(for: pages[i]) != nil
+            return clipboardHasContent || session.pdfPage(for: pages[i]) != nil
         }
-        // 套索：用 Pencil 圈選，手指照常捲動（開啟手指書寫時手指也能圈）
-        if g === toolPan, tool == .lasso { return touch.type == .pencil || settings.fingerDrawing }
+        // 截圖、PDF 文字、手繪表格、套索：沒開「用手指書寫」時只接受 Pencil，手指只用來捲動
+        if g === toolPan, tool == .capture || tool == .textSelect || tool == .tableDraw || tool == .lasso {
+            return touch.type == .pencil || settings.fingerDrawing
+        }
         // 套索模式下 Pencil 或手指點鎖頭都可以
         if g === tapGesture, tool == .lasso, lockIconHit(at: touch.location(in: pagesContainer)) != nil { return true }
         if g === tapGesture, tool.isDrawing {
@@ -251,8 +253,32 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
     @objc func handleTextLongPress(_ g: UILongPressGestureRecognizer) {
         guard g.state == .began else { return }
         let p = g.location(in: pagesContainer)
-        setTool(.textSelect)
-        tapText(at: p)
+        let onPDF = pageIndex(containing: p).map { session.pdfPage(for: pages[$0]) != nil } ?? false
+        guard clipboardHasContent else {
+            if onPDF {
+                setTool(.textSelect)
+                tapText(at: p)
+            }
+            return
+        }
+        var items: [UIMenuElement] = [
+            UIAction(title: "貼上", image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in self?.pasteFromClipboard(at: p) },
+        ]
+        if onPDF {
+            items.append(UIAction(title: "選取文字", image: UIImage(systemName: "character.cursor.ibeam")) { [weak self] _ in
+                self?.setTool(.textSelect)
+                self?.tapText(at: p)
+            })
+        }
+        presentMenu(UIMenu(children: items), atDocPoint: p)
+    }
+
+    /// 剪貼簿裡有可以貼上的東西（截圖、圖片、文字、套索或物件拷貝）
+    var clipboardHasContent: Bool {
+        let pb = UIPasteboard.general
+        if let c = lassoClipboard, c.changeCount == pb.changeCount { return true }
+        if let c = clipboardElement, c.changeCount == pb.changeCount { return true }
+        return pb.hasImages || pb.hasStrings
     }
 
     @objc func handleLongPress(_ g: UILongPressGestureRecognizer) {
