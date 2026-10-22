@@ -129,9 +129,8 @@ final class PaletteOverlay: UIView {
         let p = t.location(in: self)
         switch mode {
         case .launcher:
+            // 點小圖示只負責打開；這一下不算選取，否則放開的位置剛好落在某個按鈕上會直接選掉並關閉
             open()
-            touchActive = true
-            update(p)
         case .open:
             if hitClose(p) {
                 onDismiss?()
