@@ -39,8 +39,12 @@ final class PaletteOverlay: UIView {
         MainItem(tool: .highlighter, symbol: "highlighter", title: "螢光筆", angle: 130),
     ]
 
-    init(frame: CGRect, at point: CGPoint, currentTool: EditorTool, startOpen: Bool = false) {
+    /// 打開時的中心（切換橡皮擦時筆尖的位置）；nil 就以小圖示為中心
+    private var paletteCenter: CGPoint?
+
+    init(frame: CGRect, at point: CGPoint, currentTool: EditorTool, startOpen: Bool = false, paletteCenter: CGPoint? = nil) {
         self.currentTool = currentTool
+        self.paletteCenter = paletteCenter
         anchor = point
         super.init(frame: frame)
         backgroundColor = .clear
@@ -79,6 +83,7 @@ final class PaletteOverlay: UIView {
     private func open() {
         mode = .open
         hideTimer?.invalidate()
+        if let c = paletteCenter { anchor = c }
         let m = subRadius + presetRadius + 12
         anchor.x = min(max(anchor.x, m), max(m, bounds.width - m))
         anchor.y = min(max(anchor.y, m), max(m, bounds.height - m))
@@ -303,8 +308,9 @@ extension NotebookViewController {
         editMenu.dismissMenu()
         let point = p ?? lastPencilPoint ?? CGPoint(x: view.bounds.midX, y: view.bounds.midY)
         // 直接打開：以筆尖為中心；小圖示：放在筆尖右上方一點，不會被筆擋住
-        let at = open ? point : CGPoint(x: point.x + 36, y: point.y - 36)
-        let overlay = PaletteOverlay(frame: view.bounds, at: at, currentTool: tool, startOpen: open)
+        // 小圖示放在筆尖右上方，不會被手和筆擋住；點了之後以筆尖位置為中心打開
+        let at = open ? point : CGPoint(x: point.x + 70, y: point.y - 70)
+        let overlay = PaletteOverlay(frame: view.bounds, at: at, currentTool: tool, startOpen: open, paletteCenter: point)
         overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         overlay.onSelectPreset = { [weak self] preset in
             guard let self else { return }
