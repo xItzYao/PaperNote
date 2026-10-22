@@ -196,7 +196,7 @@ extension NotebookViewController {
             circuitSel = nil
             circuitMode = .select
             wireDraft = nil
-            overlay.showCircuitDraft(nil)
+            overlay.showCircuitDraft(nil, ink: nil)
         }
         if t == .pageResize, resizePageIndex == nil || t != tool { resizePageIndex = currentPageIndex }
         if t == .eraser, tool.isInking || tool == .lasso { toolBeforeEraser = tool }

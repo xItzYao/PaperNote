@@ -175,6 +175,13 @@ extension CircuitData {
         }
     }
 
+    /// 元件與導線全部吸到最近的格點（接腳距離元件中心都是格點的倍數，接線不會斷開）
+    mutating func snapToGrid() {
+        for i in components.indices { components[i].position = Self.snap(components[i].position) }
+        for i in wires.indices { wires[i].points = Self.orthogonalize(wires[i].points.map(Self.snap)) }
+        wires.removeAll { $0.points.count < 2 }
+    }
+
     /// 每一段都改成水平或垂直（必要時插入轉角），並移除重複點
     static func orthogonalize(_ pts: [CGPoint]) -> [CGPoint] {
         guard var prev = pts.first else { return [] }
@@ -305,6 +312,112 @@ extension CircuitData {
             }
         }
         return best ?? Self.snap(p)
+    }
+
+    // MARK: 依筆跡走線
+
+    /// Douglas–Peucker 化簡筆跡
+    static func simplify(_ pts: [CGPoint], tolerance: CGFloat) -> [CGPoint] {
+        guard pts.count > 2, let a = pts.first, let b = pts.last else { return pts }
+        let dx = b.x - a.x, dy = b.y - a.y
+        let len = hypot(dx, dy)
+        var maxD: CGFloat = -1
+        var idx = 0
+        for i in 1..<(pts.count - 1) {
+            let p = pts[i]
+            let d = len < 0.001 ? hypot(p.x - a.x, p.y - a.y) : abs(dy * p.x - dx * p.y + b.x * a.y - b.y * a.x) / len
+            if d > maxD { maxD = d; idx = i }
+        }
+        if maxD <= tolerance { return [a, b] }
+        let left = simplify(Array(pts[...idx]), tolerance: tolerance)
+        let right = simplify(Array(pts[idx...]), tolerance: tolerance)
+        return left.dropLast() + right
+    }
+
+    /// 依手寫筆跡排出直角導線：筆跡拆成水平／垂直的幾段，轉角對齊格點，頭尾分別接到 s 和 e
+    static func penRoute(_ ink: [CGPoint], from s: CGPoint, to e: CGPoint,
+                         tolerance: CGFloat = 6, minRun: CGFloat = 15) -> [CGPoint] {
+        if s == e { return [s] }
+        let simple = simplify(ink, tolerance: tolerance)
+        // 每一段依主要方向分類，相鄰同方向的合併
+        var runs: [(horizontal: Bool, end: CGPoint, length: CGFloat)] = []
+        for i in 0..<max(0, simple.count - 1) {
+            let a = simple[i], b = simple[i + 1]
+            let h = abs(b.x - a.x) >= abs(b.y - a.y)
+            let len = h ? abs(b.x - a.x) : abs(b.y - a.y)
+            if let last = runs.last, last.horizontal == h {
+                runs[runs.count - 1].end = b
+                runs[runs.count - 1].length += len
+            } else {
+                runs.append((h, b, len))
+            }
+        }
+        // 太短的段是手抖：由最短的開始去掉，兩旁同方向的段接起來
+        while runs.count > 1, let k = runs.indices.min(by: { runs[$0].length < runs[$1].length }), runs[k].length < minRun {
+            let removed = runs.remove(at: k)
+            if k > 0 && k < runs.count && runs[k - 1].horizontal == runs[k].horizontal {
+                runs[k - 1].end = runs[k].end
+                runs[k - 1].length += runs[k].length
+                runs.remove(at: k)
+            } else if k == runs.count && k > 0 {
+                runs[k - 1].end = removed.end
+            }
+        }
+        if runs.isEmpty {
+            let h = abs(e.x - s.x) >= abs(e.y - s.y)
+            return orthogonalize([s, h ? CGPoint(x: e.x, y: s.y) : CGPoint(x: s.x, y: e.y), e])
+        }
+        // 每段結束的位置對齊格點；最後兩段改由終點決定，才能剛好接到 e
+        var pts = [s]
+        var cur = s
+        for (k, r) in runs.enumerated() {
+            let target = k >= runs.count - 2 ? e : snap(r.end)
+            if r.horizontal { cur.x = target.x } else { cur.y = target.y }
+            pts.append(cur)
+        }
+        if cur != e { pts.append(e) }
+        return orthogonalize(pts)
+    }
+
+    // MARK: 編輯導線
+
+    /// 第 i 段沿垂直方向平移 d；頭尾段會補一小段，讓端點留在原地。回傳新點列與該段的新編號
+    private static func shiftSegment(_ pts: [CGPoint], index i: Int, by d: CGFloat) -> (points: [CGPoint], index: Int) {
+        guard i >= 0, i + 1 < pts.count, d != 0 else { return (pts, i) }
+        var p = pts
+        var s = i
+        let horizontal = p[s].y == p[s + 1].y
+        if s == 0 { p.insert(p[0], at: 0); s += 1 }
+        if s + 1 == p.count - 1 { p.append(p[p.count - 1]) }
+        if horizontal {
+            p[s].y += d; p[s + 1].y += d
+        } else {
+            p[s].x += d; p[s + 1].x += d
+        }
+        return (p, s)
+    }
+
+    /// 拖曳一段導線：水平段上下移、垂直段左右移，相鄰的段跟著伸縮
+    static func moveSegment(_ pts: [CGPoint], index i: Int, by d: CGFloat) -> [CGPoint] {
+        orthogonalize(shiftSegment(pts, index: i, by: d).points)
+    }
+
+    /// 拖曳中間的轉角：前後兩段各自平移
+    static func moveCorner(_ pts: [CGPoint], index k: Int, by d: CGPoint) -> [CGPoint] {
+        guard k > 0, k < pts.count - 1 else { return pts }
+        let h1 = pts[k - 1].y == pts[k].y
+        let (p1, s1) = shiftSegment(pts, index: k - 1, by: h1 ? d.y : d.x)
+        // 轉角現在是 p1[s1 + 1]，下一段的編號是 s1 + 1
+        let h2 = p1[s1 + 1].y == p1[s1 + 2].y
+        return orthogonalize(shiftSegment(p1, index: s1 + 1, by: h2 ? d.y : d.x).points)
+    }
+
+    /// 拖曳導線的頭或尾到 p，相鄰的轉角跟著調整
+    static func movingEnd(_ pts: [CGPoint], first: Bool, to p: CGPoint) -> [CGPoint] {
+        guard pts.count >= 2 else { return pts }
+        var q = pts
+        if first { q[0] = p } else { q[q.count - 1] = p }
+        return orthogonalize(reroute(q, movedFirst: first))
     }
 }
 

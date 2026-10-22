@@ -204,7 +204,10 @@ extension NotebookViewController {
     private func offsetModel(_ sel: LassoSelection, by d: CGPoint) {
         for ref in sel.elements {
             guard case let (pi, ei)? = locate(ref) else { continue }
-            updatePage(pi, undoable: false) { $0.elements[ei].frame = $0.elements[ei].frame.offsetBy(dx: d.x, dy: d.y) }
+            updatePage(pi, undoable: false) {
+                $0.elements[ei].frame = $0.elements[ei].frame.offsetBy(dx: d.x, dy: d.y)
+                $0.elements[ei].snapCircuitToGrid()
+            }
         }
         for h in sel.highlights {
             guard let pi = pageIndex(of: h.pageID), let hi = pages[pi].highlights.firstIndex(where: { $0.id == h.id }) else { continue }
@@ -331,6 +334,7 @@ extension NotebookViewController {
                 e.id = UUID()
                 e.locked = false
                 e.frame.origin = CGPoint(x: item.docFrame.minX + d.x - o.x, y: item.docFrame.minY + d.y - o.y)
+                e.snapCircuitToGrid()
                 page.elements.append(e)
                 newElements.append(ElementRef(pageID: page.id, elementID: e.id))
             }

@@ -67,5 +67,44 @@ check("wire stays orthogonal after move", allOrtho)
 // 8. 外框
 check("content bounds include wire", m.contentBounds.maxX >= 200)
 
+// 9. 依筆跡走線
+// 手抖的水平線 → 一段直線
+let wobble = stride(from: 0, through: 100, by: 5).map { P(CGFloat($0), CGFloat($0 % 10 == 0 ? 2 : -2)) }
+check("wobbly horizontal ink → straight wire", CircuitData.penRoute(wobble, from: P(0, 0), to: P(100, 0)) == [P(0, 0), P(100, 0)])
+// 先垂直再水平（直接算 L 形會先走水平）
+let vFirst = CircuitData.penRoute([P(0, 0), P(1, 40), P(-1, 80), P(50, 81), P(100, 79)], from: P(0, 0), to: P(100, 80))
+check("ink going down first routes down first", vFirst == [P(0, 0), P(0, 80), P(100, 80)])
+// 階梯：轉角落在筆跡轉彎的格點
+let stairs = CircuitData.penRoute([P(0, 0), P(52, 2), P(48, 61), P(120, 60)], from: P(0, 0), to: P(120, 60))
+check("staircase ink keeps its corners", stairs == [P(0, 0), P(50, 0), P(50, 60), P(120, 60)])
+// 短短的抖動段不會變成轉角
+let jitter = CircuitData.penRoute([P(0, 0), P(60, 0), P(62, 6), P(120, 4)], from: P(0, 0), to: P(120, 0))
+check("tiny jitter is ignored", jitter == [P(0, 0), P(120, 0)])
+// 終點和筆跡一直線但不同高：最後補一小段
+let jog = CircuitData.penRoute([P(0, 0), P(100, 3)], from: P(0, 0), to: P(100, 20))
+check("end pin off the line gets a jog", jog == [P(0, 0), P(100, 0), P(100, 20)])
+
+// 10. 編輯導線
+check("drag a two-point wire's segment adds stubs",
+      CircuitData.moveSegment([P(0, 0), P(100, 0)], index: 0, by: 30) == [P(0, 0), P(0, 30), P(100, 30), P(100, 0)])
+check("drag a middle segment stretches neighbours",
+      CircuitData.moveSegment([P(0, 0), P(50, 0), P(50, 60), P(120, 60)], index: 1, by: 20) == [P(0, 0), P(70, 0), P(70, 60), P(120, 60)])
+check("drag a corner",
+      CircuitData.moveCorner([P(0, 0), P(50, 0), P(50, 60)], index: 1, by: P(20, 10)) == [P(0, 0), P(0, 10), P(70, 10), P(70, 60), P(50, 60)])
+check("drag an end keeps the wire orthogonal",
+      CircuitData.movingEnd([P(0, 0), P(50, 0), P(50, 60)], first: true, to: P(0, 20)) == [P(0, 20), P(50, 20), P(50, 60)])
+check("drag a segment back to zero is a no-op",
+      CircuitData.moveSegment([P(0, 0), P(50, 0), P(50, 60)], index: 0, by: 0) == [P(0, 0), P(50, 0), P(50, 60)])
+
+// 11. 吸到格點：偏掉 3pt 的電路整個對齊，導線仍接在接腳上
+var off = CircuitData()
+off.components = [CircuitComponent(part: .andGate, position: P(103, 97), inputs: 2)]
+let offPins = CircuitGeometry.pins(off.components[0])
+off.wires = [CircuitWire(points: [offPins[0], P(offPins[0].x - 40, offPins[0].y)])]
+off.snapToGrid()
+let snappedPins = CircuitGeometry.pins(off.components[0])
+check("component snapped to grid", off.components[0].position == P(100, 100))
+check("wire still on pin after snapping", off.wires[0].points.first == snappedPins[0])
+
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

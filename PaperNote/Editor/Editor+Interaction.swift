@@ -463,6 +463,8 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             break
         case .move:
             e.frame.origin = CGPoint(x: o.minX + dx, y: o.minY + dy)
+            // 電路圖整個移動時也對齊頁面格點，才能和其他電路圖接得上
+            e.snapCircuitToGrid()
         case .resize:
             switch e.content {
             case .image:
@@ -530,6 +532,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         } else {
             let no = contentOrigin(target)
             e.frame.origin = CGPoint(x: toFrame.minX - no.x, y: toFrame.minY - no.y)
+            e.snapCircuitToGrid()
             let moved = e
             updatePage(pi) { $0.elements.removeAll { $0.id == moved.id } }
             updatePage(target) { $0.elements.append(moved) }
@@ -673,6 +676,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         e.id = UUID()
         e.locked = false
         e.frame = e.frame.offsetBy(dx: 24, dy: 24)
+        e.snapCircuitToGrid()
         let copy = e
         updatePage(pi) { $0.elements.append(copy) }
         select(ElementRef(pageID: pages[pi].id, elementID: copy.id))

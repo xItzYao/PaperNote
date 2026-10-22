@@ -170,6 +170,9 @@ final class OverlayView: UIView {
     let circuitFrameLayer = CAShapeLayer()
     let circuitSelLayer = CAShapeLayer()
     let circuitDraftLayer = CAShapeLayer()
+    let circuitInkLayer = CAShapeLayer()
+    let circuitWireSelLayer = CAShapeLayer()
+    let circuitHandleLayer = CAShapeLayer()
     let lassoSelLayer = CAShapeLayer()
     let lassoPreviewLayer = CALayer()
     let cellSelLayer = CAShapeLayer()
@@ -336,6 +339,20 @@ final class OverlayView: UIView {
         circuitSelLayer.lineCap = .round
         circuitSelLayer.lineJoin = .round
         layer.addSublayer(circuitSelLayer)
+        circuitWireSelLayer.fillColor = UIColor.clear.cgColor
+        circuitWireSelLayer.strokeColor = UIColor.systemBlue.withAlphaComponent(0.35).cgColor
+        circuitWireSelLayer.lineCap = .round
+        circuitWireSelLayer.lineJoin = .round
+        layer.addSublayer(circuitWireSelLayer)
+        circuitHandleLayer.fillColor = UIColor.white.cgColor
+        circuitHandleLayer.strokeColor = UIColor.systemBlue.cgColor
+        layer.addSublayer(circuitHandleLayer)
+        circuitInkLayer.fillColor = UIColor.clear.cgColor
+        circuitInkLayer.strokeColor = UIColor.systemGray.withAlphaComponent(0.45).cgColor
+        circuitInkLayer.lineWidth = 2
+        circuitInkLayer.lineCap = .round
+        circuitInkLayer.lineJoin = .round
+        layer.addSublayer(circuitInkLayer)
         circuitDraftLayer.fillColor = UIColor.clear.cgColor
         circuitDraftLayer.strokeColor = UIColor.systemBlue.cgColor
         circuitDraftLayer.lineWidth = 2
@@ -381,6 +398,9 @@ final class OverlayView: UIView {
         circuitFrameLayer.lineWidth = 1 * lineScale
         circuitFrameLayer.lineDashPattern = [NSNumber(value: Double(5 * lineScale)), NSNumber(value: Double(4 * lineScale))]
         circuitSelLayer.lineWidth = 6 * lineScale
+        circuitWireSelLayer.lineWidth = 8 * lineScale
+        circuitHandleLayer.lineWidth = 1.5 * lineScale
+        circuitInkLayer.lineWidth = 2 * lineScale
         for l in [lassoPathLayer, lassoSelLayer] {
             l.lineWidth = 1.5 * lineScale
             l.lineDashPattern = [NSNumber(value: Double(6 * lineScale)), NSNumber(value: Double(4 * lineScale))]
@@ -392,25 +412,29 @@ final class OverlayView: UIView {
 
     // MARK: 電路圖
 
-    func showCircuit(frame: CGRect?, selection: UIBezierPath?) {
+    func showCircuit(frame: CGRect?, selection: UIBezierPath?, wire: UIBezierPath? = nil, handles: UIBezierPath? = nil) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         circuitFrameLayer.path = frame.map { UIBezierPath(rect: $0).cgPath }
         circuitSelLayer.path = selection?.cgPath
+        circuitWireSelLayer.path = wire?.cgPath
+        circuitHandleLayer.path = handles?.cgPath
         CATransaction.commit()
     }
 
-    func showCircuitDraft(_ pts: [CGPoint]?) {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        if let pts, let first = pts.first {
+    /// 接線預覽：排好的直角導線，加上淡淡的原始筆跡
+    func showCircuitDraft(_ pts: [CGPoint]?, ink: [CGPoint]?) {
+        func polyline(_ pts: [CGPoint]?) -> CGPath? {
+            guard let pts, let first = pts.first else { return nil }
             let p = UIBezierPath()
             p.move(to: first)
             for q in pts.dropFirst() { p.addLine(to: q) }
-            circuitDraftLayer.path = p.cgPath
-        } else {
-            circuitDraftLayer.path = nil
+            return p.cgPath
         }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        circuitDraftLayer.path = polyline(pts)
+        circuitInkLayer.path = polyline(ink)
         CATransaction.commit()
     }
 

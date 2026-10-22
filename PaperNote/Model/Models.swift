@@ -68,6 +68,12 @@ struct PageElement: Codable, Equatable, Identifiable {
     var isTable: Bool { if case .table = content { return true }; return false }
     var isImage: Bool { if case .image = content { return true }; return false }
     var isCircuit: Bool { if case .circuit = content { return true }; return false }
+
+    /// 電路圖的外框原點對齊頁面格點，不同電路圖的元件才會落在同一組格點上
+    mutating func snapCircuitToGrid() {
+        guard isCircuit else { return }
+        frame.origin = CircuitData.snap(frame.origin)
+    }
 }
 
 struct Page: Codable, Equatable, Identifiable {
