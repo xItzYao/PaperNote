@@ -1,0 +1,26 @@
+name: PaperNote
+options:
+  bundleIdPrefix: com.papernote
+  deploymentTarget:
+    iOS: "17.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  PaperNote:
+    type: application
+    platform: iOS
+    sources:
+      - PaperNote
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.papernote.app
+        PRODUCT_NAME: PaperNote
+        TARGETED_DEVICE_FAMILY: "2"
+        INFOPLIST_FILE: PaperNote/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        OTHER_LDFLAGS: "$(inherited) -weak_framework Translation"
+        CODE_SIGN_STYLE: Manual

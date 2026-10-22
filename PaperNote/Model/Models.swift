@@ -1,0 +1,172 @@
+import Foundation
+import CoreGraphics
+
+// MARK: - Page content
+
+struct PageInsets: Codable, Equatable {
+    var top: CGFloat = 0
+    var left: CGFloat = 0
+    var bottom: CGFloat = 0
+    var right: CGFloat = 0
+
+    var isZero: Bool { top == 0 && left == 0 && bottom == 0 && right == 0 }
+}
+
+enum PaperStyle: String, Codable, CaseIterable, Identifiable {
+    case blank, ruled, grid, dotted
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .blank: return "空白"
+        case .ruled: return "橫線"
+        case .grid: return "方格"
+        case .dotted: return "點格"
+        }
+    }
+}
+
+enum PageBackground: Codable, Equatable {
+    case pdf(file: String, index: Int)
+    case paper(width: CGFloat, height: CGFloat, style: PaperStyle)
+}
+
+/// PDF 文字螢光標示。rects 使用頁面內容座標（原始頁面左上角為原點）。
+struct TextHighlight: Codable, Equatable, Identifiable {
+    var id = UUID()
+    var rects: [CGRect]
+    var colorHex: String
+}
+
+struct TextBoxData: Codable, Equatable {
+    var text: String
+    var fontSize: CGFloat = 18
+    var colorHex: String = "#1A1A1AFF"
+    var backgroundHex: String? = nil
+}
+
+struct ImageData: Codable, Equatable {
+    var file: String
+}
+
+enum ElementContent: Codable, Equatable {
+    case image(ImageData)
+    case table(TableData)
+    case text(TextBoxData)
+}
+
+/// 頁面上的物件（圖片、表格、文字框）。frame 使用頁面內容座標。
+/// 這些物件畫在筆跡底下，所以橡皮擦擦不到。
+struct PageElement: Codable, Equatable, Identifiable {
+    var id = UUID()
+    var frame: CGRect
+    var locked = false
+    var content: ElementContent
+
+    var isTable: Bool { if case .table = content { return true }; return false }
+    var isImage: Bool { if case .image = content { return true }; return false }
+}
+
+struct Page: Codable, Equatable, Identifiable {
+    var id = UUID()
+    var background: PageBackground
+    var insets = PageInsets()
+    var elements: [PageElement] = []
+    var highlights: [TextHighlight] = []
+    var favorite = false
+    var note = ""
+
+    init(background: PageBackground) {
+        self.background = background
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, background, insets, elements, highlights, favorite, note
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        background = try c.decode(PageBackground.self, forKey: .background)
+        insets = try c.decodeIfPresent(PageInsets.self, forKey: .insets) ?? PageInsets()
+        elements = try c.decodeIfPresent([PageElement].self, forKey: .elements) ?? []
+        highlights = try c.decodeIfPresent([TextHighlight].self, forKey: .highlights) ?? []
+        favorite = try c.decodeIfPresent(Bool.self, forKey: .favorite) ?? false
+        note = try c.decodeIfPresent(String.self, forKey: .note) ?? ""
+    }
+}
+
+struct NotebookDocument: Codable {
+    var version = 1
+    var pages: [Page]
+}
+
+// MARK: - Library
+
+struct Folder: Codable, Equatable, Identifiable {
+    var id = UUID()
+    var name: String
+    var parentId: UUID?
+    var created = Date()
+}
+
+struct FavoriteRef: Codable, Equatable, Hashable {
+    var pageId: UUID
+    var pageNumber: Int
+    var note: String
+}
+
+struct NotebookMeta: Codable, Equatable, Identifiable {
+    var id = UUID()
+    var title: String
+    var folderId: UUID?
+    var created = Date()
+    var modified = Date()
+    var coverHex: String
+    var pageCount = 0
+    var favorites: [FavoriteRef] = []
+
+    init(title: String, folderId: UUID?, coverHex: String) {
+        self.title = title
+        self.folderId = folderId
+        self.coverHex = coverHex
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, folderId, created, modified, coverHex, pageCount, favorites
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? "未命名"
+        folderId = try c.decodeIfPresent(UUID.self, forKey: .folderId)
+        created = try c.decodeIfPresent(Date.self, forKey: .created) ?? Date()
+        modified = try c.decodeIfPresent(Date.self, forKey: .modified) ?? Date()
+        coverHex = try c.decodeIfPresent(String.self, forKey: .coverHex) ?? "#2654A0FF"
+        pageCount = try c.decodeIfPresent(Int.self, forKey: .pageCount) ?? 0
+        favorites = try c.decodeIfPresent([FavoriteRef].self, forKey: .favorites) ?? []
+    }
+}
+
+struct LibraryIndex: Codable {
+    var folders: [Folder] = []
+    var notebooks: [NotebookMeta] = []
+}
+
+extension JSONEncoder {
+    static var app: JSONEncoder {
+        let e = JSONEncoder()
+        e.dateEncodingStrategy = .iso8601
+        return e
+    }
+}
+
+extension JSONDecoder {
+    static var app: JSONDecoder {
+        let d = JSONDecoder()
+        d.dateDecodingStrategy = .iso8601
+        return d
+    }
+}

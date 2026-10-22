@@ -1,0 +1,488 @@
+import Foundation
+import CoreGraphics
+
+/// 合併儲存格範圍（左上角 row/col＋跨幾列幾欄）
+struct CellMerge: Codable, Equatable {
+    var row: Int
+    var col: Int
+    var rowSpan: Int
+    var colSpan: Int
+
+    func contains(_ r: Int, _ c: Int) -> Bool {
+        r >= row && r < row + rowSpan && c >= col && c < col + colSpan
+    }
+
+    func intersects(r0: Int, c0: Int, r1: Int, c1: Int) -> Bool {
+        row <= r1 && row + rowSpan - 1 >= r0 && col <= c1 && col + colSpan - 1 >= c0
+    }
+}
+
+/// 儲存格斜線；reverse = 右上到左下
+struct CellDiagonal: Codable, Equatable {
+    var row: Int
+    var col: Int
+    var reverse: Bool
+}
+
+struct CellFill: Codable, Equatable {
+    var row: Int
+    var col: Int
+    var hex: String
+}
+
+/// 儲存格範圍（已正規化：r0 <= r1、c0 <= c1）
+struct CellRange: Equatable {
+    var r0: Int, c0: Int, r1: Int, c1: Int
+
+    init(_ a: (row: Int, col: Int), _ b: (row: Int, col: Int)) {
+        r0 = min(a.row, b.row); r1 = max(a.row, b.row)
+        c0 = min(a.col, b.col); c1 = max(a.col, b.col)
+    }
+
+    var isSingle: Bool { r0 == r1 && c0 == c1 }
+}
+
+struct TableData: Codable, Equatable {
+    var colWidths: [CGFloat]
+    var rowHeights: [CGFloat]
+    var cells: [[String]]
+    var lineColorHex: String = "#333333FF"
+    var lineWidth: CGFloat = 2
+    var fontSize: CGFloat = 16
+    var merges: [CellMerge] = []
+    var diagonals: [CellDiagonal] = []
+    var fills: [CellFill] = []
+
+    static let minCell: CGFloat = 24
+
+    enum CodingKeys: String, CodingKey {
+        case colWidths, rowHeights, cells, lineColorHex, lineWidth, fontSize, merges, diagonals, fills
+    }
+
+    var rows: Int { rowHeights.count }
+    var cols: Int { colWidths.count }
+    var size: CGSize { CGSize(width: colWidths.reduce(0, +), height: rowHeights.reduce(0, +)) }
+
+    static func make(rows: Int, cols: Int, cellWidth: CGFloat = 120, cellHeight: CGFloat = 48) -> TableData {
+        TableData(colWidths: Array(repeating: cellWidth, count: cols),
+                  rowHeights: Array(repeating: cellHeight, count: rows),
+                  cells: Array(repeating: Array(repeating: "", count: cols), count: rows))
+    }
+
+    // MARK: 幾何
+
+    /// 第 c 條直線的 x（0 為左邊框，cols 為右邊框）
+    func colX(_ c: Int) -> CGFloat { colWidths.prefix(c).reduce(0, +) }
+    func rowY(_ r: Int) -> CGFloat { rowHeights.prefix(r).reduce(0, +) }
+
+    func rowIndex(at y: CGFloat) -> Int? {
+        guard y >= 0 else { return nil }
+        var acc: CGFloat = 0
+        for (i, h) in rowHeights.enumerated() { if y < acc + h { return i }; acc += h }
+        return nil
+    }
+
+    func colIndex(at x: CGFloat) -> Int? {
+        guard x >= 0 else { return nil }
+        var acc: CGFloat = 0
+        for (i, w) in colWidths.enumerated() { if x < acc + w { return i }; acc += w }
+        return nil
+    }
+
+    func merge(at r: Int, _ c: Int) -> CellMerge? { merges.first { $0.contains(r, c) } }
+
+    /// 合併儲存格的左上角（沒合併就是自己）
+    func anchor(_ r: Int, _ c: Int) -> (row: Int, col: Int) {
+        if let m = merge(at: r, c) { return (m.row, m.col) }
+        return (r, c)
+    }
+
+    func isAnchor(_ r: Int, _ c: Int) -> Bool {
+        guard let m = merge(at: r, c) else { return true }
+        return m.row == r && m.col == c
+    }
+
+    func span(_ r: Int, _ c: Int) -> CellMerge {
+        merge(at: r, c) ?? CellMerge(row: r, col: c, rowSpan: 1, colSpan: 1)
+    }
+
+    /// 儲存格（含合併範圍）的矩形
+    func cellRect(row: Int, col: Int) -> CGRect {
+        let m = span(row, col)
+        let x = colX(m.col), y = rowY(m.row)
+        return CGRect(x: x, y: y, width: colX(m.col + m.colSpan) - x, height: rowY(m.row + m.rowSpan) - y)
+    }
+
+    func rangeRect(_ r: CellRange) -> CGRect {
+        let x = colX(r.c0), y = rowY(r.r0)
+        return CGRect(x: x, y: y, width: colX(r.c1 + 1) - x, height: rowY(r.r1 + 1) - y)
+    }
+
+    /// 點到的儲存格（合併的話回傳左上角）
+    func cell(at p: CGPoint) -> (row: Int, col: Int)? {
+        guard let r = rowIndex(at: p.y), let c = colIndex(at: p.x) else { return nil }
+        return anchor(r, c)
+    }
+
+    // MARK: 格線是否看得到（被合併格蓋住的那段不算）
+
+    /// 第 r 條橫線在第 col 欄那一段是否看得到
+    func isRowLineVisible(_ r: Int, atColumn col: Int) -> Bool {
+        guard r > 0, r < rows else { return true }
+        if let m = merge(at: r - 1, col), m.contains(r, col) { return false }
+        return true
+    }
+
+    /// 第 c 條直線在第 row 列那一段是否看得到
+    func isColLineVisible(_ c: Int, atRow row: Int) -> Bool {
+        guard c > 0, c < cols else { return true }
+        if let m = merge(at: row, c - 1), m.contains(row, c) { return false }
+        return true
+    }
+
+    func rowLineVisibleAnywhere(_ r: Int) -> Bool { (0..<cols).contains { isRowLineVisible(r, atColumn: $0) } }
+    func colLineVisibleAnywhere(_ c: Int) -> Bool { (0..<rows).contains { isColLineVisible(c, atRow: $0) } }
+
+    /// 擴大範圍直到完整包含所有碰到的合併儲存格
+    func expanded(_ range: CellRange) -> CellRange {
+        var r = range
+        var changed = true
+        while changed {
+            changed = false
+            for m in merges where m.intersects(r0: r.r0, c0: r.c0, r1: r.r1, c1: r.c1) {
+                let nr0 = min(r.r0, m.row), nc0 = min(r.c0, m.col)
+                let nr1 = max(r.r1, m.row + m.rowSpan - 1), nc1 = max(r.c1, m.col + m.colSpan - 1)
+                if nr0 != r.r0 || nc0 != r.c0 || nr1 != r.r1 || nc1 != r.c1 {
+                    r.r0 = nr0; r.c0 = nc0; r.r1 = nr1; r.c1 = nc1
+                    changed = true
+                }
+            }
+        }
+        return r
+    }
+
+    // MARK: 文字
+
+    func text(row: Int, col: Int) -> String {
+        guard row < cells.count, col < cells[row].count else { return "" }
+        return cells[row][col]
+    }
+
+    mutating func setText(_ text: String, row: Int, col: Int) {
+        normalizeCells()
+        guard row < rows, col < cols else { return }
+        cells[row][col] = text
+    }
+
+    mutating func normalizeCells() {
+        while cells.count < rows { cells.append(Array(repeating: "", count: cols)) }
+        if cells.count > rows { cells.removeLast(cells.count - rows) }
+        for r in cells.indices {
+            while cells[r].count < cols { cells[r].append("") }
+            if cells[r].count > cols { cells[r].removeLast(cells[r].count - cols) }
+        }
+        let rowCount = rows, colCount = cols
+        merges.removeAll { $0.row < 0 || $0.col < 0 || $0.row + $0.rowSpan > rowCount || $0.col + $0.colSpan > colCount
+            || $0.rowSpan * $0.colSpan <= 1 }
+        diagonals.removeAll { $0.row >= rowCount || $0.col >= colCount }
+        fills.removeAll { $0.row >= rowCount || $0.col >= colCount }
+    }
+
+    // MARK: 插入／刪除列欄
+
+    mutating func insertRow(at r: Int, height: CGFloat? = nil) {
+        normalizeCells()
+        let h = height ?? (rowHeights.isEmpty ? 48 : rowHeights[max(0, min(r, rows) - 1)])
+        rowHeights.insert(h, at: r)
+        cells.insert(Array(repeating: "", count: cols), at: r)
+        for i in merges.indices {
+            if merges[i].row >= r { merges[i].row += 1 } else if merges[i].row + merges[i].rowSpan > r { merges[i].rowSpan += 1 }
+        }
+        for i in diagonals.indices where diagonals[i].row >= r { diagonals[i].row += 1 }
+        for i in fills.indices where fills[i].row >= r { fills[i].row += 1 }
+    }
+
+    mutating func insertColumn(at c: Int, width: CGFloat? = nil) {
+        normalizeCells()
+        let w = width ?? (colWidths.isEmpty ? 120 : colWidths[max(0, min(c, cols) - 1)])
+        colWidths.insert(w, at: c)
+        for r in cells.indices { cells[r].insert("", at: c) }
+        for i in merges.indices {
+            if merges[i].col >= c { merges[i].col += 1 } else if merges[i].col + merges[i].colSpan > c { merges[i].colSpan += 1 }
+        }
+        for i in diagonals.indices where diagonals[i].col >= c { diagonals[i].col += 1 }
+        for i in fills.indices where fills[i].col >= c { fills[i].col += 1 }
+    }
+
+    mutating func removeRow(_ r: Int) {
+        guard rows > 1, r < rows else { return }
+        normalizeCells()
+        rowHeights.remove(at: r)
+        cells.remove(at: r)
+        merges = merges.compactMap { m in
+            var m = m
+            if m.row > r { m.row -= 1 } else if m.row + m.rowSpan > r { m.rowSpan -= 1 }
+            return m.rowSpan >= 1 && m.rowSpan * m.colSpan > 1 ? m : nil
+        }
+        diagonals = diagonals.compactMap { d in
+            var d = d
+            if d.row == r { return nil }
+            if d.row > r { d.row -= 1 }
+            return d
+        }
+        fills = fills.compactMap { f in
+            var f = f
+            if f.row == r { return nil }
+            if f.row > r { f.row -= 1 }
+            return f
+        }
+    }
+
+    mutating func removeColumn(_ c: Int) {
+        guard cols > 1, c < cols else { return }
+        normalizeCells()
+        colWidths.remove(at: c)
+        for r in cells.indices { cells[r].remove(at: c) }
+        merges = merges.compactMap { m in
+            var m = m
+            if m.col > c { m.col -= 1 } else if m.col + m.colSpan > c { m.colSpan -= 1 }
+            return m.colSpan >= 1 && m.rowSpan * m.colSpan > 1 ? m : nil
+        }
+        diagonals = diagonals.compactMap { d in
+            var d = d
+            if d.col == c { return nil }
+            if d.col > c { d.col -= 1 }
+            return d
+        }
+        fills = fills.compactMap { f in
+            var f = f
+            if f.col == c { return nil }
+            if f.col > c { f.col -= 1 }
+            return f
+        }
+    }
+
+    // MARK: 合併／分割
+
+    mutating func mergeCells(_ range: CellRange) {
+        normalizeCells()
+        let r = expanded(range)
+        guard !r.isSingle else { return }
+        var texts: [String] = []
+        for row in r.r0...r.r1 {
+            for col in r.c0...r.c1 {
+                let t = text(row: row, col: col).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !t.isEmpty { texts.append(t) }
+                cells[row][col] = ""
+            }
+        }
+        cells[r.r0][r.c0] = texts.joined(separator: "\n")
+        merges.removeAll { $0.intersects(r0: r.r0, c0: r.c0, r1: r.r1, c1: r.c1) }
+        merges.append(CellMerge(row: r.r0, col: r.c0, rowSpan: r.r1 - r.r0 + 1, colSpan: r.c1 - r.c0 + 1))
+        diagonals.removeAll { $0.row >= r.r0 && $0.row <= r.r1 && $0.col >= r.c0 && $0.col <= r.c1 && !($0.row == r.r0 && $0.col == r.c0) }
+        fills.removeAll { $0.row >= r.r0 && $0.row <= r.r1 && $0.col >= r.c0 && $0.col <= r.c1 && !($0.row == r.r0 && $0.col == r.c0) }
+    }
+
+    mutating func unmerge(_ r: Int, _ c: Int) {
+        merges.removeAll { $0.contains(r, c) }
+    }
+
+    /// 在第 r 列內 offset 處加一條橫線，只切開 columns 裡的欄（其他欄維持一格）
+    mutating func splitRow(_ r: Int, at offset: CGFloat, columns split: Set<Int>) {
+        guard r < rows, !split.isEmpty else { return }
+        let total = rowHeights[r]
+        let top = min(max(offset, 12), total - 12)
+        guard top >= 12, total - top >= 12 else { return }
+        // 跨欄合併且剛好在這列結束的儲存格，下面新的一列也要跨欄
+        let endingMerges = merges.filter { $0.row + $0.rowSpan - 1 == r && $0.colSpan > 1 }
+        insertRow(at: r + 1, height: total - top)
+        rowHeights[r] = top
+        for m in endingMerges where (m.col..<(m.col + m.colSpan)).contains(where: { split.contains($0) }) {
+            merges.append(CellMerge(row: r + 1, col: m.col, rowSpan: 1, colSpan: m.colSpan))
+        }
+        for c in 0..<cols where !split.contains(c) {
+            if let i = merges.firstIndex(where: { $0.contains(r, c) }) {
+                if !merges[i].contains(r + 1, c) { merges[i].rowSpan += 1 }
+            } else {
+                merges.append(CellMerge(row: r, col: c, rowSpan: 2, colSpan: 1))
+            }
+        }
+    }
+
+    /// 在第 c 欄內 offset 處加一條直線，只切開 rows 裡的列
+    mutating func splitColumn(_ c: Int, at offset: CGFloat, rows split: Set<Int>) {
+        guard c < cols, !split.isEmpty else { return }
+        let total = colWidths[c]
+        let left = min(max(offset, 12), total - 12)
+        guard left >= 12, total - left >= 12 else { return }
+        let endingMerges = merges.filter { $0.col + $0.colSpan - 1 == c && $0.rowSpan > 1 }
+        insertColumn(at: c + 1, width: total - left)
+        colWidths[c] = left
+        for m in endingMerges where (m.row..<(m.row + m.rowSpan)).contains(where: { split.contains($0) }) {
+            merges.append(CellMerge(row: m.row, col: c + 1, rowSpan: m.rowSpan, colSpan: 1))
+        }
+        for r in 0..<rows where !split.contains(r) {
+            if let i = merges.firstIndex(where: { $0.contains(r, c) }) {
+                if !merges[i].contains(r, c + 1) { merges[i].colSpan += 1 }
+            } else {
+                merges.append(CellMerge(row: r, col: c, rowSpan: 1, colSpan: 2))
+            }
+        }
+    }
+
+    /// 像 Word 的「分割儲存格」：把一格（或合併格）分成 cols 欄 × rows 列
+    mutating func splitCell(_ r: Int, _ c: Int, cols n: Int, rows m: Int) {
+        guard n >= 1, m >= 1, r < rows, c < cols else { return }
+        let region = span(r, c)
+        let top = region.row, left = region.col
+        var rCount = region.rowSpan, cCount = region.colSpan
+        unmerge(r, c)
+
+        // 1. 欄不夠就加直線（只切開這個範圍的列）
+        if cCount < n {
+            if cCount == 1 {
+                if colWidths[left] / CGFloat(n) < 12 { colWidths[left] = CGFloat(n) * 24 }
+                let piece = colWidths[left] / CGFloat(n)
+                for i in 0..<(n - 1) {
+                    splitColumn(left + i, at: piece, rows: Set(top..<(top + rCount)))
+                }
+            } else {
+                while cCount < n {
+                    let range = left..<(left + cCount)
+                    guard let widest = range.max(by: { colWidths[$0] < colWidths[$1] }) else { break }
+                    if colWidths[widest] < 24 { colWidths[widest] = 24 }
+                    splitColumn(widest, at: colWidths[widest] / 2, rows: Set(top..<(top + rCount)))
+                    cCount += 1
+                }
+            }
+            cCount = max(cCount, n)
+        }
+        // 2. 列不夠就加橫線（只切開這個範圍的欄）
+        if rCount < m {
+            if rCount == 1 {
+                if rowHeights[top] / CGFloat(m) < 12 { rowHeights[top] = CGFloat(m) * 24 }
+                let piece = rowHeights[top] / CGFloat(m)
+                for i in 0..<(m - 1) {
+                    splitRow(top + i, at: piece, columns: Set(left..<(left + cCount)))
+                }
+            } else {
+                while rCount < m {
+                    let range = top..<(top + rCount)
+                    guard let tallest = range.max(by: { rowHeights[$0] < rowHeights[$1] }) else { break }
+                    if rowHeights[tallest] < 24 { rowHeights[tallest] = 24 }
+                    splitRow(tallest, at: rowHeights[tallest] / 2, columns: Set(left..<(left + cCount)))
+                    rCount += 1
+                }
+            }
+            rCount = max(rCount, m)
+        }
+        // 3. 原本比較多格（合併格）→ 依序分組合併成 n × m
+        func groups(_ count: Int, _ parts: Int) -> [(start: Int, length: Int)] {
+            let base = count / parts, extra = count % parts
+            var out: [(start: Int, length: Int)] = []
+            var start = 0
+            for i in 0..<parts {
+                let len = base + (i < extra ? 1 : 0)
+                out.append((start: start, length: len))
+                start += len
+            }
+            return out
+        }
+        // 先清掉範圍內 splitColumn／splitRow 為其他格自動產生的合併
+        merges.removeAll { $0.row >= top && $0.row + $0.rowSpan <= top + rCount && $0.col >= left && $0.col + $0.colSpan <= left + cCount }
+        for rg in groups(rCount, m) {
+            for cg in groups(cCount, n) where rg.length * cg.length > 1 {
+                merges.append(CellMerge(row: top + rg.start, col: left + cg.start, rowSpan: rg.length, colSpan: cg.length))
+            }
+        }
+        normalizeCells()
+    }
+
+    /// 把一格（或合併格）平分成左右兩格
+    mutating func splitCellHorizontally(_ r: Int, _ c: Int) {
+        let m = span(r, c)
+        if m.colSpan > 1 {
+            // 合併格：在中間那條既有直線切成兩個合併格
+            unmerge(r, c)
+            let mid = m.col + m.colSpan / 2
+            merges.append(CellMerge(row: m.row, col: m.col, rowSpan: m.rowSpan, colSpan: mid - m.col))
+            merges.append(CellMerge(row: m.row, col: mid, rowSpan: m.rowSpan, colSpan: m.col + m.colSpan - mid))
+            normalizeCells()
+            return
+        }
+        splitColumn(m.col, at: colWidths[m.col] / 2, rows: Set(m.row..<(m.row + m.rowSpan)))
+    }
+
+    /// 把一格（或合併格）平分成上下兩格
+    mutating func splitCellVertically(_ r: Int, _ c: Int) {
+        let m = span(r, c)
+        if m.rowSpan > 1 {
+            unmerge(r, c)
+            let mid = m.row + m.rowSpan / 2
+            merges.append(CellMerge(row: m.row, col: m.col, rowSpan: mid - m.row, colSpan: m.colSpan))
+            merges.append(CellMerge(row: mid, col: m.col, rowSpan: m.row + m.rowSpan - mid, colSpan: m.colSpan))
+            normalizeCells()
+            return
+        }
+        splitRow(m.row, at: rowHeights[m.row] / 2, columns: Set(m.col..<(m.col + m.colSpan)))
+    }
+
+    // MARK: 斜線、底色、平均分配
+
+    mutating func setDiagonal(_ r: Int, _ c: Int, reverse: Bool?) {
+        let a = anchor(r, c)
+        diagonals.removeAll { $0.row == a.row && $0.col == a.col }
+        if let reverse { diagonals.append(CellDiagonal(row: a.row, col: a.col, reverse: reverse)) }
+    }
+
+    func diagonal(_ r: Int, _ c: Int) -> CellDiagonal? {
+        let a = anchor(r, c)
+        return diagonals.first { $0.row == a.row && $0.col == a.col }
+    }
+
+    mutating func setFill(_ range: CellRange, hex: String?) {
+        for r in range.r0...range.r1 {
+            for c in range.c0...range.c1 where isAnchor(r, c) {
+                fills.removeAll { $0.row == r && $0.col == c }
+                if let hex { fills.append(CellFill(row: r, col: c, hex: hex)) }
+            }
+        }
+    }
+
+    mutating func distributeColumns() {
+        guard cols > 0 else { return }
+        let w = size.width / CGFloat(cols)
+        colWidths = Array(repeating: w, count: cols)
+    }
+
+    mutating func distributeRows() {
+        guard rows > 0 else { return }
+        let h = size.height / CGFloat(rows)
+        rowHeights = Array(repeating: h, count: rows)
+    }
+
+    mutating func scale(to newSize: CGSize) {
+        let old = size
+        guard old.width > 0, old.height > 0 else { return }
+        let sx = max(newSize.width, CGFloat(cols) * Self.minCell) / old.width
+        let sy = max(newSize.height, CGFloat(rows) * Self.minCell) / old.height
+        colWidths = colWidths.map { max(12, $0 * sx) }
+        rowHeights = rowHeights.map { max(12, $0 * sy) }
+    }
+}
+
+extension TableData {
+    // 寫在 extension 裡才能保留自動產生的 memberwise init；舊版存檔沒有 merges 等欄位也能讀
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        colWidths = try c.decode([CGFloat].self, forKey: .colWidths)
+        rowHeights = try c.decode([CGFloat].self, forKey: .rowHeights)
+        cells = try c.decodeIfPresent([[String]].self, forKey: .cells) ?? []
+        lineColorHex = try c.decodeIfPresent(String.self, forKey: .lineColorHex) ?? "#333333FF"
+        lineWidth = try c.decodeIfPresent(CGFloat.self, forKey: .lineWidth) ?? 2
+        fontSize = try c.decodeIfPresent(CGFloat.self, forKey: .fontSize) ?? 16
+        merges = try c.decodeIfPresent([CellMerge].self, forKey: .merges) ?? []
+        diagonals = try c.decodeIfPresent([CellDiagonal].self, forKey: .diagonals) ?? []
+        fills = try c.decodeIfPresent([CellFill].self, forKey: .fills) ?? []
+    }
+}
