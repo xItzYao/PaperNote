@@ -113,7 +113,10 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         let now = CACurrentMediaTime()
         // 筆尖正在接觸螢幕，或剛離開不到 0.3 秒
         // （超過 3 秒沒收到筆尖移動就不算「正在寫字」，避免狀態卡住讓頁面一直沒反應）
-        if (pencilDown && now - lastPencilTime < 3) || now - lastPencilTime < 0.3 { return true }
+        if pencilDown && now - lastPencilTime < 3 { return true }
+        // 筆剛離開：只擋面積較大的觸碰（手掌），一般指尖馬上就能捲動頁面
+        guard t.majorRadius > 25 else { return false }
+        if now - lastPencilTime < 0.3 { return true }
         // 剛寫完 1.5 秒內，筆尖附近下方、寫字那一側的觸碰（手掌常壓的位置）
         guard now - lastPencilTime < 1.5, let pp = lastPencilPoint else { return false }
         let p = t.location(in: view)
