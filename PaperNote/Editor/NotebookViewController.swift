@@ -59,10 +59,6 @@ final class EditorSettings {
         get { bool("fingerDrawing", false) }
         set { d.set(newValue, forKey: "fingerDrawing") }
     }
-    var shapeSnap: Bool {
-        get { bool("shapeSnap", true) }
-        set { d.set(newValue, forKey: "shapeSnap") }
-    }
     var smartHighlight: Bool {
         get { bool("smartHighlight", true) }
         set { d.set(newValue, forKey: "smartHighlight") }
@@ -117,6 +113,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     let pageLabel = UILabel()
     var toolButtons: [EditorTool: UIButton] = [:]
     var presetButtons: [UUID: UIButton] = [:]
+    /// 拖滑桿調筆時，延後把筆交給 PencilKit
+    var pendingToolWork: DispatchWorkItem?
     /// 筆工具列的「細、中、粗」三個粗細按鈕與虛線開關
     var penWidthButtons: [UIButton] = []
     weak var penDashButton: UIButton?
@@ -144,7 +142,6 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var tapGesture: UITapGestureRecognizer!
     var doubleTapGesture: UITapGestureRecognizer!
     var longPressGesture: UILongPressGestureRecognizer!
-    var holdRecognizer: PencilHoldRecognizer!
     var textLongPress: UILongPressGestureRecognizer!
     var pencilPointTracker: TouchTracker!
     var lastPencilPoint: CGPoint?
@@ -184,8 +181,6 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     // 橡皮擦擦螢光標示
     var eraserTracker: TouchTracker!
-    /// 停住變直線／圖形（見 HoldToShape.swift）
-    lazy var holdToShape = HoldToShapeController(editor: self)
     /// 套索改顏色時的自訂顏色選擇器
     var lassoColorPicker: LassoColorPicker?
     var editMenu: UIEditMenuInteraction!
@@ -275,7 +270,6 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         canvas.overrideUserInterfaceStyle = .light
         canvas.bouncesZoom = true
         view.addSubview(canvas)
-        canvas.layer.addSublayer(holdToShape.previewLayer)
 
         pagesContainer.backgroundColor = .clear
         overlay.frame = .zero
@@ -648,13 +642,11 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     @objc func undoTapped() {
         endTextEditing()
-        if holdToShape.undo() { return }
         canvas.undoManager?.undo()
     }
 
     @objc func redoTapped() {
         endTextEditing()
-        holdToShape.redo()
         canvas.undoManager?.redo()
     }
 
@@ -662,12 +654,10 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
         guard !isApplyingDrawing else { return }
-        holdToShape.drawingChanged()
         scheduleSave()
     }
 
     func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
-        holdToShape.pencilKitBegan()
         // 開始寫字 → 收起還沒點的調色盤小圖示
         if let p = paletteOverlay, p.mode == .launcher { dismissPalette() }
         toolBeganAt = CACurrentMediaTime()
@@ -675,8 +665,6 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     }
 
     func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
-        // 停住變直線的那一筆：交給 holdToShape 換成直線，不當成新筆跡處理
-        if holdToShape.pencilKitEnded() { return }
         if !tool.isDrawing {
             let before = strokeCountAtBegin
             DispatchQueue.main.async { [weak self] in self?.absorbStrayStroke(countBefore: before) }
@@ -700,7 +688,6 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     private func processNewStroke(duration: TimeInterval, countBefore: Int) {
         var drawing = canvas.drawing
         guard drawing.strokes.count == countBefore + 1, let stroke = drawing.strokes.last else { return }
-        holdToShape.recordSample(of: stroke, presetID: BrushStore.shared.current.id)
         // 虛線：放開後把這一筆切成一段一段（上一步回到寫這一筆之前）
         let preset = BrushStore.shared.current
         if tool == .pen, preset.isDashed {

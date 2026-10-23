@@ -72,7 +72,12 @@ struct BrushPreset: Codable, Identifiable, Equatable {
     var color: UIColor { UIColor(hex: colorHex) }
     var effectiveOpacity: CGFloat { style == .marker ? (opacity ?? Self.defaultMarkerOpacity) : 1 }
     var inkColor: UIColor { style == .marker ? color.withAlphaComponent(effectiveOpacity) : color }
-    var tool: PKInkingTool { PKInkingTool(style.inkType, color: inkColor, width: width) }
+    /// 交給 PencilKit 的筆；粗細限制在這種筆 PencilKit 能畫的範圍內（超出範圍可能畫不出來）
+    var tool: PKInkingTool {
+        let type = style.inkType
+        let r = type.validWidthRange
+        return PKInkingTool(type, color: inkColor, width: min(max(width, r.lowerBound), r.upperBound))
+    }
     var isDashed: Bool { dashed == true && style != .marker }
 
     static let defaultDashRatio: CGFloat = 3.5

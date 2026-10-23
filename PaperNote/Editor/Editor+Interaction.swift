@@ -48,7 +48,6 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         pencilPointTracker.onBegan = { [weak self] _ in
             guard let self else { return }
             self.pencilDown = true
-            self.holdToShape.pencilTouchedDown()
             // 保險：書寫工具下 PencilKit 的書寫手勢一定要開著
             if self.tool.isDrawing, !self.canvas.drawingGestureRecognizer.isEnabled { self.canvas.drawingGestureRecognizer.isEnabled = true }
         }
@@ -63,13 +62,6 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         palmBlocker.isPalm = { [weak self] t in self?.isPalmTouch(t) ?? false }
         canvas.addGestureRecognizer(palmBlocker)
 
-        holdRecognizer = PencilHoldRecognizer(target: nil, action: nil)
-        holdRecognizer.coordinateView = pagesContainer
-        holdRecognizer.delegate = self
-        holdRecognizer.onHold = { [weak self] pts in self?.holdToShape.hold(pts) }
-        holdRecognizer.onMove = { [weak self] p in self?.holdToShape.move(p) }
-        holdRecognizer.onEnd = { [weak self] p, cancelled in self?.holdToShape.end(p, cancelled: cancelled) }
-        canvas.addGestureRecognizer(holdRecognizer)
     }
 
     func updateGestureAvailability() {
@@ -77,8 +69,6 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         // 筆／橡皮擦／套索模式下，手指點物件也能直接選取（見 shouldReceive）
         tapGesture.isEnabled = true
         doubleTapGesture.isEnabled = tool == .select
-        holdRecognizer.isEnabled = tool.isInking && settings.shapeSnap
-        holdRecognizer.allowFinger = settings.fingerDrawing
         pencilPointTracker.isEnabled = true
         eraserTracker.isEnabled = tool == .eraser
         eraserTracker.allowFinger = settings.fingerDrawing
@@ -132,8 +122,8 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             let o = g === palmBlocker ? other : g
             return !(o === canvas.panGestureRecognizer || o === canvas.pinchGestureRecognizer)
         }
-        // 偵測停住的辨識器要和 PencilKit 同時運作
-        let passive: [UIGestureRecognizer?] = [holdRecognizer, eraserTracker, pencilPointTracker]
+        // 被動追蹤筆尖的辨識器要和 PencilKit 同時運作
+        let passive: [UIGestureRecognizer?] = [eraserTracker, pencilPointTracker]
         return passive.contains { $0 === g || $0 === other }
     }
 

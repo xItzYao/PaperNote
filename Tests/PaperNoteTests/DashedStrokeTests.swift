@@ -54,19 +54,6 @@ final class DashedStrokeTests: XCTestCase {
         XCTAssertTrue(pen.isDashed)
     }
 
-    func testDashedHoldLineReplacesHandStroke() {
-        let t0 = Date(timeIntervalSince1970: 1000)
-        func stroke(_ date: Date) -> PKStroke {
-            let p = PKStrokePoint(location: .zero, timeOffset: 0, size: CGSize(width: 2, height: 2), opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2)
-            return PKStroke(ink: PKInk(.pen, color: .black), path: PKStrokePath(controlPoints: [p, p], creationDate: date))
-        }
-        let old = stroke(t0), hand = stroke(t0.addingTimeInterval(10))
-        let dashes = [stroke(t0.addingTimeInterval(20)), stroke(t0.addingTimeInterval(20))]
-        let result = HoldToShape.replacingHandStroke(in: [old, hand], countBefore: 1, with: dashes)
-        XCTAssertEqual(result.count, 3)
-        XCTAssertEqual(result.first?.path.creationDate, t0)
-    }
-
     func testStyleWidthsAreInsideEachBrushRange() {
         for style in InkStyle.allCases {
             XCTAssertEqual(style.styleWidths.count, 3)
@@ -128,5 +115,17 @@ final class DashSettingsTests: XCTestCase {
         let p = try JSONDecoder().decode(BrushPreset.self, from: Data(json.utf8))
         XCTAssertNil(p.dashRatio)
         XCTAssertFalse(p.isDashed)
+    }
+}
+
+final class PenToolTests: XCTestCase {
+    func testToolWidthStaysInsidePencilKitsRange() {
+        for style in InkStyle.allCases {
+            let r = style.inkType.validWidthRange
+            let tiny = BrushPreset(style: style, colorHex: "#000000FF", width: 0.1).tool
+            let huge = BrushPreset(style: style, colorHex: "#000000FF", width: 500).tool
+            XCTAssertGreaterThanOrEqual(tiny.width, r.lowerBound, "\(style)")
+            XCTAssertLessThanOrEqual(huge.width, r.upperBound, "\(style)")
+        }
     }
 }

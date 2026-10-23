@@ -220,7 +220,7 @@ extension NotebookViewController {
         if tool.isInking { BrushStore.shared.activeCategory = tool == .highlighter ? .highlighter : .pen }
         switch tool {
         case .pen, .highlighter:
-            canvas.tool = BrushStore.shared.current.tool
+            setCanvasTool(BrushStore.shared.current.tool)
         case .eraser:
             canvas.tool = settings.pixelEraser ? PKEraserTool(.bitmap, width: settings.eraserWidth) : PKEraserTool(.vector)
         case .lasso:
@@ -453,7 +453,7 @@ extension NotebookViewController {
             return
         }
         BrushStore.shared.select(id)
-        canvas.tool = BrushStore.shared.current.tool
+        setCanvasTool(BrushStore.shared.current.tool)
         refreshPresetButtons()
     }
 
@@ -520,7 +520,7 @@ extension NotebookViewController {
             if wasUsing, BrushStore.shared.current.style == style {
                 var p = BrushStore.shared.current
                 p.width = BrushStore.shared.styleWidths(style)[slot]
-                self.updateCurrentPreset(p)
+                self.updateCurrentPreset(p, live: true)
             } else {
                 self.refreshPenStyleControls()
             }
@@ -547,7 +547,7 @@ extension NotebookViewController {
             guard cur.id == changed.id else { return }
             cur.dashRatio = changed.dashRatio
             cur.gapRatio = changed.gapRatio
-            self?.updateCurrentPreset(cur)
+            self?.updateCurrentPreset(cur, live: true)
         }
         let host = UIHostingController(rootView: view)
         host.modalPresentationStyle = .popover
@@ -564,10 +564,31 @@ extension NotebookViewController {
         return widths.indices.min { abs(widths[$0] - p.width) < abs(widths[$1] - p.width) } ?? 1
     }
 
-    private func updateCurrentPreset(_ p: BrushPreset) {
+    /// live：拖滑桿時連續呼叫，筆等停下來才交給 PencilKit
+    private func updateCurrentPreset(_ p: BrushPreset, live: Bool = false) {
         BrushStore.shared.update(p)
-        canvas.tool = p.tool
+        if live { setCanvasToolSoon() } else { setCanvasTool(p.tool) }
         refreshPresetButtons()
+    }
+
+    /// 把筆交給 PencilKit。一樣的筆不重設：每次換筆 PencilKit 都要重新準備，太頻繁會暫時不理會書寫
+    func setCanvasTool(_ t: PKInkingTool) {
+        pendingToolWork?.cancel()
+        pendingToolWork = nil
+        if let old = canvas.tool as? PKInkingTool,
+           old.inkType == t.inkType, old.width == t.width, old.color == t.color { return }
+        canvas.tool = t
+    }
+
+    /// 拖滑桿時用：停下來 0.25 秒後才換筆
+    func setCanvasToolSoon() {
+        pendingToolWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.tool.isInking else { return }
+            self.setCanvasTool(BrushStore.shared.current.tool)
+        }
+        pendingToolWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
     }
 
     /// 依目前的筆更新「細、中、粗」與虛線按鈕
@@ -637,7 +658,7 @@ extension NotebookViewController {
             UIAction(title: "調整", image: UIImage(systemName: "slider.horizontal.3")) { [weak self, weak source] _ in
                 guard let self, let source, let p = BrushStore.shared.presets.first(where: { $0.id == id }) else { return }
                 BrushStore.shared.select(id)
-                self.canvas.tool = p.tool
+                self.setCanvasTool(p.tool)
                 self.refreshPresetButtons()
                 self.presentBrushSettings(p, from: source)
             },
@@ -655,7 +676,7 @@ extension NotebookViewController {
     func presentBrushSettings(_ preset: BrushPreset, from source: UIView) {
         let view = BrushSettingsView(preset: preset) { [weak self] p in
             BrushStore.shared.update(p)
-            if BrushStore.shared.currentID == p.id { self?.canvas.tool = p.tool }
+            if BrushStore.shared.currentID == p.id { self?.setCanvasToolSoon() }
             self?.refreshPresetButtons()
         }
         let host = UIHostingController(rootView: view)
@@ -734,10 +755,6 @@ extension NotebookViewController {
             UIAction(title: "橡皮擦擦完自動切回筆", image: UIImage(systemName: "eraser"), state: s.eraserAutoReturn ? .on : .off) { [weak self] _ in
                 s.eraserAutoReturn.toggle()
                 if self?.tool == .eraser { self?.rebuildSubBar() }
-            },
-            UIAction(title: "畫線停住變直線／圖形", image: UIImage(systemName: "line.diagonal"), state: s.shapeSnap ? .on : .off) { [weak self] _ in
-                s.shapeSnap.toggle()
-                self?.updateGestureAvailability()
             },
             UIAction(title: "螢光筆自動對齊 PDF 文字", image: UIImage(systemName: "highlighter"), state: s.smartHighlight ? .on : .off) { _ in
                 s.smartHighlight.toggle()
