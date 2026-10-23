@@ -44,12 +44,12 @@ enum InkStyle: String, Codable, CaseIterable, Identifiable {
 
     var widthRange: ClosedRange<CGFloat> {
         switch self {
-        case .pen, .monoline: return 0.5...20
-        case .fountainPen: return 1...26
-        case .pencil: return 1...16
+        case .pen, .monoline: return 0.1...20
+        case .fountainPen: return 0.1...26
+        case .pencil: return 0.1...16
         case .marker: return 4...40
-        case .crayon: return 4...40
-        case .watercolor: return 6...60
+        case .crayon: return 0.1...40
+        case .watercolor: return 0.1...60
         }
     }
 }

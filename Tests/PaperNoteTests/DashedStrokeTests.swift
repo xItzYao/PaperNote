@@ -124,7 +124,7 @@ final class DashSettingsTests: XCTestCase {
     }
 
     func testOldSavesWithoutDashFieldsStillDecode() throws {
-        let json = #"{"id":"9F0F8A4B-1C1D-4E6B-9A51-6F2B8C1D2E3F","style":"monoline","colorHex":"#000000FF","width":3}"#
+        let json = ##"{"id":"9F0F8A4B-1C1D-4E6B-9A51-6F2B8C1D2E3F","style":"monoline","colorHex":"#000000FF","width":3}"##
         let p = try JSONDecoder().decode(BrushPreset.self, from: Data(json.utf8))
         XCTAssertNil(p.dashRatio)
         XCTAssertFalse(p.isDashed)

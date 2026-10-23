@@ -578,7 +578,7 @@ extension NotebookViewController {
             let selected = currentWidthSlot()
             for (slot, b) in penWidthButtons.enumerated() where widths.indices.contains(slot) {
                 var c = b.configuration ?? .plain()
-                c.image = Self.widthIcon(widths[slot], relativeTo: widths.max() ?? 1)
+                c.image = Self.widthIcons[slot]
                 c.baseForegroundColor = slot == selected ? .systemBlue : .label
                 c.background.backgroundColor = slot == selected ? UIColor.systemBlue.withAlphaComponent(0.15) : .clear
                 c.background.cornerRadius = 8
@@ -598,10 +598,11 @@ extension NotebookViewController {
         }
     }
 
-    /// 粗細圖示：一條橫線，最粗的那格畫 11pt，其他照比例
-    static func widthIcon(_ width: CGFloat, relativeTo maxWidth: CGFloat) -> UIImage {
-        let t = max(1.5, 11 * width / max(maxWidth, 0.1))
-        return UIGraphicsImageRenderer(size: CGSize(width: 28, height: 18)).image { _ in
+    /// 細、中、粗圖示：固定粗細的橫線（實際 pt 再小也看得出差別）
+    static let widthIcons: [UIImage] = ([1.5, 4, 8] as [CGFloat]).map { widthIcon($0) }
+
+    private static func widthIcon(_ t: CGFloat) -> UIImage {
+        UIGraphicsImageRenderer(size: CGSize(width: 28, height: 18)).image { _ in
             let path = UIBezierPath()
             path.move(to: CGPoint(x: 3 + t / 2, y: 9))
             path.addLine(to: CGPoint(x: 25 - t / 2, y: 9))
@@ -901,7 +902,7 @@ struct WidthSlotEditor: View {
                 Text(String(format: "%.1f pt", Double(width))).monospacedDigit().foregroundStyle(.secondary)
             }
             Capsule().frame(width: 160, height: min(max(width, 1), 30)).frame(maxWidth: .infinity)
-            Slider(value: $width, in: range, step: 0.5)
+            Slider(value: $width, in: range, step: 0.1)
                 .onChange(of: width) { _, w in onChange(w) }
         }
         .padding()
