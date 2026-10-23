@@ -195,6 +195,11 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var liveShape: LiveShape?
     /// 剛放上去的直線／圖形：PencilKit 收尾被中斷的那一筆時可能把它蓋掉，這段時間內發現不見就補回去
     var pendingLiveStroke: (stroke: PKStroke, countBefore: Int, until: CFTimeInterval)?
+    /// PencilKit 被暫停後沒有恢復書寫過 → 這次開啟期間，停住變直線時不再暫停它
+    var pencilKitFragile = false
+    var pencilKitStalls = 0
+    var pencilTouchBeganAt: CFTimeInterval = 0
+    var pencilTouchBeganPoint: CGPoint = .zero
     var editMenu: UIEditMenuInteraction!
     var pendingMenu: UIMenu?
 
@@ -731,8 +736,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         let shape = ShapeRecognizer.closedShapePoints(pts)
         liveShape = LiveShape(start: start, end: ShapeRecognizer.snappedLineEnd(from: start, to: last),
                               shapePoints: shape, preset: preset, countBefore: strokeCountAtBegin)
-        // 中斷 PencilKit 正在畫的那一筆，改由預覽線接手
-        canvas.drawingGestureRecognizer.isEnabled = false
+        // 中斷 PencilKit 正在畫的那一筆，改由預覽線接手（暫停後恢復不了的系統版本就不暫停，放開時再換掉）
+        if !pencilKitFragile { canvas.drawingGestureRecognizer.isEnabled = false }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         showLiveShapePreview()
     }
@@ -748,6 +753,10 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         guard var ls = liveShape else { return }
         liveShape = nil
         canvas.drawingGestureRecognizer.isEnabled = tool.isDrawing
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.liveShape == nil, self.tool.isDrawing else { return }
+            self.canvas.drawingGestureRecognizer.isEnabled = true
+        }
         if ls.shapePoints == nil { ls.end = ShapeRecognizer.snappedLineEnd(from: ls.start, to: p) }
         guard !cancelled || ls.shapePoints != nil || ls.start.distance(to: ls.end) > 4 else {
             overlay.showLiveShape(nil, color: .clear, width: 0)
@@ -759,6 +768,28 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         ensureLiveStroke()
         for delay in [0.05, 0.15, 0.3, 0.6, 1.0, 1.6] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.ensureLiveStroke() }
+        }
+    }
+
+    /// 筆尖碰到畫布：處理卡住的狀態，並確認 PencilKit 有開始書寫
+    func pencilDidTouchDown(at p: CGPoint) {
+        // 上一次停住變直線沒收到筆離開 → 先結束它，恢復書寫
+        if let ls = liveShape { endLiveShape(ls.end, cancelled: true) }
+        if tool.isDrawing, !canvas.drawingGestureRecognizer.isEnabled { canvas.drawingGestureRecognizer.isEnabled = true }
+        guard tool.isInking else { return }
+        let began = CACurrentMediaTime()
+        pencilTouchBeganAt = began
+        pencilTouchBeganPoint = p
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+            guard let self, self.pencilDown, self.pencilTouchBeganAt == began, self.tool.isInking, self.liveShape == nil,
+                  self.toolBeganAt < began, let now = self.lastPencilPoint,
+                  now.distance(to: self.pencilTouchBeganPoint) > 12 else { return }
+            // 筆在畫布上移動了，PencilKit 卻沒開始寫 → 書寫手勢卡住了，重新啟用
+            self.pencilKitFragile = true
+            self.pencilKitStalls += 1
+            self.canvas.drawingGestureRecognizer.isEnabled = false
+            self.applyTool()
+            if self.pencilKitStalls >= 2 { self.showToast("筆寫不出字的話，請關閉這本筆記再打開") }
         }
     }
 

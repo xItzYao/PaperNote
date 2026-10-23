@@ -45,7 +45,10 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             self?.lastPencilPoint = p
             self?.lastPencilTime = CACurrentMediaTime()
         }
-        pencilPointTracker.onBegan = { [weak self] _ in self?.pencilDown = true }
+        pencilPointTracker.onBegan = { [weak self] p in
+            self?.pencilDown = true
+            self?.pencilDidTouchDown(at: p)
+        }
         pencilPointTracker.onEnded = { [weak self] in
             self?.pencilDown = false
             self?.lastPencilTime = CACurrentMediaTime()
