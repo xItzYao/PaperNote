@@ -97,6 +97,9 @@ extension NotebookViewController {
             guard let self, let favList else { return }
             self.presentFavoritesList(from: favList)
         }, for: .touchUpInside)
+        let overview = makeButton(symbol: "square.grid.2x2", title: nil, action: nil)
+        overview.accessibilityLabel = "全部頁面"
+        overview.addAction(UIAction { [weak self] _ in self?.presentPageOverview() }, for: .touchUpInside)
         let pageMenu = makeButton(symbol: "doc.on.doc", title: nil, action: nil)
         pageMenu.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] done in
             done(self?.makePageMenuItems() ?? [])
@@ -113,7 +116,7 @@ extension NotebookViewController {
             guard let self, let help else { return }
             self.presentHelp(from: help)
         }, for: .touchUpInside)
-        let right = UIStackView(arrangedSubviews: [undo, redo, favoriteButton, favList, pageMenu, help, settingsButton])
+        let right = UIStackView(arrangedSubviews: [undo, redo, favoriteButton, favList, overview, pageMenu, help, settingsButton])
         right.spacing = 2
 
         for s in [left, center, right] {
@@ -140,6 +143,9 @@ extension NotebookViewController {
         pageLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
         pageLabel.textColor = .secondaryLabel
         pageLabel.translatesAutoresizingMaskIntoConstraints = false
+        // 點頁碼打開全部頁面
+        pageLabel.isUserInteractionEnabled = true
+        pageLabel.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(pageLabelTapped)))
         subBar.addSubview(pageLabel)
         NSLayoutConstraint.activate([
             subBarStack.centerYAnchor.constraint(equalTo: subBar.centerYAnchor),
@@ -484,10 +490,13 @@ extension NotebookViewController {
         ])
     }
 
+    @objc func pageLabelTapped() { presentPageOverview() }
+
     func makePageMenuItems() -> [UIMenuElement] {
         guard !pages.isEmpty else { return [] }
         let i = currentPageIndex
         var items: [UIMenuElement] = [
+            UIAction(title: "全部頁面…", image: UIImage(systemName: "square.grid.2x2")) { [weak self] _ in self?.presentPageOverview() },
             UIAction(title: "跳到頁碼…", image: UIImage(systemName: "arrow.right.doc.on.clipboard")) { [weak self] _ in self?.presentJumpToPage() },
             UIAction(title: "在此頁後新增空白頁", image: UIImage(systemName: "doc.badge.plus")) { [weak self] _ in self?.addBlankPage(at: i + 1) },
             UIAction(title: "在此頁前新增空白頁", image: UIImage(systemName: "doc.badge.plus")) { [weak self] _ in self?.addBlankPage(at: i) },

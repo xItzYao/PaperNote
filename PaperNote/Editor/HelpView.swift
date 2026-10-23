@@ -57,6 +57,7 @@ struct HelpView: View {
                 }
                 Section("其他") {
                     row(Item(symbol: "star", title: "我的最愛", detail: "把目前這頁加入我的最愛並寫備註；資料庫的「我的最愛頁面」可以搜尋所有備註。"))
+                    row(Item(symbol: "square.grid.2x2", title: "全部頁面", detail: "用縮圖看整本筆記（也可以點第二列右側的頁碼打開），點一下跳到那頁。長按拖曳可以調整頁面順序；按「選取」可以一次複製或刪除多頁；上方切到「我的最愛」只看收藏的頁面。"))
                     row(Item(symbol: "doc.on.doc", title: "頁面", detail: "跳頁、新增空白頁、刪除頁面；刪除的頁面 30 天內可以在「最近刪除的頁面」還原。"))
                     row(Item(symbol: "hand.raised", title: "手掌防誤觸", detail: "在「⋯」選擇右手或左手寫字。寫字時與剛寫完的一瞬間，手掌壓在筆尖附近（右手：右下方；左手：左下方）不會捲動、縮放或點到東西；放下筆後手指馬上就能正常操作。"))
                     row(Item(symbol: "ellipsis.circle", title: "設定", detail: "手指書寫、停住變直線、螢光筆對齊文字、點三下叫出筆盤、筆刷列靠右、匯出 PDF。"))
