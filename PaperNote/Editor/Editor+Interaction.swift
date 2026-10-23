@@ -148,7 +148,10 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         if let tv = editingTextView, touch.view?.isDescendant(of: tv) == true { return false }
         if g === textLongPress {
             // 手指長按：剪貼簿有東西就能貼上；PDF 頁面上也可以選字（選取工具有自己的長按選單）
-            guard tool != .select, touch.type == .direct, !(settings.fingerDrawing && tool.isDrawing) else { return false }
+            // 套索工具 Pencil 長按也可以（長按圈選範圍內則打開套索選單）
+            guard tool != .select, !(settings.fingerDrawing && tool.isDrawing) else { return false }
+            guard touch.type == .direct || tool == .lasso else { return false }
+            if tool == .lasso, let sel = lassoSel, sel.bounds.insetBy(dx: -10, dy: -10).contains(touch.location(in: pagesContainer)) { return true }
             guard let i = pageIndex(containing: touch.location(in: pagesContainer)) else { return false }
             return clipboardHasContent || session.pdfPage(for: pages[i]) != nil
         }
@@ -278,6 +281,10 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
     @objc func handleTextLongPress(_ g: UILongPressGestureRecognizer) {
         guard g.state == .began else { return }
         let p = g.location(in: pagesContainer)
+        if tool == .lasso, let sel = lassoSel, sel.bounds.insetBy(dx: -10, dy: -10).contains(p) {
+            presentLassoMenu()
+            return
+        }
         let onPDF = pageIndex(containing: p).map { session.pdfPage(for: pages[$0]) != nil } ?? false
         guard clipboardHasContent else {
             if onPDF {

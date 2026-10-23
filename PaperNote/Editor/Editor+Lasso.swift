@@ -59,6 +59,8 @@ extension NotebookViewController {
     }
 
     func clearLassoSelection() {
+        // 剪下、刪除之後選單跟著關掉
+        if lassoSel != nil { editMenu.dismissMenu() }
         lassoSel = nil
         overlay.showLassoSelection(nil)
         overlay.showLassoPreview(nil, frame: .zero)
