@@ -258,10 +258,18 @@ struct BrushSettingsView: View {
                     ), in: 0.1...0.9)
                 }
             }
-            Section("粗細：\(String(format: "%.1f", preset.width))") {
-                Slider(value: $preset.width, in: preset.style.widthRange)
-                StrokePreview(preset: preset)
-                    .frame(height: 44)
+            if preset.style == .marker {
+                Section("粗細：\(String(format: "%.1f", preset.width))") {
+                    Slider(value: $preset.width, in: preset.style.widthRange)
+                    StrokePreview(preset: preset)
+                        .frame(height: 44)
+                }
+            } else {
+                // 筆的粗細在工具列的細、中、粗調整，這裡只留預覽
+                Section("預覽") {
+                    StrokePreview(preset: preset)
+                        .frame(height: 44)
+                }
             }
         }
         .onChange(of: preset) { _, newValue in
