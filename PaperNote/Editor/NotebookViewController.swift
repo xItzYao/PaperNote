@@ -59,6 +59,8 @@ struct PendingLiveStroke {
     var stroke: PKStroke
     var countBefore: Int
     var until: CFTimeInterval
+    /// 筆離開螢幕的時間
+    var endedAt: CFTimeInterval
     /// 畫這條線之前的筆跡（上一步就回到這裡）
     var before: PKDrawing
     var undoRegistered = false
@@ -203,18 +205,17 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     // 橡皮擦擦螢光標示
     var eraserTracker: TouchTracker!
     var liveShape: LiveShape?
-    /// 剛放上去的直線／圖形：PencilKit 收尾被中斷的那一筆時可能把它蓋掉，這段時間內發現不見就補回去
+    /// 剛放開的直線／圖形：等 PencilKit 收尾手繪的那一筆，再把它換成直線
     var pendingLiveStroke: PendingLiveStroke?
-    /// PencilKit 被暫停後沒有恢復書寫過 → 這次開啟期間，停住變直線時不再暫停它
-    var pencilKitFragile = false
+    /// PencilKit 正在畫一筆（還沒收尾前不去改筆跡，以免打斷它）
+    var pencilKitDrawing = false
+    /// 停住變直線的預覽：疊在筆跡上方
+    let liveShapeLayer = CAShapeLayer()
     /// 每支筆最近一筆手寫的代表點（實際粗細、壓力），直線和預覽線照著畫
     var strokeSamples: [UUID: PKStrokePoint] = [:]
     var liveShapePresetID: UUID?
     /// 套索改顏色時的自訂顏色選擇器
     var lassoColorPicker: LassoColorPicker?
-    var pencilKitStalls = 0
-    var pencilTouchBeganAt: CFTimeInterval = 0
-    var pencilTouchBeganPoint: CGPoint = .zero
     var editMenu: UIEditMenuInteraction!
     var pendingMenu: UIMenu?
 
@@ -302,6 +303,11 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         canvas.overrideUserInterfaceStyle = .light
         canvas.bouncesZoom = true
         view.addSubview(canvas)
+        liveShapeLayer.fillColor = UIColor.clear.cgColor
+        liveShapeLayer.lineCap = .round
+        liveShapeLayer.lineJoin = .round
+        liveShapeLayer.zPosition = 1000
+        canvas.layer.addSublayer(liveShapeLayer)
 
         pagesContainer.backgroundColor = .clear
         overlay.frame = .zero
@@ -665,7 +671,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         if let pending = pendingLiveStroke, !pending.undoRegistered {
             pendingLiveStroke = nil
             setDrawing(pending.before)
-            overlay.showLiveShape(nil, color: .clear, width: 0)
+            showLiveShape(nil)
             return
         }
         pendingLiveStroke = nil
@@ -688,6 +694,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     }
 
     func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
+        pencilKitDrawing = true
         // 開始寫字 → 收起還沒點的調色盤小圖示
         if let p = paletteOverlay, p.mode == .launcher { dismissPalette() }
         // 開始寫下一筆：之後就不再補上一條直線（這時改筆跡會打斷正在寫的這一筆）
@@ -697,6 +704,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     }
 
     func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
+        pencilKitDrawing = false
         if liveShape != nil { return }
         // 被中斷的那一筆這時才結束：不當成新筆跡處理，只確認直線還在
         if pendingLiveStroke != nil {
@@ -759,8 +767,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         let shape = ShapeRecognizer.closedShapePoints(pts)
         liveShape = LiveShape(start: start, end: ShapeRecognizer.snappedLineEnd(from: start, to: last),
                               shapePoints: shape, preset: preset, countBefore: strokeCountAtBegin)
-        // 中斷 PencilKit 正在畫的那一筆，改由預覽線接手（暫停後恢復不了的系統版本就不暫停，放開時再換掉）
-        if !pencilKitFragile { canvas.drawingGestureRecognizer.isEnabled = false }
+        // PencilKit 照常畫完這一筆，預覽線疊在上面；放開後再把手繪那一筆換成直線
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         showLiveShapePreview()
     }
@@ -775,20 +782,16 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     func endLiveShape(_ p: CGPoint, cancelled: Bool) {
         guard var ls = liveShape else { return }
         liveShape = nil
-        canvas.drawingGestureRecognizer.isEnabled = tool.isDrawing
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.liveShape == nil, self.tool.isDrawing else { return }
-            self.canvas.drawingGestureRecognizer.isEnabled = true
-        }
         if ls.shapePoints == nil { ls.end = ShapeRecognizer.snappedLineEnd(from: ls.start, to: p) }
         guard !cancelled || ls.shapePoints != nil || ls.start.distance(to: ls.end) > 4 else {
-            overlay.showLiveShape(nil, color: .clear, width: 0)
+            showLiveShape(nil)
             return
         }
-        // PencilKit 收尾被中斷的那一筆時可能把直線蓋掉：1.5 秒內只要筆跡有變動或定時檢查發現不見，就補回去
+        // 等 PencilKit 收尾手繪的那一筆再換成直線；1.5 秒內筆跡有變動或定時檢查發現不對，就再修正
         let stroke = ShapeRecognizer.makeStroke(points: ls.points, preset: ls.preset, sample: strokeSamples[ls.preset.id])
         liveShapePresetID = ls.preset.id
         pendingLiveStroke = PendingLiveStroke(stroke: stroke, countBefore: ls.countBefore, until: CACurrentMediaTime() + 1.5,
+                                              endedAt: CACurrentMediaTime(),
                                               before: PKDrawing(strokes: Array(canvas.drawing.strokes.prefix(ls.countBefore))))
         ensureLiveStroke()
         for delay in [0.05, 0.15, 0.3, 0.6, 1.0, 1.6] {
@@ -796,31 +799,17 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         }
     }
 
-    /// 筆尖碰到畫布：處理卡住的狀態，並確認 PencilKit 有開始書寫
+    /// 筆尖碰到畫布：上一次停住變直線沒收到筆離開 → 先結束它
     func pencilDidTouchDown(at p: CGPoint) {
-        // 上一次停住變直線沒收到筆離開 → 先結束它，恢復書寫
         if let ls = liveShape { endLiveShape(ls.end, cancelled: true) }
         if tool.isDrawing, !canvas.drawingGestureRecognizer.isEnabled { canvas.drawingGestureRecognizer.isEnabled = true }
-        guard tool.isInking else { return }
-        let began = CACurrentMediaTime()
-        pencilTouchBeganAt = began
-        pencilTouchBeganPoint = p
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-            guard let self, self.pencilDown, self.pencilTouchBeganAt == began, self.tool.isInking, self.liveShape == nil,
-                  self.toolBeganAt < began, let now = self.lastPencilPoint,
-                  now.distance(to: self.pencilTouchBeganPoint) > 12 else { return }
-            // 筆在畫布上移動了，PencilKit 卻沒開始寫 → 書寫手勢卡住了，重新啟用
-            self.pencilKitFragile = true
-            self.pencilKitStalls += 1
-            self.canvas.drawingGestureRecognizer.isEnabled = false
-            self.applyTool()
-            if self.pencilKitStalls >= 2 { self.showToast("筆寫不出字的話，請關閉這本筆記再打開") }
-        }
     }
 
     /// 確認剛放上去的直線／圖形在筆跡裡，並移除被中斷的那一筆手繪線
     func ensureLiveStroke() {
         guard var pending = pendingLiveStroke else { return }
+        // PencilKit 還在收尾手繪那一筆：先別動筆跡（最多等 0.6 秒）
+        if pencilKitDrawing && CACurrentMediaTime() - pending.endedAt < 0.6 { return }
         var stroke = pending.stroke
         let countBefore = pending.countBefore
         let date = stroke.path.creationDate
@@ -846,7 +835,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             d.strokes = kept
             setDrawing(d)
         }
-        overlay.showLiveShape(nil, color: .clear, width: 0)
+        showLiveShape(nil)
         // PencilKit 收尾完（手繪那一筆已經被換掉）才登記「上一步」，排在它自己的紀錄之後
         if strayIndex != nil { registerLiveStrokeUndo() }
         if CACurrentMediaTime() > pending.until { finishPendingLiveStroke() }
@@ -868,9 +857,25 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     private func showLiveShapePreview() {
         guard let ls = liveShape else { return }
-        let color = ls.preset.inkColor
         // 預覽線用這支筆實際畫出來的粗細
-        overlay.showLiveShape(ls.points, color: color, width: strokeSamples[ls.preset.id]?.size.width ?? ls.preset.width)
+        showLiveShape(ls.points, color: ls.preset.inkColor, width: strokeSamples[ls.preset.id]?.size.width ?? ls.preset.width)
+    }
+
+    /// 預覽線畫在畫布最上層（手繪那一筆的上面）；點是文件座標
+    func showLiveShape(_ points: [CGPoint]?, color: UIColor = .clear, width: CGFloat = 0) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if let pts = points, let first = pts.first {
+            let path = UIBezierPath()
+            path.move(to: pagesContainer.convert(first, to: canvas))
+            for q in pts.dropFirst() { path.addLine(to: pagesContainer.convert(q, to: canvas)) }
+            liveShapeLayer.path = path.cgPath
+            liveShapeLayer.strokeColor = color.cgColor
+            liveShapeLayer.lineWidth = width * canvas.zoomScale
+        } else {
+            liveShapeLayer.path = nil
+        }
+        CATransaction.commit()
     }
 
     // MARK: - Pages

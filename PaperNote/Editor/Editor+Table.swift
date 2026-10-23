@@ -343,7 +343,7 @@ extension NotebookViewController {
         for g in all where !mine.contains(ObjectIdentifier(g)) {
             if g === canvas.panGestureRecognizer || g === canvas.pinchGestureRecognizer { continue }
             if g === canvas.drawingGestureRecognizer {
-                g.isEnabled = drawingTool && liveShape == nil
+                g.isEnabled = drawingTool
                 continue
             }
             if !drawingTool {
