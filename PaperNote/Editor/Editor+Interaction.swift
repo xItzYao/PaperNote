@@ -117,8 +117,8 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         // 筆尖正在接觸螢幕，或剛離開不到 0.3 秒
         // （超過 3 秒沒收到筆尖移動就不算「正在寫字」，避免狀態卡住讓頁面一直沒反應）
         if pencilDown && now - lastPencilTime < 3 { return true }
-        // 筆剛離開：只擋面積較大的觸碰（手掌），一般指尖馬上就能捲動頁面
-        guard t.majorRadius > 25 else { return false }
+        // 筆剛離開：只擋手掌大小的觸碰。手指（就算用指腹滑）半徑大多在 30 以下，馬上就能捲動頁面
+        guard t.majorRadius >= 40 else { return false }
         if now - lastPencilTime < 0.3 { return true }
         // 剛寫完 1.5 秒內，筆尖附近下方、寫字那一側的觸碰（手掌常壓的位置）
         guard now - lastPencilTime < 1.5, let pp = lastPencilPoint else { return false }
@@ -154,11 +154,12 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         if let tv = editingTextView, touch.view?.isDescendant(of: tv) == true { return false }
         if g === textLongPress {
             // 手指長按：剪貼簿有東西就能貼上；PDF 頁面上也可以選字（選取工具有自己的長按選單）
-            // 套索工具 Pencil 長按也可以（長按圈選範圍內則打開套索選單）
+            // 套索、截圖工具 Pencil 長按也可以貼上（套索長按圈選範圍內則打開套索選單）
             guard tool != .select, !(settings.fingerDrawing && tool.isDrawing) else { return false }
-            guard touch.type == .direct || tool == .lasso else { return false }
-            if tool == .lasso, let sel = lassoSel, sel.bounds.insetBy(dx: -10, dy: -10).contains(touch.location(in: pagesContainer)) { return true }
-            guard let i = pageIndex(containing: touch.location(in: pagesContainer)) else { return false }
+            let p = touch.location(in: pagesContainer)
+            if tool == .lasso, let sel = lassoSel, sel.bounds.insetBy(dx: -10, dy: -10).contains(p) { return true }
+            if touch.type == .pencil { return (tool == .lasso || tool == .capture) && clipboardHasContent }
+            guard touch.type == .direct, let i = pageIndex(containing: p) else { return false }
             return clipboardHasContent || session.pdfPage(for: pages[i]) != nil
         }
         // 截圖、PDF 文字、手繪表格、套索：沒開「用手指書寫」時只接受 Pencil，手指只用來捲動
@@ -979,13 +980,22 @@ extension NotebookViewController {
         guard rect.width > 4, rect.height > 4 else { return nil }
         let scale = min(3, 4096 / max(rect.width, rect.height))
         let ink = PageRenderer.inkImage(canvas.drawing, rect: rect, scale: scale)
+        // 矩形截圖整張不透明；邊緣若是半透明的黑色，圖片縮放後會出現一圈細細的黑邊
+        let isRect = path.cgPath.isRect(nil)
         let fmt = UIGraphicsImageRendererFormat()
         fmt.scale = scale
-        fmt.opaque = false
+        fmt.opaque = isRect
         return UIGraphicsImageRenderer(size: rect.size, format: fmt).image { rc in
             let ctx = rc.cgContext
             ctx.translateBy(x: -rect.minX, y: -rect.minY)
-            path.addClip()
+            UIColor.white.setFill()
+            if isRect {
+                ctx.fill(rect)
+            } else {
+                // 自由形狀：先鋪白色，邊緣的半透明像素就是白色而不是黑色
+                path.fill()
+                path.addClip()
+            }
             for (i, f) in pageFrames.enumerated() where f.intersects(rect) {
                 ctx.saveGState()
                 ctx.translateBy(x: f.minX, y: f.minY)
