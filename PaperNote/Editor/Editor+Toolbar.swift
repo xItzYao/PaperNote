@@ -750,6 +750,10 @@ extension NotebookViewController {
                 s.eraserAutoReturn.toggle()
                 if self?.tool == .eraser { self?.rebuildSubBar() }
             },
+            UIAction(title: "畫線停住變直線／圖形", image: UIImage(systemName: "line.diagonal"), state: s.shapeSnap ? .on : .off) { [weak self] _ in
+                s.shapeSnap.toggle()
+                self?.updateGestureAvailability()
+            },
             UIAction(title: "螢光筆自動對齊 PDF 文字", image: UIImage(systemName: "highlighter"), state: s.smartHighlight ? .on : .off) { _ in
                 s.smartHighlight.toggle()
             },
