@@ -472,10 +472,16 @@ extension NotebookViewController {
         penWidthButtons = (0..<3).map { slot in
             let b = UIButton(configuration: .plain())
             b.accessibilityLabel = names[slot]
-            b.addAction(UIAction { [weak self] _ in
-                guard let self else { return }
+            b.addAction(UIAction { [weak self, weak b] _ in
+                guard let self, let b else { return }
                 var p = BrushStore.shared.current
-                p.width = BrushStore.shared.styleWidths(p.style)[slot]
+                let w = BrushStore.shared.styleWidths(p.style)[slot]
+                // 已經是這個粗細：再點一次打開 pt 調整（和筆刷「再點一下調整」一樣）
+                if abs(p.width - w) < 0.01 {
+                    self.presentWidthEditor(slot: slot, from: b)
+                    return
+                }
+                p.width = w
                 self.updateCurrentPreset(p)
             }, for: .touchUpInside)
             b.addGestureRecognizer(UILongPressGestureRecognizer(target: self, action: #selector(penWidthLongPressed(_:))))
@@ -500,7 +506,11 @@ extension NotebookViewController {
     /// 長按粗細圖示：用滑桿自訂這一格的 pt（目前的筆用的是這一格就一起改）
     @objc func penWidthLongPressed(_ g: UILongPressGestureRecognizer) {
         guard g.state == .began, let button = g.view as? UIButton else { return }
-        let slot = button.tag
+        presentWidthEditor(slot: button.tag, from: button)
+    }
+
+    /// 自訂某一格（細／中／粗）的 pt；目前的筆用的是這一格就一起改
+    func presentWidthEditor(slot: Int, from button: UIView) {
         let style = BrushStore.shared.current.style
         let wasUsing = currentWidthSlot() == slot
         let editor = WidthSlotEditor(title: ["細", "中", "粗"][slot], range: style.widthRange,
