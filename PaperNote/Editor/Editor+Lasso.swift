@@ -297,12 +297,18 @@ extension NotebookViewController {
         registerCompositeUndo(drawing: canvas.drawing, pageIDs: [])
         var d = canvas.drawing
         for i in sel.strokeIndices where d.strokes.indices.contains(i) {
-            let old = d.strokes[i].ink
+            let old = d.strokes[i]
             var alpha: CGFloat = 1
-            old.color.getRed(nil, green: nil, blue: nil, alpha: &alpha)
-            d.strokes[i].ink = PKInk(old.inkType, color: color.withAlphaComponent(alpha))
+            old.ink.color.getRed(nil, green: nil, blue: nil, alpha: &alpha)
+            // 只改墨水 PencilKit 不會重畫；建一筆新的（路徑、位置、筆觸紋理不變）畫面才會馬上更新
+            d.strokes[i] = PKStroke(ink: PKInk(old.ink.inkType, color: color.withAlphaComponent(alpha)), path: old.path,
+                                    transform: old.transform, mask: old.mask, randomSeed: old.randomSeed)
         }
-        setDrawing(d)
+        // 先拿掉這幾筆、下一刻再放回來，確保 PencilKit 重畫
+        var without = d
+        for i in sel.strokeIndices.sorted(by: >) where without.strokes.indices.contains(i) { without.strokes.remove(at: i) }
+        setDrawing(without)
+        DispatchQueue.main.async { [weak self] in self?.setDrawing(d) }
     }
 
     private func presentLassoColorPicker() {
