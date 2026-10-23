@@ -197,6 +197,11 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var pendingLiveStroke: (stroke: PKStroke, countBefore: Int, until: CFTimeInterval)?
     /// PencilKit 被暫停後沒有恢復書寫過 → 這次開啟期間，停住變直線時不再暫停它
     var pencilKitFragile = false
+    /// 每支筆最近一筆手寫的代表點（實際粗細、壓力），直線和預覽線照著畫
+    var strokeSamples: [UUID: PKStrokePoint] = [:]
+    var liveShapePresetID: UUID?
+    /// 套索改顏色時的自訂顏色選擇器
+    var lassoColorPicker: LassoColorPicker?
     var pencilKitStalls = 0
     var pencilTouchBeganAt: CFTimeInterval = 0
     var pencilTouchBeganPoint: CGPoint = .zero
@@ -704,6 +709,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     private func processNewStroke(duration: TimeInterval, countBefore: Int) {
         var drawing = canvas.drawing
         guard drawing.strokes.count == countBefore + 1, let stroke = drawing.strokes.last else { return }
+        if let s = ShapeRecognizer.samplePoint(of: stroke) { strokeSamples[BrushStore.shared.current.id] = s }
         if BrushStore.shared.current.style == .marker && settings.smartHighlight && snapHighlightToText(stroke) {
             drawing.strokes.removeLast()
             setDrawing(drawing)
@@ -763,7 +769,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             return
         }
         // PencilKit 收尾被中斷的那一筆時可能把直線蓋掉：1.5 秒內只要筆跡有變動或定時檢查發現不見，就補回去
-        let stroke = ShapeRecognizer.makeStroke(points: ls.points, preset: ls.preset)
+        let stroke = ShapeRecognizer.makeStroke(points: ls.points, preset: ls.preset, sample: strokeSamples[ls.preset.id])
+        liveShapePresetID = ls.preset.id
         pendingLiveStroke = (stroke, ls.countBefore, CACurrentMediaTime() + 1.5)
         ensureLiveStroke()
         for delay in [0.05, 0.15, 0.3, 0.6, 1.0, 1.6] {
@@ -795,14 +802,26 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     /// 確認剛放上去的直線／圖形在筆跡裡，並移除被中斷的那一筆手繪線
     func ensureLiveStroke() {
-        guard let pending = pendingLiveStroke else { return }
-        let stroke = pending.stroke, countBefore = pending.countBefore
+        guard var pending = pendingLiveStroke else { return }
+        var stroke = pending.stroke
+        let countBefore = pending.countBefore
         let date = stroke.path.creationDate
         var d = canvas.drawing
         let hasLine = d.strokes.contains { $0.path.creationDate == date }
         // 比直線早建立、又不在原本筆跡裡的，就是被中斷的那一筆
-        let stray = d.strokes.indices.contains { $0 >= countBefore && d.strokes[$0].path.creationDate < date }
-        if !hasLine || stray {
+        let strayIndex = d.strokes.indices.last { $0 >= countBefore && d.strokes[$0].path.creationDate < date }
+        if let si = strayIndex {
+            // 直線改用手寫那一筆的墨水與粗細，和 PencilKit 畫出來的完全一樣
+            let hand = d.strokes[si]
+            if let s = ShapeRecognizer.samplePoint(of: hand) {
+                stroke = ShapeRecognizer.makeStroke(points: stroke.path.map(\.location), ink: hand.ink,
+                                                    width: s.size.width, sample: s, creationDate: date)
+                pending.stroke = stroke
+                pendingLiveStroke = pending
+                if let id = liveShapePresetID { strokeSamples[id] = s }
+            }
+        }
+        if !hasLine || strayIndex != nil {
             var kept = Array(d.strokes.prefix(countBefore))
             kept += d.strokes.dropFirst(countBefore).filter { $0.path.creationDate > date }
             kept.append(stroke)
@@ -816,7 +835,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     private func showLiveShapePreview() {
         guard let ls = liveShape else { return }
         let color = ls.preset.inkColor
-        overlay.showLiveShape(ls.points, color: color, width: ls.preset.width)
+        // 預覽線用這支筆實際畫出來的粗細
+        overlay.showLiveShape(ls.points, color: color, width: strokeSamples[ls.preset.id]?.size.width ?? ls.preset.width)
     }
 
     // MARK: - Pages

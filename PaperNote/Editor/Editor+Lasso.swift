@@ -248,7 +248,7 @@ extension NotebookViewController {
 
     func presentLassoMenu() {
         guard let sel = lassoSel else { return }
-        let menu = UIMenu(children: [
+        var children: [UIMenuElement] = [
             UIAction(title: "拷貝", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in self?.copyLasso() },
             UIAction(title: "剪下", image: UIImage(systemName: "scissors")) { [weak self] _ in
                 self?.copyLasso()
@@ -256,8 +256,69 @@ extension NotebookViewController {
             },
             UIAction(title: "複製一份", image: UIImage(systemName: "plus.square.on.square")) { [weak self] _ in self?.duplicateLasso() },
             UIAction(title: "刪除", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in self?.deleteLasso() },
-        ])
-        presentMenu(menu, atDocPoint: CGPoint(x: sel.bounds.midX, y: sel.bounds.minY))
+        ]
+        // 圈到筆跡：可以直接改顏色
+        if !sel.strokeIndices.isEmpty { children.insert(lassoColorMenu(), at: 0) }
+        presentMenu(UIMenu(children: children), atDocPoint: CGPoint(x: sel.bounds.midX, y: sel.bounds.minY))
+    }
+
+    // MARK: 改顏色
+
+    /// 常用的筆與螢光筆顏色，加上「其他顏色…」
+    private func lassoColorMenu() -> UIMenu {
+        var seen = Set<String>()
+        var colors: [String] = []
+        for p in BrushStore.shared.presets(.pen) + BrushStore.shared.presets(.highlighter) where seen.insert(p.colorHex.uppercased()).inserted {
+            colors.append(p.colorHex)
+        }
+        var items: [UIMenuElement] = colors.map { hex in
+            UIAction(title: hex, image: Self.colorSwatch(UIColor(hex: hex))) { [weak self] _ in self?.recolorLasso(UIColor(hex: hex)) }
+        }
+        items.append(UIAction(title: "其他顏色…", image: UIImage(systemName: "eyedropper")) { [weak self] _ in self?.presentLassoColorPicker() })
+        let grid = UIMenu(title: "", options: .displayInline, children: items)
+        grid.preferredElementSize = .small
+        return UIMenu(title: "顏色", image: UIImage(systemName: "paintpalette"), children: [grid])
+    }
+
+    static func colorSwatch(_ color: UIColor) -> UIImage {
+        let size = CGSize(width: 24, height: 24)
+        return UIGraphicsImageRenderer(size: size).image { _ in
+            let r = CGRect(origin: .zero, size: size).insetBy(dx: 2, dy: 2)
+            color.withAlphaComponent(1).setFill()
+            UIBezierPath(ovalIn: r).fill()
+            UIColor.separator.setStroke()
+            UIBezierPath(ovalIn: r).stroke()
+        }.withRenderingMode(.alwaysOriginal)
+    }
+
+    /// 圈到的筆跡換成這個顏色（螢光筆保留原本的透明度）
+    func recolorLasso(_ color: UIColor) {
+        guard let sel = lassoSel, !sel.strokeIndices.isEmpty else { return }
+        registerCompositeUndo(drawing: canvas.drawing, pageIDs: [])
+        var d = canvas.drawing
+        for i in sel.strokeIndices where d.strokes.indices.contains(i) {
+            let old = d.strokes[i].ink
+            var alpha: CGFloat = 1
+            old.color.getRed(nil, green: nil, blue: nil, alpha: &alpha)
+            d.strokes[i].ink = PKInk(old.inkType, color: color.withAlphaComponent(alpha))
+        }
+        setDrawing(d)
+    }
+
+    private func presentLassoColorPicker() {
+        guard let sel = lassoSel else { return }
+        let picker = UIColorPickerViewController()
+        picker.supportsAlpha = false
+        if let i = sel.strokeIndices.first, let s = canvas.drawing.strokes[safe: i] { picker.selectedColor = s.ink.color.withAlphaComponent(1) }
+        let handler = LassoColorPicker { [weak self] color in self?.recolorLasso(color) }
+        picker.delegate = handler
+        lassoColorPicker = handler
+        picker.modalPresentationStyle = .popover
+        if let pop = picker.popoverPresentationController {
+            pop.sourceView = pagesContainer
+            pop.sourceRect = sel.bounds
+        }
+        present(picker, animated: true)
     }
 
     private func copyLasso() {
@@ -394,5 +455,18 @@ extension NotebookViewController {
         clearLassoSelection()
         updateLockChrome()
         if tool == .select { rebuildSubBar() }
+    }
+}
+
+/// 自訂顏色選好後套用到套索圈到的筆跡
+final class LassoColorPicker: NSObject, UIColorPickerViewControllerDelegate {
+    private let apply: (UIColor) -> Void
+
+    init(apply: @escaping (UIColor) -> Void) {
+        self.apply = apply
+    }
+
+    func colorPickerViewController(_ viewController: UIColorPickerViewController, didSelect color: UIColor, continuously: Bool) {
+        if !continuously { apply(color) }
     }
 }

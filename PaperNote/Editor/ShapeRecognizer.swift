@@ -55,16 +55,40 @@ enum ShapeRecognizer {
             maxDev = max(maxDev, perpendicularDistance(pts[i], a, b))
         }
         guard maxDev <= max(4, chord * 0.045), length / chord < 1.08 else { return nil }
-        return makeStroke(points: segment(a, snappedLineEnd(from: a, to: b)), preset: preset)
+        return makeStroke(points: segment(a, snappedLineEnd(from: a, to: b)), ink: stroke.ink,
+                          width: preset.width, sample: samplePoint(of: stroke))
     }
 
-    static func makeStroke(points: [CGPoint], preset: BrushPreset) -> PKStroke {
-        let size = CGSize(width: preset.width, height: preset.width)
+    /// 一筆的代表點（粗細排在中間的那一點）；新畫的直線沿用它的粗細、壓力，看起來和手寫的一樣
+    static func samplePoint(of stroke: PKStroke) -> PKStrokePoint? {
+        let pts = Array(stroke.path)
+        guard !pts.isEmpty else { return nil }
+        return pts.sorted { $0.size.width < $1.size.width }[pts.count / 2]
+    }
+
+    static func makeStroke(points: [CGPoint], preset: BrushPreset, sample: PKStrokePoint? = nil) -> PKStroke {
+        makeStroke(points: points, ink: preset.tool.ink, width: preset.width, sample: sample)
+    }
+
+    static func makeStroke(points: [CGPoint], ink: PKInk, width: CGFloat, sample: PKStrokePoint?,
+                           creationDate: Date = Date()) -> PKStroke {
+        let size = sample?.size ?? CGSize(width: width, height: width)
         let strokePoints = points.enumerated().map { i, p in
-            PKStrokePoint(location: p, timeOffset: TimeInterval(i) * 0.005, size: size, opacity: 1,
-                          force: 1, azimuth: 0, altitude: .pi / 2)
+            strokePoint(p, timeOffset: TimeInterval(i) * 0.005, size: size, like: sample)
         }
-        return PKStroke(ink: preset.tool.ink, path: PKStrokePath(controlPoints: strokePoints, creationDate: Date()))
+        return PKStroke(ink: ink, path: PKStrokePath(controlPoints: strokePoints, creationDate: creationDate))
+    }
+
+    /// iPadOS 18 起筆跡點多了 secondaryScale，用舊的建構方式在新系統上可能畫不出來
+    private static func strokePoint(_ p: CGPoint, timeOffset: TimeInterval, size: CGSize, like s: PKStrokePoint?) -> PKStrokePoint {
+        let opacity = s?.opacity ?? 1, force = s?.force ?? 1
+        let azimuth = s?.azimuth ?? 0, altitude = s?.altitude ?? .pi / 2
+        if #available(iOS 18.0, *) {
+            return PKStrokePoint(location: p, timeOffset: timeOffset, size: size, opacity: opacity, force: force,
+                                 azimuth: azimuth, altitude: altitude, secondaryScale: s?.secondaryScale ?? 1)
+        }
+        return PKStrokePoint(location: p, timeOffset: timeOffset, size: size, opacity: opacity, force: force,
+                             azimuth: azimuth, altitude: altitude)
     }
 
     // MARK: - Helpers
