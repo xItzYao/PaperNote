@@ -6,6 +6,19 @@ struct HighlightRef: Equatable {
     var id: UUID
 }
 
+/// 套索判斷（不碰畫面，可以單獨測試）
+enum LassoGeometry {
+    /// 筆跡有任何一點落在套索範圍內就算圈到（只圈到長線的一段也可以；
+    /// 只圈到大圓圈、方框中間的空白則不算，才能在框裡圈字）
+    static func circles(_ stroke: PKStroke, path: UIBezierPath, area: CGRect) -> Bool {
+        guard area.intersects(stroke.renderBounds) else { return false }
+        for p in stroke.path.interpolatedPoints(by: .distance(3)) where path.contains(p.location.applying(stroke.transform)) {
+            return true
+        }
+        return false
+    }
+}
+
 /// 自訂套索圈到的內容：筆跡（canvas.drawing 的索引）、物件、螢光標示
 struct LassoSelection {
     var strokeIndices: [Int]
@@ -79,11 +92,9 @@ extension NotebookViewController {
 
         var bounds = CGRect.null
         var strokes: [Int] = []
-        for (i, s) in canvas.drawing.strokes.enumerated() {
-            let b = s.renderBounds
-            guard area.intersects(b), path.contains(b.center) else { continue }
+        for (i, s) in canvas.drawing.strokes.enumerated() where LassoGeometry.circles(s, path: path, area: area) {
             strokes.append(i)
-            bounds = bounds.union(b)
+            bounds = bounds.union(s.renderBounds)
         }
         /// 套索和矩形有重疊（圈到一部分）就算
         func touches(_ r: CGRect) -> Bool {
