@@ -327,7 +327,7 @@ extension NotebookViewController {
 
 extension NotebookViewController {
     var ownGestureRecognizers: [UIGestureRecognizer] {
-        [toolPan, tapGesture, doubleTapGesture, longPressGesture, textLongPress, eraserTracker, pencilPointTracker, palmBlocker, dashedPen.tracker].compactMap { $0 }
+        [toolPan, tapGesture, doubleTapGesture, longPressGesture, textLongPress, eraserTracker, pencilPointTracker, palmBlocker].compactMap { $0 }
     }
 
     func configurePencilKitGestures() {
@@ -343,7 +343,7 @@ extension NotebookViewController {
         for g in all where !mine.contains(ObjectIdentifier(g)) {
             if g === canvas.panGestureRecognizer || g === canvas.pinchGestureRecognizer { continue }
             if g === canvas.drawingGestureRecognizer {
-                g.isEnabled = pencilKitDraws
+                g.isEnabled = drawingTool
                 continue
             }
             if !drawingTool {

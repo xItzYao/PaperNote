@@ -113,8 +113,6 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     let pageLabel = UILabel()
     var toolButtons: [EditorTool: UIButton] = [:]
     var presetButtons: [UUID: UIButton] = [:]
-    /// 虛線筆（見 DashedPen.swift）
-    lazy var dashedPen = DashedPenController(editor: self)
     /// 筆工具列的「細、中、粗」三個粗細按鈕與虛線開關
     var penWidthButtons: [UIButton] = []
     weak var penDashButton: UIButton?
@@ -690,6 +688,18 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     private func processNewStroke(duration: TimeInterval, countBefore: Int) {
         var drawing = canvas.drawing
         guard drawing.strokes.count == countBefore + 1, let stroke = drawing.strokes.last else { return }
+        // 虛線：筆放開後把這一筆切成一段一段（上一步回到寫這一筆之前）
+        let preset = BrushStore.shared.current
+        if tool == .pen, preset.isDashed {
+            let width = ShapeRecognizer.samplePoint(of: stroke)?.size.width ?? preset.tool.width
+            let pieces = DashedStroke.apply(stroke, dashed: true, lineWidth: width, preset: preset)
+            drawing.strokes.removeLast()
+            let before = drawing
+            drawing.strokes += pieces
+            setDrawingAddingStrokes(drawing, added: pieces.count)
+            registerCompositeUndo(drawing: before, pageIDs: [])
+            return
+        }
         if BrushStore.shared.current.style == .marker && settings.smartHighlight && snapHighlightToText(stroke) {
             drawing.strokes.removeLast()
             setDrawing(drawing)

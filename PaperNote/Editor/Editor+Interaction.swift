@@ -48,15 +48,14 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         pencilPointTracker.onBegan = { [weak self] _ in
             guard let self else { return }
             self.pencilDown = true
-            // 保險：該由 PencilKit 書寫時，書寫手勢一定要開著
-            if self.pencilKitDraws, !self.canvas.drawingGestureRecognizer.isEnabled { self.canvas.drawingGestureRecognizer.isEnabled = true }
+            // 保險：書寫工具下 PencilKit 的書寫手勢一定要開著
+            if self.tool.isDrawing, !self.canvas.drawingGestureRecognizer.isEnabled { self.canvas.drawingGestureRecognizer.isEnabled = true }
         }
         pencilPointTracker.onEnded = { [weak self] in
             self?.pencilDown = false
             self?.lastPencilTime = CACurrentMediaTime()
         }
         canvas.addGestureRecognizer(pencilPointTracker)
-        dashedPen.install()
 
         palmBlocker = PalmBlocker(target: nil, action: nil)
         palmBlocker.delegate = self
@@ -72,8 +71,6 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         doubleTapGesture.isEnabled = tool == .select
         pencilPointTracker.isEnabled = true
         eraserTracker.isEnabled = tool == .eraser
-        dashedPen.tracker.isEnabled = dashedPenActive
-        dashedPen.tracker.allowFinger = settings.fingerDrawing
         eraserTracker.allowFinger = settings.fingerDrawing
         longPressGesture.isEnabled = tool == .select
     }
@@ -126,7 +123,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             return !(o === canvas.panGestureRecognizer || o === canvas.pinchGestureRecognizer)
         }
         // 被動追蹤筆尖的辨識器要和 PencilKit 同時運作
-        let passive: [UIGestureRecognizer?] = [eraserTracker, pencilPointTracker, dashedPen.tracker]
+        let passive: [UIGestureRecognizer?] = [eraserTracker, pencilPointTracker]
         return passive.contains { $0 === g || $0 === other }
     }
 

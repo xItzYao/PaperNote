@@ -215,19 +215,8 @@ extension NotebookViewController {
         updateCircuitChrome()
     }
 
-    /// 筆是虛線時由 DashedPen 接手，PencilKit 不書寫
-    var dashedPenActive: Bool { tool == .pen && BrushStore.shared.current.isDashed }
-    var pencilKitDraws: Bool { tool.isDrawing && !dashedPenActive }
-
-    /// 換筆後決定由 PencilKit 還是虛線筆書寫（只在換筆、換工具時呼叫，不會在下筆中途切換）
-    func updateDrawingRouting() {
-        let pk = pencilKitDraws
-        if canvas.drawingGestureRecognizer.isEnabled != pk { canvas.drawingGestureRecognizer.isEnabled = pk }
-        dashedPen.tracker.isEnabled = dashedPenActive
-    }
-
     func applyTool() {
-        canvas.drawingGestureRecognizer.isEnabled = pencilKitDraws
+        canvas.drawingGestureRecognizer.isEnabled = tool.isDrawing
         if tool.isInking { BrushStore.shared.activeCategory = tool == .highlighter ? .highlighter : .pen }
         switch tool {
         case .pen, .highlighter:
@@ -475,7 +464,6 @@ extension NotebookViewController {
             presetButtons[p.id]?.setImage(presetImage(p, selected: p.id == BrushStore.shared.currentID), for: .normal)
         }
         refreshPenStyleControls()
-        updateDrawingRouting()
     }
 
     // MARK: 筆的線條樣式
@@ -558,7 +546,7 @@ extension NotebookViewController {
             cur.gapLength = changed.gapLength
             self?.updateCurrentPreset(cur)
         }
-        presentToolPopover(UIHostingController(rootView: view), from: button, size: CGSize(width: 320, height: 300))
+        presentToolPopover(UIHostingController(rootView: view), from: button, size: CGSize(width: 320, height: 340))
     }
 
     /// 目前的筆最接近哪一格粗細
@@ -942,7 +930,7 @@ struct DashSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("虛線樣式").font(.headline)
-            DashPreview(preset: preset).frame(height: 44)
+            DashPreview(preset: preset).frame(height: 80)
             HStack {
                 Text("線段長度")
                 Spacer()
@@ -971,21 +959,27 @@ struct DashSettingsView: View {
 /// 用 PencilKit 實際畫一條虛線，和寫出來的一樣
 private struct DashPreview: View {
     let preset: BrushPreset
-    @Environment(\.displayScale) private var scale
 
     var body: some View {
-        GeometryReader { geo in
-            Image(uiImage: render(size: geo.size))
+        let w = preset.tool.width
+        let pattern = preset.dashPattern(lineWidth: w)
+        // 和寫出來的一樣：每段 dash 長、空 gap，圓頭
+        let style = StrokeStyle(lineWidth: w, lineCap: .round, dash: [pattern.dash, pattern.gap])
+        Canvas { ctx, size in
+            var straight = Path()
+            straight.move(to: CGPoint(x: 14, y: size.height * 0.3))
+            straight.addLine(to: CGPoint(x: size.width - 14, y: size.height * 0.3))
+            var wave = Path()
+            wave.move(to: CGPoint(x: 14, y: size.height * 0.72))
+            wave.addCurve(to: CGPoint(x: size.width - 14, y: size.height * 0.72),
+                          control1: CGPoint(x: size.width * 0.35, y: size.height * 0.45),
+                          control2: CGPoint(x: size.width * 0.65, y: size.height * 1.0))
+            let color = Color(uiColor: preset.color)
+            ctx.stroke(straight, with: .color(color), style: style)
+            ctx.stroke(wave, with: .color(color), style: style)
         }
-    }
-
-    private func render(size: CGSize) -> UIImage {
-        let rect = CGRect(origin: .zero, size: size)
-        guard size.width > 30 else { return UIImage() }
-        let line = ShapeRecognizer.makeStroke(points: ShapeRecognizer.segment(CGPoint(x: 12, y: size.height / 2),
-                                                                             CGPoint(x: size.width - 12, y: size.height / 2)),
-                                              preset: preset)
-        let pieces = DashedStroke.apply(line, dashed: true, lineWidth: preset.tool.width, preset: preset)
-        return PKDrawing(strokes: pieces).image(from: rect, scale: scale)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.3)))
+        .environment(\.colorScheme, .light)
     }
 }
