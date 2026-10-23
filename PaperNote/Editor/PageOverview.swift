@@ -203,24 +203,48 @@ final class PageOverviewController: UIViewController, UICollectionViewDataSource
         cell.selecting = selecting
         cell.checked = selectedIDs.contains(item.page.id)
         cell.thumbnail = thumbs.object(forKey: item.page.id as NSUUID)
-        if cell.thumbnail == nil { requestThumbnail(item.page.id) }
         return cell
     }
 
-    /// 縮圖在主執行緒一張一張畫，捲動時只畫看得到的
+    // 系統會提前準備畫面外的格子，所以等格子真的要出現時才畫縮圖
+    func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+        guard let cell = cell as? PageThumbCell, let id = cell.pageID else { return }
+        if let img = thumbs.object(forKey: id as NSUUID) {
+            cell.thumbnail = img
+        } else {
+            requestThumbnail(id)
+        }
+    }
+
+    /// 縮圖在主執行緒一張一張畫；快速捲過、已經離開畫面的就不畫
     private func requestThumbnail(_ id: UUID) {
         guard !rendering.contains(id) else { return }
         rendering.insert(id)
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             defer { self.rendering.remove(id) }
-            let visible = self.collection.visibleCells.compactMap { $0 as? PageThumbCell }
-            guard let cell = visible.first(where: { $0.pageID == id }),
+            let shown = self.collection.indexPathsForVisibleItems.compactMap { self.collection.cellForItem(at: $0) as? PageThumbCell }
+            guard let cell = shown.first(where: { $0.pageID == id }),
                   let editor = self.editor, let i = editor.pageIndex(of: id) else { return }
             let w = self.layout.itemSize.width * self.traitCollection.displayScale
             guard let img = editor.session.renderThumbnail(pageIndex: i, width: max(120, w)) else { return }
             self.thumbs.setObject(img, forKey: id as NSUUID)
             cell.thumbnail = img
+        }
+    }
+
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { fillVisibleThumbnails() }
+
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        if !decelerate { fillVisibleThumbnails() }
+    }
+
+    func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) { fillVisibleThumbnails() }
+
+    private func fillVisibleThumbnails() {
+        for ip in collection.indexPathsForVisibleItems {
+            guard let cell = collection.cellForItem(at: ip) as? PageThumbCell, let id = cell.pageID else { continue }
+            if cell.thumbnail == nil { requestThumbnail(id) }
         }
     }
 
