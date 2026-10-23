@@ -35,21 +35,25 @@ enum InkStyle: String, Codable, CaseIterable, Identifiable {
     var styleWidths: [CGFloat] {
         switch self {
         case .pen, .monoline: return [1.5, 3, 6]
-        case .fountainPen, .pencil: return [2, 4, 8]
+        case .fountainPen: return [2, 4, 8]
+        case .pencil: return [2.4, 4, 8]
         case .marker: return [10, 18, 30]
-        case .crayon: return [6, 12, 22]
+        case .crayon: return [10, 16, 26]
         case .watercolor: return [10, 20, 36]
         }
     }
 
+    /// 可以調的粗細。下限是這種筆 PencilKit 真正畫得出來的最細值（再細會完全畫不出來）；
+    /// 上限不照 PencilKit 宣稱的範圍（螢光筆 18pt 用的就是宣稱上限 4pt 的墨水，照樣畫得出來）
     var widthRange: ClosedRange<CGFloat> {
+        let lower = max(0.1, (inkType.validWidthRange.lowerBound * 10 - 0.01).rounded(.up) / 10)
         switch self {
-        case .pen, .monoline: return 0.1...20
-        case .fountainPen: return 0.1...26
-        case .pencil: return 0.1...16
+        case .pen, .monoline: return lower...20
+        case .fountainPen: return lower...26
+        case .pencil: return lower...16
         case .marker: return 4...40
-        case .crayon: return 0.1...40
-        case .watercolor: return 0.1...60
+        case .crayon: return lower...40
+        case .watercolor: return lower...60
         }
     }
 }
@@ -72,9 +76,8 @@ struct BrushPreset: Codable, Identifiable, Equatable {
     var color: UIColor { UIColor(hex: colorHex) }
     var effectiveOpacity: CGFloat { style == .marker ? (opacity ?? Self.defaultMarkerOpacity) : 1 }
     var inkColor: UIColor { style == .marker ? color.withAlphaComponent(effectiveOpacity) : color }
-    /// 交給 PencilKit 的筆。粗細照設定的值，不限制在 validWidthRange 內：
-    /// PencilKit 並不強制這個範圍（螢光筆 18pt 用的就是宣稱上限 4pt 的 monoline 墨水）
-    var tool: PKInkingTool { PKInkingTool(style.inkType, color: inkColor, width: width) }
+    /// 交給 PencilKit 的筆。粗細不低於這種筆畫得出來的最細值（舊設定可能更細）；上限不限制
+    var tool: PKInkingTool { PKInkingTool(style.inkType, color: inkColor, width: max(width, style.widthRange.lowerBound)) }
     var isDashed: Bool { dashed == true && style != .marker }
 
     /// 預設的虛線每一段長度與間隔，依粗細決定

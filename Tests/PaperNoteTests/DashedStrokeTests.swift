@@ -136,29 +136,14 @@ final class PenToolTests: XCTestCase {
     func testToolUsesTheExactWidth() {
         // 螢光筆 18pt 用的是宣稱上限 4pt 的 monoline 墨水，必須照原值交給 PencilKit
         XCTAssertEqual(BrushPreset(style: .marker, colorHex: "#FFE14DFF", width: 18).tool.width, 18)
-        XCTAssertEqual(BrushPreset(style: .monoline, colorHex: "#000000FF", width: 0.2).tool.width, 0.2, accuracy: 0.001)
+        XCTAssertEqual(BrushPreset(style: .monoline, colorHex: "#000000FF", width: 1.2).tool.width, 1.2, accuracy: 0.001)
     }
 
-    /// 線畫出來在中間那一欄佔幾列像素（scale 4）
-    private func inkRows(width: CGFloat) -> Int {
-        let preset = BrushPreset(style: .monoline, colorHex: "#000000FF", width: width)
-        let line = ShapeRecognizer.makeStroke(points: ShapeRecognizer.segment(CGPoint(x: 10, y: 20), CGPoint(x: 200, y: 20)), preset: preset)
-        guard let cg = PKDrawing(strokes: [line]).image(from: CGRect(x: 0, y: 0, width: 220, height: 40), scale: 4).cgImage else { return -1 }
-        let w = cg.width, h = cg.height
-        var data = [UInt8](repeating: 0, count: w * h * 4)
-        data.withUnsafeMutableBytes { buf in
-            let ctx = CGContext(data: buf.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
-                                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-            ctx?.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+    func testWidthNeverGoesBelowWhatPencilKitCanDraw() {
+        for style in InkStyle.allCases where style != .marker {
+            let min = style.inkType.validWidthRange.lowerBound
+            XCTAssertGreaterThanOrEqual(style.widthRange.lowerBound, min - 0.001, "\(style)")
+            XCTAssertGreaterThanOrEqual(BrushPreset(style: style, colorHex: "#000000FF", width: 0.1).tool.width, min - 0.001, "\(style)")
         }
-        let x = w / 2
-        return (0..<h).filter { data[($0 * w + x) * 4 + 3] > 8 }.count
-    }
-
-    func testVeryThinLineIsThinnerThanAThickOne() {
-        let thin = inkRows(width: 0.2), thick = inkRows(width: 2)
-        print("INKROWS 0.2pt=\(thin) 2pt=\(thick)")
-        XCTAssertGreaterThan(thin, 0, "0.2pt 的線要畫得出來")
-        XCTAssertLessThan(thin, thick)
     }
 }
