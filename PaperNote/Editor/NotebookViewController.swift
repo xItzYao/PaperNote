@@ -833,9 +833,20 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             kept += d.strokes.dropFirst(countBefore).filter { $0.path.creationDate > date }
             kept.append(stroke)
             d.strokes = kept
-            setDrawing(d)
+            // PencilKit 不一定會重畫用程式放進去的新筆跡：先放不含直線的版本，下一刻再加上直線，確保畫出來
+            var without = d
+            without.strokes.removeLast()
+            setDrawing(without)
+            let count = without.strokes.count
+            let full = d
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                if self.canvas.drawing.strokes.count == count { self.setDrawing(full) }
+                self.showLiveShape(nil)
+            }
+        } else {
+            showLiveShape(nil)
         }
-        showLiveShape(nil)
         // PencilKit 收尾完（手繪那一筆已經被換掉）才登記「上一步」，排在它自己的紀錄之後
         if strayIndex != nil { registerLiveStrokeUndo() }
         if CACurrentMediaTime() > pending.until { finishPendingLiveStroke() }
