@@ -190,6 +190,7 @@ extension NotebookViewController {
 
     func setTool(_ t: EditorTool) {
         endTextEditing()
+        dismissToolPopover()
         if t != tool {
             clearTextSelection()
             clearCapture()
@@ -214,9 +215,19 @@ extension NotebookViewController {
         updateCircuitChrome()
     }
 
+    /// 筆是虛線時由 DashedPen 接手，PencilKit 不書寫
+    var dashedPenActive: Bool { tool == .pen && BrushStore.shared.current.isDashed }
+    var pencilKitDraws: Bool { tool.isDrawing && !dashedPenActive }
+
+    /// 換筆後決定由 PencilKit 還是虛線筆書寫（只在換筆、換工具時呼叫，不會在下筆中途切換）
+    func updateDrawingRouting() {
+        let pk = pencilKitDraws
+        if canvas.drawingGestureRecognizer.isEnabled != pk { canvas.drawingGestureRecognizer.isEnabled = pk }
+        dashedPen.tracker.isEnabled = dashedPenActive
+    }
+
     func applyTool() {
-        let drawing = tool.isDrawing
-        canvas.drawingGestureRecognizer.isEnabled = drawing
+        canvas.drawingGestureRecognizer.isEnabled = pencilKitDraws
         if tool.isInking { BrushStore.shared.activeCategory = tool == .highlighter ? .highlighter : .pen }
         switch tool {
         case .pen, .highlighter:
@@ -246,6 +257,8 @@ extension NotebookViewController {
     }
 
     func rebuildSubBar() {
+        // 小視窗依附的按鈕要被拿掉了，先關掉
+        dismissToolPopover()
         subBarStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         presetButtons = [:]
         penWidthButtons = []
@@ -462,6 +475,7 @@ extension NotebookViewController {
             presetButtons[p.id]?.setImage(presetImage(p, selected: p.id == BrushStore.shared.currentID), for: .normal)
         }
         refreshPenStyleControls()
+        updateDrawingRouting()
     }
 
     // MARK: 筆的線條樣式
@@ -520,17 +534,12 @@ extension NotebookViewController {
             if wasUsing, BrushStore.shared.current.style == style {
                 var p = BrushStore.shared.current
                 p.width = BrushStore.shared.styleWidths(style)[slot]
-                self.updateCurrentPreset(p, live: true)
+                self.updateCurrentPreset(p)
             } else {
                 self.refreshPenStyleControls()
             }
         }
-        let host = UIHostingController(rootView: editor)
-        host.modalPresentationStyle = .popover
-        host.preferredContentSize = CGSize(width: 300, height: 150)
-        host.popoverPresentationController?.sourceView = button
-        host.popoverPresentationController?.sourceRect = button.bounds
-        present(host, animated: true)
+        presentToolPopover(UIHostingController(rootView: editor), from: button, size: CGSize(width: 300, height: 150))
     }
 
     /// 長按虛線按鈕：調整這支筆的虛線長度與間距（打開就順便切成虛線）
@@ -545,16 +554,11 @@ extension NotebookViewController {
             // 只改虛線設定，其他欄位以最新的為準
             var cur = BrushStore.shared.current
             guard cur.id == changed.id else { return }
-            cur.dashRatio = changed.dashRatio
-            cur.gapRatio = changed.gapRatio
-            self?.updateCurrentPreset(cur, live: true)
+            cur.dashLength = changed.dashLength
+            cur.gapLength = changed.gapLength
+            self?.updateCurrentPreset(cur)
         }
-        let host = UIHostingController(rootView: view)
-        host.modalPresentationStyle = .popover
-        host.preferredContentSize = CGSize(width: 320, height: 300)
-        host.popoverPresentationController?.sourceView = button
-        host.popoverPresentationController?.sourceRect = button.bounds
-        present(host, animated: true)
+        presentToolPopover(UIHostingController(rootView: view), from: button, size: CGSize(width: 320, height: 300))
     }
 
     /// 目前的筆最接近哪一格粗細
@@ -564,31 +568,38 @@ extension NotebookViewController {
         return widths.indices.min { abs(widths[$0] - p.width) < abs(widths[$1] - p.width) } ?? 1
     }
 
-    /// live：拖滑桿時連續呼叫，筆等停下來才交給 PencilKit
-    private func updateCurrentPreset(_ p: BrushPreset, live: Bool = false) {
+    private func updateCurrentPreset(_ p: BrushPreset) {
         BrushStore.shared.update(p)
-        if live { setCanvasToolSoon() } else { setCanvasTool(p.tool) }
+        setCanvasTool(p.tool)
         refreshPresetButtons()
     }
 
     /// 把筆交給 PencilKit。一樣的筆不重設：每次換筆 PencilKit 都要重新準備，太頻繁會暫時不理會書寫
     func setCanvasTool(_ t: PKInkingTool) {
-        pendingToolWork?.cancel()
-        pendingToolWork = nil
         if let old = canvas.tool as? PKInkingTool,
            old.inkType == t.inkType, old.width == t.width, old.color == t.color { return }
         canvas.tool = t
     }
 
-    /// 拖滑桿時用：停下來 0.25 秒後才換筆
-    func setCanvasToolSoon() {
-        pendingToolWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, self.tool.isInking else { return }
-            self.setCanvasTool(BrushStore.shared.current.tool)
+    // MARK: 工具列的小視窗
+
+    /// 粗細、虛線、筆刷設定的小視窗：開著時筆照樣可以在畫布上寫（一下筆就關掉），換工具也會關掉
+    func presentToolPopover(_ vc: UIViewController, from source: UIView, size: CGSize) {
+        dismissToolPopover()
+        vc.modalPresentationStyle = .popover
+        vc.preferredContentSize = size
+        if let pop = vc.popoverPresentationController {
+            pop.sourceView = source
+            pop.sourceRect = source.bounds
+            pop.passthroughViews = [canvas]
         }
-        pendingToolWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+        present(vc, animated: true)
+    }
+
+    /// 關掉小視窗。工具列重建時它依附的按鈕會被拿掉，不關的話可能卡在看不到的地方擋住所有觸控
+    func dismissToolPopover() {
+        guard let p = presentedViewController, p.modalPresentationStyle == .popover, !p.isBeingDismissed else { return }
+        p.dismiss(animated: false)
     }
 
     /// 依目前的筆更新「細、中、粗」與虛線按鈕
@@ -676,15 +687,10 @@ extension NotebookViewController {
     func presentBrushSettings(_ preset: BrushPreset, from source: UIView) {
         let view = BrushSettingsView(preset: preset) { [weak self] p in
             BrushStore.shared.update(p)
-            if BrushStore.shared.currentID == p.id { self?.setCanvasToolSoon() }
+            if BrushStore.shared.currentID == p.id { self?.setCanvasTool(BrushStore.shared.current.tool) }
             self?.refreshPresetButtons()
         }
-        let host = UIHostingController(rootView: view)
-        host.modalPresentationStyle = .popover
-        host.preferredContentSize = CGSize(width: 340, height: 460)
-        host.popoverPresentationController?.sourceView = source
-        host.popoverPresentationController?.sourceRect = source.bounds
-        present(host, animated: true)
+        presentToolPopover(UIHostingController(rootView: view), from: source, size: CGSize(width: 340, height: 460))
     }
 
     // MARK: - Menus
@@ -931,11 +937,9 @@ struct DashSettingsView: View {
     @State var preset: BrushPreset
     let onChange: (BrushPreset) -> Void
 
-    private var dash: CGFloat { preset.dashRatio ?? BrushPreset.defaultDashRatio }
-    private var gap: CGFloat { preset.gapRatio ?? BrushPreset.defaultGapRatio }
+    private var pattern: (dash: CGFloat, gap: CGFloat) { preset.dashPattern(lineWidth: preset.tool.width) }
 
     var body: some View {
-        let pattern = preset.dashPattern(lineWidth: preset.width)
         VStack(alignment: .leading, spacing: 10) {
             Text("虛線樣式").font(.headline)
             DashPreview(preset: preset).frame(height: 44)
@@ -944,16 +948,18 @@ struct DashSettingsView: View {
                 Spacer()
                 Text(String(format: "%.1f pt", Double(pattern.dash))).monospacedDigit().foregroundStyle(.secondary)
             }
-            Slider(value: Binding(get: { dash }, set: { preset.dashRatio = $0 }), in: 1...10, step: 0.5)
+            Slider(value: Binding(get: { pattern.dash }, set: { preset.dashLength = ($0 * 10).rounded() / 10 }),
+                   in: 0.3...30, step: 0.1)
             HStack {
                 Text("間距")
                 Spacer()
                 Text(String(format: "%.1f pt", Double(pattern.gap))).monospacedDigit().foregroundStyle(.secondary)
             }
-            Slider(value: Binding(get: { gap }, set: { preset.gapRatio = $0 }), in: 0.5...8, step: 0.5)
+            Slider(value: Binding(get: { pattern.gap }, set: { preset.gapLength = ($0 * 10).rounded() / 10 }),
+                   in: 0.3...30, step: 0.1)
             Button("恢復預設") {
-                preset.dashRatio = nil
-                preset.gapRatio = nil
+                preset.dashLength = nil
+                preset.gapLength = nil
             }
             .font(.subheadline)
         }
@@ -979,7 +985,7 @@ private struct DashPreview: View {
         let line = ShapeRecognizer.makeStroke(points: ShapeRecognizer.segment(CGPoint(x: 12, y: size.height / 2),
                                                                              CGPoint(x: size.width - 12, y: size.height / 2)),
                                               preset: preset)
-        let pieces = DashedStroke.apply(line, dashed: true, lineWidth: preset.width, preset: preset)
+        let pieces = DashedStroke.apply(line, dashed: true, lineWidth: preset.tool.width, preset: preset)
         return PKDrawing(strokes: pieces).image(from: rect, scale: scale)
     }
 }
