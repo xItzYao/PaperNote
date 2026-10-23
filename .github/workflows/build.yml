@@ -18,6 +18,53 @@ jobs:
           swiftc -O PaperNote/Model/CircuitData.swift Tests/CircuitCheck/main.swift -o circuit_check
           ./circuit_check
 
+  simulator-tests:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app || sudo xcode-select -s "$(ls -d /Applications/Xcode_16*.app | sort -V | tail -1)"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: Run tests on an iPad simulator
+        run: |
+          set -o pipefail
+          # 取最新 iOS 版本裡的第一台 iPad 模擬器
+          UDID=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys, re
+          devs = json.load(sys.stdin)["devices"]
+          def ver(k):
+              m = re.search(r"iOS-(\d+)-(\d+)", k)
+              return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+          for k in sorted((k for k in devs if "iOS" in k), key=ver, reverse=True):
+              for d in devs[k]:
+                  if "iPad" in d["name"]:
+                      print(d["udid"]); sys.exit()
+          ')
+          echo "Simulator: $UDID"
+          xcodebuild test \
+            -project PaperNote.xcodeproj \
+            -scheme PaperNote \
+            -destination "id=$UDID" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee test.log | grep -E "error:|Test Case .* (passed|failed)|XCTAssert|Executed|TEST (SUCCEEDED|FAILED)" || true
+          grep -q "TEST SUCCEEDED" test.log
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log
+          path: test.log
+
   build:
     runs-on: macos-15
     timeout-minutes: 40

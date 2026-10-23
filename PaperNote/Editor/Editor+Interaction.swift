@@ -45,9 +45,12 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             self?.lastPencilPoint = p
             self?.lastPencilTime = CACurrentMediaTime()
         }
-        pencilPointTracker.onBegan = { [weak self] p in
-            self?.pencilDown = true
-            self?.pencilDidTouchDown(at: p)
+        pencilPointTracker.onBegan = { [weak self] _ in
+            guard let self else { return }
+            self.pencilDown = true
+            self.holdToShape.pencilTouchedDown()
+            // 保險：書寫工具下 PencilKit 的書寫手勢一定要開著
+            if self.tool.isDrawing, !self.canvas.drawingGestureRecognizer.isEnabled { self.canvas.drawingGestureRecognizer.isEnabled = true }
         }
         pencilPointTracker.onEnded = { [weak self] in
             self?.pencilDown = false
@@ -63,16 +66,14 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         holdRecognizer = PencilHoldRecognizer(target: nil, action: nil)
         holdRecognizer.coordinateView = pagesContainer
         holdRecognizer.delegate = self
-        holdRecognizer.onHold = { [weak self] pts in self?.beginLiveShape(pts) }
-        holdRecognizer.onMove = { [weak self] p in self?.updateLiveShape(p) }
-        holdRecognizer.onEnd = { [weak self] p, cancelled in self?.endLiveShape(p, cancelled: cancelled) }
+        holdRecognizer.onHold = { [weak self] pts in self?.holdToShape.hold(pts) }
+        holdRecognizer.onMove = { [weak self] p in self?.holdToShape.move(p) }
+        holdRecognizer.onEnd = { [weak self] p, cancelled in self?.holdToShape.end(p, cancelled: cancelled) }
         canvas.addGestureRecognizer(holdRecognizer)
     }
 
     func updateGestureAvailability() {
-        let nonDrawing = tool == .capture || tool == .select || tool == .textSelect || tool == .pageResize
-            || tool == .tableDraw || tool == .lasso || tool == .circuit
-        toolPan.isEnabled = nonDrawing
+        toolPan.isEnabled = tool.usesToolPan
         // 筆／橡皮擦／套索模式下，手指點物件也能直接選取（見 shouldReceive）
         tapGesture.isEnabled = true
         doubleTapGesture.isEnabled = tool == .select
@@ -141,7 +142,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
-        g === toolPan && other === canvas.panGestureRecognizer && (tool == .select || tool == .pageResize || tool == .lasso || tool == .circuit)
+        g === toolPan && other === canvas.panGestureRecognizer && tool.panYieldsToScroll
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
@@ -159,7 +160,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             return clipboardHasContent || session.pdfPage(for: pages[i]) != nil
         }
         // 截圖、PDF 文字、手繪表格、套索：沒開「用手指書寫」時只接受 Pencil，手指只用來捲動
-        if g === toolPan, tool == .capture || tool == .textSelect || tool == .tableDraw || tool == .lasso || tool == .circuit {
+        if g === toolPan, tool.drawsWithPan {
             return touch.type == .pencil || settings.fingerDrawing
         }
         // 套索模式下 Pencil 或手指點鎖頭都可以

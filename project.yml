@@ -24,3 +24,25 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         OTHER_LDFLAGS: "$(inherited) -weak_framework Translation"
         CODE_SIGN_STYLE: Manual
+  PaperNoteTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - Tests/PaperNoteTests
+    dependencies:
+      - target: PaperNote
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.papernote.app.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "2"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/PaperNote.app/PaperNote"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+schemes:
+  PaperNote:
+    build:
+      targets:
+        PaperNote: all
+    test:
+      targets:
+        - PaperNoteTests

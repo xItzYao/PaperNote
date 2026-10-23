@@ -43,33 +43,6 @@ struct DragState {
     var original: PageElement
 }
 
-/// 停住約 0.5 秒後的即時直線／圖形
-struct LiveShape {
-    var start: CGPoint
-    var end: CGPoint
-    var shapePoints: [CGPoint]?   // 有值＝封閉圖形；nil＝直線
-    var preset: BrushPreset
-    var countBefore: Int
-    /// 封閉圖形剛辨識出來的樣子、停住時筆尖的位置、縮放時固定不動的角
-    var baseShape: [CGPoint]? = nil
-    var grab: CGPoint = .zero
-    var anchor: CGPoint = .zero
-
-    var points: [CGPoint] { shapePoints ?? ShapeRecognizer.segment(start, end) }
-}
-
-/// 剛放上去的直線／圖形，等 PencilKit 收尾被中斷的那一筆
-struct PendingLiveStroke {
-    var stroke: PKStroke
-    var countBefore: Int
-    var until: CFTimeInterval
-    /// 筆離開螢幕的時間
-    var endedAt: CFTimeInterval
-    /// 畫這條線之前的筆跡（上一步就回到這裡）
-    var before: PKDrawing
-    var undoRegistered = false
-}
-
 struct TextSelectionState {
     var pageIndex: Int
     var text: String
@@ -208,16 +181,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     // 橡皮擦擦螢光標示
     var eraserTracker: TouchTracker!
-    var liveShape: LiveShape?
-    /// 剛放開的直線／圖形：等 PencilKit 收尾手繪的那一筆，再把它換成直線
-    var pendingLiveStroke: PendingLiveStroke?
-    /// PencilKit 正在畫一筆（還沒收尾前不去改筆跡，以免打斷它）
-    var pencilKitDrawing = false
-    /// 停住變直線的預覽：疊在筆跡上方
-    let liveShapeLayer = CAShapeLayer()
-    /// 每支筆最近一筆手寫的代表點（實際粗細、壓力），直線和預覽線照著畫
-    var strokeSamples: [UUID: PKStrokePoint] = [:]
-    var liveShapePresetID: UUID?
+    /// 停住變直線／圖形（見 HoldToShape.swift）
+    lazy var holdToShape = HoldToShapeController(editor: self)
     /// 套索改顏色時的自訂顏色選擇器
     var lassoColorPicker: LassoColorPicker?
     var editMenu: UIEditMenuInteraction!
@@ -307,11 +272,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         canvas.overrideUserInterfaceStyle = .light
         canvas.bouncesZoom = true
         view.addSubview(canvas)
-        liveShapeLayer.fillColor = UIColor.clear.cgColor
-        liveShapeLayer.lineCap = .round
-        liveShapeLayer.lineJoin = .round
-        liveShapeLayer.zPosition = 1000
-        canvas.layer.addSublayer(liveShapeLayer)
+        canvas.layer.addSublayer(holdToShape.previewLayer)
 
         pagesContainer.backgroundColor = .clear
         overlay.frame = .zero
@@ -671,20 +632,13 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     @objc func undoTapped() {
         endTextEditing()
-        // 剛放上去的直線還沒登記「上一步」：直接拿掉它
-        if let pending = pendingLiveStroke, !pending.undoRegistered {
-            pendingLiveStroke = nil
-            setDrawing(pending.before)
-            showLiveShape(nil)
-            return
-        }
-        pendingLiveStroke = nil
+        if holdToShape.undo() { return }
         canvas.undoManager?.undo()
     }
 
     @objc func redoTapped() {
         endTextEditing()
-        finishPendingLiveStroke()
+        holdToShape.redo()
         canvas.undoManager?.redo()
     }
 
@@ -692,29 +646,21 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
         guard !isApplyingDrawing else { return }
-        // PencilKit 改了筆跡（例如收尾被中斷的那一筆）→ 確認直線還在
-        if pendingLiveStroke != nil { DispatchQueue.main.async { [weak self] in self?.ensureLiveStroke() } }
+        holdToShape.drawingChanged()
         scheduleSave()
     }
 
     func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
-        pencilKitDrawing = true
+        holdToShape.pencilKitBegan()
         // 開始寫字 → 收起還沒點的調色盤小圖示
         if let p = paletteOverlay, p.mode == .launcher { dismissPalette() }
-        // 開始寫下一筆：之後就不再補上一條直線（這時改筆跡會打斷正在寫的這一筆）
-        finishPendingLiveStroke()
         toolBeganAt = CACurrentMediaTime()
         strokeCountAtBegin = canvas.drawing.strokes.count
     }
 
     func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
-        pencilKitDrawing = false
-        if liveShape != nil { return }
-        // 被中斷的那一筆這時才結束：不當成新筆跡處理，只確認直線還在
-        if pendingLiveStroke != nil {
-            DispatchQueue.main.async { [weak self] in self?.ensureLiveStroke() }
-            return
-        }
+        // 停住變直線的那一筆：交給 holdToShape 換成直線，不當成新筆跡處理
+        if holdToShape.pencilKitEnded() { return }
         if !tool.isDrawing {
             let before = strokeCountAtBegin
             DispatchQueue.main.async { [weak self] in self?.absorbStrayStroke(countBefore: before) }
@@ -738,7 +684,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     private func processNewStroke(duration: TimeInterval, countBefore: Int) {
         var drawing = canvas.drawing
         guard drawing.strokes.count == countBefore + 1, let stroke = drawing.strokes.last else { return }
-        if let s = ShapeRecognizer.samplePoint(of: stroke) { strokeSamples[BrushStore.shared.current.id] = s }
+        holdToShape.recordSample(of: stroke, presetID: BrushStore.shared.current.id)
         if BrushStore.shared.current.style == .marker && settings.smartHighlight && snapHighlightToText(stroke) {
             drawing.strokes.removeLast()
             setDrawing(drawing)
@@ -761,159 +707,6 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         guard tool == .tableDraw, let target = tableDrawTarget else { return }
         let pts = stroke.path.map { $0.location.applying(stroke.transform) }
         if let a = pts.first, let b = pts.last { applyTableStroke(target, from: a, to: b) }
-    }
-
-    // MARK: - 停住變直線
-
-    func beginLiveShape(_ pts: [CGPoint]) {
-        guard tool.isInking, let start = pts.first, let last = pts.last else { return }
-        let preset = BrushStore.shared.current
-        let shape = ShapeRecognizer.closedShapePoints(pts)
-        var ls = LiveShape(start: start, end: ShapeRecognizer.snappedLineEnd(from: start, to: last),
-                           shapePoints: shape, preset: preset, countBefore: strokeCountAtBegin)
-        if let shape, !shape.isEmpty {
-            // 封閉圖形：筆不放開繼續拖曳可以調整長寬，離筆尖最遠的那個角固定
-            let xs = shape.map(\.x), ys = shape.map(\.y)
-            let box = CGRect(x: xs.min()!, y: ys.min()!, width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!)
-            let corners = [CGPoint(x: box.minX, y: box.minY), CGPoint(x: box.maxX, y: box.minY),
-                           CGPoint(x: box.minX, y: box.maxY), CGPoint(x: box.maxX, y: box.maxY)]
-            ls.baseShape = shape
-            ls.grab = last
-            ls.anchor = corners.max { $0.distance(to: last) < $1.distance(to: last) }!
-        }
-        liveShape = ls
-        // PencilKit 照常畫完這一筆，預覽線疊在上面；放開後再把手繪那一筆換成直線
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        showLiveShapePreview()
-    }
-
-    func updateLiveShape(_ p: CGPoint) {
-        guard var ls = liveShape else { return }
-        if let base = ls.baseShape {
-            // 長寬分別依筆尖相對固定角的距離縮放
-            func scale(_ now: CGFloat, _ grab: CGFloat, _ anchor: CGFloat) -> CGFloat {
-                let d = grab - anchor
-                guard abs(d) > 8 else { return 1 }
-                return min(max((now - anchor) / d, 0.1), 10)
-            }
-            let sx = scale(p.x, ls.grab.x, ls.anchor.x), sy = scale(p.y, ls.grab.y, ls.anchor.y)
-            let a = ls.anchor
-            ls.shapePoints = base.map { CGPoint(x: a.x + ($0.x - a.x) * sx, y: a.y + ($0.y - a.y) * sy) }
-        } else {
-            ls.end = ShapeRecognizer.snappedLineEnd(from: ls.start, to: p)
-        }
-        liveShape = ls
-        showLiveShapePreview()
-    }
-
-    func endLiveShape(_ p: CGPoint, cancelled: Bool) {
-        guard var ls = liveShape else { return }
-        liveShape = nil
-        if ls.shapePoints == nil { ls.end = ShapeRecognizer.snappedLineEnd(from: ls.start, to: p) }
-        guard !cancelled || ls.shapePoints != nil || ls.start.distance(to: ls.end) > 4 else {
-            showLiveShape(nil)
-            return
-        }
-        // 等 PencilKit 收尾手繪的那一筆再換成直線；1.5 秒內筆跡有變動或定時檢查發現不對，就再修正
-        let stroke = ShapeRecognizer.makeStroke(points: ls.points, preset: ls.preset, sample: strokeSamples[ls.preset.id])
-        liveShapePresetID = ls.preset.id
-        pendingLiveStroke = PendingLiveStroke(stroke: stroke, countBefore: ls.countBefore, until: CACurrentMediaTime() + 1.5,
-                                              endedAt: CACurrentMediaTime(),
-                                              before: PKDrawing(strokes: Array(canvas.drawing.strokes.prefix(ls.countBefore))))
-        ensureLiveStroke()
-        for delay in [0.05, 0.15, 0.3, 0.6, 1.0, 1.6] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.ensureLiveStroke() }
-        }
-    }
-
-    /// 筆尖碰到畫布：上一次停住變直線沒收到筆離開 → 先結束它
-    func pencilDidTouchDown(at p: CGPoint) {
-        if let ls = liveShape { endLiveShape(ls.end, cancelled: true) }
-        if tool.isDrawing, !canvas.drawingGestureRecognizer.isEnabled { canvas.drawingGestureRecognizer.isEnabled = true }
-    }
-
-    /// 確認剛放上去的直線／圖形在筆跡裡，並移除被中斷的那一筆手繪線
-    func ensureLiveStroke() {
-        guard var pending = pendingLiveStroke else { return }
-        // PencilKit 還在收尾手繪那一筆：先別動筆跡（最多等 0.6 秒）
-        if pencilKitDrawing && CACurrentMediaTime() - pending.endedAt < 0.6 { return }
-        var stroke = pending.stroke
-        let countBefore = pending.countBefore
-        let date = stroke.path.creationDate
-        var d = canvas.drawing
-        let hasLine = d.strokes.contains { $0.path.creationDate == date }
-        // 比直線早建立、又不在原本筆跡裡的，就是被中斷的那一筆
-        let strayIndex = d.strokes.indices.last { $0 >= countBefore && d.strokes[$0].path.creationDate < date }
-        if let si = strayIndex {
-            // 直線改用手寫那一筆的墨水與粗細，和 PencilKit 畫出來的完全一樣
-            let hand = d.strokes[si]
-            if let s = ShapeRecognizer.samplePoint(of: hand) {
-                stroke = ShapeRecognizer.makeStroke(points: stroke.path.map(\.location), ink: hand.ink,
-                                                    width: s.size.width, sample: s, creationDate: date)
-                pending.stroke = stroke
-                pendingLiveStroke = pending
-                if let id = liveShapePresetID { strokeSamples[id] = s }
-            }
-        }
-        if !hasLine || strayIndex != nil {
-            var kept = Array(d.strokes.prefix(countBefore))
-            kept += d.strokes.dropFirst(countBefore).filter { $0.path.creationDate > date }
-            kept.append(stroke)
-            d.strokes = kept
-            // PencilKit 不一定會重畫用程式放進去的新筆跡：先放不含直線的版本，下一刻再加上直線，確保畫出來
-            var without = d
-            without.strokes.removeLast()
-            setDrawing(without)
-            let count = without.strokes.count
-            let full = d
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                if self.canvas.drawing.strokes.count == count { self.setDrawing(full) }
-                self.showLiveShape(nil)
-            }
-        } else {
-            showLiveShape(nil)
-        }
-        // PencilKit 收尾完（手繪那一筆已經被換掉）才登記「上一步」，排在它自己的紀錄之後
-        if strayIndex != nil { registerLiveStrokeUndo() }
-        if CACurrentMediaTime() > pending.until { finishPendingLiveStroke() }
-    }
-
-    /// 直線的「上一步」：回到畫這條線之前的筆跡
-    private func registerLiveStrokeUndo() {
-        guard var pending = pendingLiveStroke, !pending.undoRegistered else { return }
-        registerCompositeUndo(drawing: pending.before, pageIDs: [])
-        pending.undoRegistered = true
-        pendingLiveStroke = pending
-    }
-
-    /// 不再補直線；還沒登記「上一步」就現在登記
-    func finishPendingLiveStroke() {
-        registerLiveStrokeUndo()
-        pendingLiveStroke = nil
-    }
-
-    private func showLiveShapePreview() {
-        guard let ls = liveShape else { return }
-        // 預覽線用這支筆實際畫出來的粗細
-        showLiveShape(ls.points, color: ls.preset.inkColor, width: strokeSamples[ls.preset.id]?.size.width ?? ls.preset.width)
-    }
-
-    /// 預覽線畫在畫布最上層（手繪那一筆的上面）；點是文件座標
-    func showLiveShape(_ points: [CGPoint]?, color: UIColor = .clear, width: CGFloat = 0) {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        if let pts = points, let first = pts.first {
-            let path = UIBezierPath()
-            path.move(to: pagesContainer.convert(first, to: canvas))
-            for q in pts.dropFirst() { path.addLine(to: pagesContainer.convert(q, to: canvas)) }
-            liveShapeLayer.path = path.cgPath
-            liveShapeLayer.strokeColor = color.cgColor
-            liveShapeLayer.lineWidth = width * canvas.zoomScale
-        } else {
-            liveShapeLayer.path = nil
-        }
-        CATransaction.commit()
     }
 
     // MARK: - Pages

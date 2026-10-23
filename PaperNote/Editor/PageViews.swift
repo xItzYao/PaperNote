@@ -165,7 +165,6 @@ final class OverlayView: UIView {
     let pageOutlineLayer = CAShapeLayer()
     let pageHandleLayer = CAShapeLayer()
     let draftLayer = CAShapeLayer()
-    let liveShapeLayer = CAShapeLayer()
     let lassoPathLayer = CAShapeLayer()
     let circuitFrameLayer = CAShapeLayer()
     let circuitSelLayer = CAShapeLayer()
@@ -369,10 +368,6 @@ final class OverlayView: UIView {
         lassoSelLayer.strokeColor = UIColor.systemBlue.cgColor
         layer.addSublayer(lassoSelLayer)
 
-        liveShapeLayer.fillColor = UIColor.clear.cgColor
-        liveShapeLayer.lineCap = .round
-        liveShapeLayer.lineJoin = .round
-        layer.addSublayer(liveShapeLayer)
         updateLineWidths()
     }
 
@@ -553,23 +548,6 @@ final class OverlayView: UIView {
             h.append(UIBezierPath(roundedRect: CGRect(x: p.x - s, y: p.y - s, width: s * 2, height: s * 2), cornerRadius: 3 * lineScale))
         }
         pageHandleLayer.path = handles.isEmpty ? nil : h.cgPath
-        CATransaction.commit()
-    }
-
-    /// 停住變直線／圖形時的即時預覽（文件座標、實際筆寬）
-    func showLiveShape(_ points: [CGPoint]?, color: UIColor, width: CGFloat) {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        if let pts = points, let first = pts.first {
-            let path = UIBezierPath()
-            path.move(to: first)
-            for p in pts.dropFirst() { path.addLine(to: p) }
-            liveShapeLayer.path = path.cgPath
-            liveShapeLayer.strokeColor = color.cgColor
-            liveShapeLayer.lineWidth = width
-        } else {
-            liveShapeLayer.path = nil
-        }
         CATransaction.commit()
     }
 
