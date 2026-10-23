@@ -54,6 +54,16 @@ struct LiveShape {
     var points: [CGPoint] { shapePoints ?? ShapeRecognizer.segment(start, end) }
 }
 
+/// 剛放上去的直線／圖形，等 PencilKit 收尾被中斷的那一筆
+struct PendingLiveStroke {
+    var stroke: PKStroke
+    var countBefore: Int
+    var until: CFTimeInterval
+    /// 畫這條線之前的筆跡（上一步就回到這裡）
+    var before: PKDrawing
+    var undoRegistered = false
+}
+
 struct TextSelectionState {
     var pageIndex: Int
     var text: String
@@ -194,7 +204,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var eraserTracker: TouchTracker!
     var liveShape: LiveShape?
     /// 剛放上去的直線／圖形：PencilKit 收尾被中斷的那一筆時可能把它蓋掉，這段時間內發現不見就補回去
-    var pendingLiveStroke: (stroke: PKStroke, countBefore: Int, until: CFTimeInterval)?
+    var pendingLiveStroke: PendingLiveStroke?
     /// PencilKit 被暫停後沒有恢復書寫過 → 這次開啟期間，停住變直線時不再暫停它
     var pencilKitFragile = false
     /// 每支筆最近一筆手寫的代表點（實際粗細、壓力），直線和預覽線照著畫
@@ -651,13 +661,20 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     @objc func undoTapped() {
         endTextEditing()
+        // 剛放上去的直線還沒登記「上一步」：直接拿掉它
+        if let pending = pendingLiveStroke, !pending.undoRegistered {
+            pendingLiveStroke = nil
+            setDrawing(pending.before)
+            overlay.showLiveShape(nil, color: .clear, width: 0)
+            return
+        }
         pendingLiveStroke = nil
         canvas.undoManager?.undo()
     }
 
     @objc func redoTapped() {
         endTextEditing()
-        pendingLiveStroke = nil
+        finishPendingLiveStroke()
         canvas.undoManager?.redo()
     }
 
@@ -674,7 +691,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         // 開始寫字 → 收起還沒點的調色盤小圖示
         if let p = paletteOverlay, p.mode == .launcher { dismissPalette() }
         // 開始寫下一筆：之後就不再補上一條直線（這時改筆跡會打斷正在寫的這一筆）
-        pendingLiveStroke = nil
+        finishPendingLiveStroke()
         toolBeganAt = CACurrentMediaTime()
         strokeCountAtBegin = canvas.drawing.strokes.count
     }
@@ -771,7 +788,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         // PencilKit 收尾被中斷的那一筆時可能把直線蓋掉：1.5 秒內只要筆跡有變動或定時檢查發現不見，就補回去
         let stroke = ShapeRecognizer.makeStroke(points: ls.points, preset: ls.preset, sample: strokeSamples[ls.preset.id])
         liveShapePresetID = ls.preset.id
-        pendingLiveStroke = (stroke, ls.countBefore, CACurrentMediaTime() + 1.5)
+        pendingLiveStroke = PendingLiveStroke(stroke: stroke, countBefore: ls.countBefore, until: CACurrentMediaTime() + 1.5,
+                                              before: PKDrawing(strokes: Array(canvas.drawing.strokes.prefix(ls.countBefore))))
         ensureLiveStroke()
         for delay in [0.05, 0.15, 0.3, 0.6, 1.0, 1.6] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.ensureLiveStroke() }
@@ -829,7 +847,23 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             setDrawing(d)
         }
         overlay.showLiveShape(nil, color: .clear, width: 0)
-        if CACurrentMediaTime() > pending.until { pendingLiveStroke = nil }
+        // PencilKit 收尾完（手繪那一筆已經被換掉）才登記「上一步」，排在它自己的紀錄之後
+        if strayIndex != nil { registerLiveStrokeUndo() }
+        if CACurrentMediaTime() > pending.until { finishPendingLiveStroke() }
+    }
+
+    /// 直線的「上一步」：回到畫這條線之前的筆跡
+    private func registerLiveStrokeUndo() {
+        guard var pending = pendingLiveStroke, !pending.undoRegistered else { return }
+        registerCompositeUndo(drawing: pending.before, pageIDs: [])
+        pending.undoRegistered = true
+        pendingLiveStroke = pending
+    }
+
+    /// 不再補直線；還沒登記「上一步」就現在登記
+    func finishPendingLiveStroke() {
+        registerLiveStrokeUndo()
+        pendingLiveStroke = nil
     }
 
     private func showLiveShapePreview() {
