@@ -754,6 +754,10 @@ extension NotebookViewController {
                 s.shapeSnap.toggle()
                 self?.updateGestureAvailability()
             },
+            UIAction(title: "拷貝除錯紀錄", image: UIImage(systemName: "ladybug")) { [weak self] _ in
+                UIPasteboard.general.string = DebugLog.text
+                self?.showToast("已拷貝除錯紀錄，可以貼給開發者")
+            },
             UIAction(title: "螢光筆自動對齊 PDF 文字", image: UIImage(systemName: "highlighter"), state: s.smartHighlight ? .on : .off) { _ in
                 s.smartHighlight.toggle()
             },

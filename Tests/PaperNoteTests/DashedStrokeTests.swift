@@ -133,13 +133,17 @@ final class DashSettingsTests: XCTestCase {
 }
 
 final class PenToolTests: XCTestCase {
-    func testToolWidthStaysInsidePencilKitsRange() {
-        for style in InkStyle.allCases {
-            let r = style.inkType.validWidthRange
-            let tiny = BrushPreset(style: style, colorHex: "#000000FF", width: 0.1).tool
-            let huge = BrushPreset(style: style, colorHex: "#000000FF", width: 500).tool
-            XCTAssertGreaterThanOrEqual(tiny.width, r.lowerBound, "\(style)")
-            XCTAssertLessThanOrEqual(huge.width, r.upperBound, "\(style)")
-        }
+    func testToolUsesTheExactWidth() {
+        // 螢光筆 18pt 用的是宣稱上限 4pt 的 monoline 墨水，必須照原值交給 PencilKit
+        XCTAssertEqual(BrushPreset(style: .marker, colorHex: "#FFE14DFF", width: 18).tool.width, 18)
+        XCTAssertEqual(BrushPreset(style: .monoline, colorHex: "#000000FF", width: 0.2).tool.width, 0.2, accuracy: 0.001)
+    }
+
+    func testVeryThinLineStillDraws() {
+        let preset = BrushPreset(style: .monoline, colorHex: "#000000FF", width: 0.2)
+        let line = ShapeRecognizer.makeStroke(points: ShapeRecognizer.segment(CGPoint(x: 10, y: 20), CGPoint(x: 200, y: 20)), preset: preset)
+        let image = PKDrawing(strokes: [line]).image(from: CGRect(x: 0, y: 0, width: 220, height: 40), scale: 2)
+        XCTAssertNotNil(image.cgImage)
+        XCTAssertLessThan(line.renderBounds.height, 3, "0.2pt 的線應該很細")
     }
 }

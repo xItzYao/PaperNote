@@ -120,6 +120,7 @@ final class HoldToShapeController {
             ls.anchor = anchor
         }
         live = ls
+        DebugLog.add("hold countBefore=\(ls.countBefore) strokes=\(editor.canvas.drawing.strokes.count) shape=\(shape != nil) pkDrawing=\(pencilKitDrawing)")
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         showPreview()
     }
@@ -138,8 +139,10 @@ final class HoldToShapeController {
     func end(_ p: CGPoint, cancelled: Bool) {
         guard var ls = live, let editor else { return }
         live = nil
+        DebugLog.add("end cancelled=\(cancelled) strokes=\(editor.canvas.drawing.strokes.count) pkDrawing=\(pencilKitDrawing)")
         if ls.shapePoints == nil { ls.end = ShapeRecognizer.snappedLineEnd(from: ls.start, to: p) }
         guard !cancelled || ls.shapePoints != nil || ls.start.distance(to: ls.end) > 4 else {
+            DebugLog.add("end: too short, dropped")
             clearPreview()
             return
         }
@@ -164,6 +167,7 @@ final class HoldToShapeController {
     // MARK: PencilKit 的事件
 
     func pencilKitBegan() {
+        DebugLog.add("pk began live=\(live != nil) pending=\(pending != nil)")
         pencilKitDrawing = true
         // 開始寫下一筆：之後就不再補上一條直線（這時改筆跡會打斷正在寫的這一筆）
         finishPending()
@@ -171,6 +175,7 @@ final class HoldToShapeController {
 
     /// 回傳 true 代表這次結束是停住變直線的那一筆，編輯器不用再當新筆跡處理
     func pencilKitEnded() -> Bool {
+        DebugLog.add("pk ended live=\(live != nil) pending=\(pending != nil) strokes=\(editor?.canvas.drawing.strokes.count ?? -1)")
         pencilKitDrawing = false
         if live != nil { return true }
         if pending != nil {
@@ -182,6 +187,7 @@ final class HoldToShapeController {
 
     /// PencilKit 改了筆跡（例如收尾手繪那一筆）→ 確認直線在
     func drawingChanged() {
+        if live != nil || pending != nil { DebugLog.add("drawing changed strokes=\(editor?.canvas.drawing.strokes.count ?? -1)") }
         if pending != nil { DispatchQueue.main.async { [weak self] in self?.ensureLine() } }
     }
 
@@ -196,6 +202,7 @@ final class HoldToShapeController {
     func undo() -> Bool {
         guard let p = pending else { return false }
         pending = nil
+        DebugLog.add("undo while pending registered=\(p.undoRegistered)")
         guard !p.undoRegistered else { return false }
         editor?.setDrawing(p.before)
         clearPreview()
@@ -210,12 +217,16 @@ final class HoldToShapeController {
     private func ensureLine() {
         guard var p = pending, let editor else { return }
         // PencilKit 還在收尾手繪那一筆：先別動筆跡（最多等 0.6 秒）
-        if pencilKitDrawing && CACurrentMediaTime() - p.endedAt < 0.6 { return }
+        if pencilKitDrawing && CACurrentMediaTime() - p.endedAt < 0.6 {
+            DebugLog.add("ensure: wait, pk still drawing")
+            return
+        }
         var line = p.stroke
         let date = line.path.creationDate
         var d = editor.canvas.drawing
         let hasLine = d.strokes.contains { $0.path.creationDate == date }
         let handIndex = HoldToShape.handStrokeIndex(in: d.strokes, countBefore: p.countBefore, lineDate: date)
+        DebugLog.add("ensure strokes=\(d.strokes.count) countBefore=\(p.countBefore) hasLine=\(hasLine) hand=\(handIndex.map(String.init) ?? "nil")")
         if let hi = handIndex, let s = ShapeRecognizer.samplePoint(of: d.strokes[hi]) {
             // 直線改用手寫那一筆的墨水與粗細，和 PencilKit 畫出來的完全一樣
             line = ShapeRecognizer.makeStroke(points: line.path.map(\.location), ink: d.strokes[hi].ink,
@@ -227,6 +238,8 @@ final class HoldToShapeController {
         if !hasLine || handIndex != nil {
             let lines = DashedStroke.apply(line, dashed: p.dashed, lineWidth: line.path.first?.size.width ?? 3, preset: p.preset)
             d.strokes = HoldToShape.replacingHandStroke(in: d.strokes, countBefore: p.countBefore, with: lines)
+            let w = line.path.first?.size.width ?? -1
+            DebugLog.add("replace lines=\(lines.count) newStrokes=\(d.strokes.count) width=\(String(format: "%.2f", w)) ink=\(line.ink.inkType.rawValue)")
             editor.setDrawingAddingStrokes(d, added: lines.count) { [weak self] in self?.clearPreview() }
         } else {
             clearPreview()
@@ -239,6 +252,7 @@ final class HoldToShapeController {
     /// 直線的上一步：回到畫這條線之前的筆跡
     private func registerUndo() {
         guard var p = pending, !p.undoRegistered else { return }
+        DebugLog.add("undo registered")
         editor?.registerCompositeUndo(drawing: p.before, pageIDs: [])
         p.undoRegistered = true
         pending = p

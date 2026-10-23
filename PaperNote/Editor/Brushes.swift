@@ -72,12 +72,9 @@ struct BrushPreset: Codable, Identifiable, Equatable {
     var color: UIColor { UIColor(hex: colorHex) }
     var effectiveOpacity: CGFloat { style == .marker ? (opacity ?? Self.defaultMarkerOpacity) : 1 }
     var inkColor: UIColor { style == .marker ? color.withAlphaComponent(effectiveOpacity) : color }
-    /// 交給 PencilKit 的筆；粗細限制在這種筆 PencilKit 能畫的範圍內（超出範圍可能畫不出來）
-    var tool: PKInkingTool {
-        let type = style.inkType
-        let r = type.validWidthRange
-        return PKInkingTool(type, color: inkColor, width: min(max(width, r.lowerBound), r.upperBound))
-    }
+    /// 交給 PencilKit 的筆。粗細照設定的值，不限制在 validWidthRange 內：
+    /// PencilKit 並不強制這個範圍（螢光筆 18pt 用的就是宣稱上限 4pt 的 monoline 墨水）
+    var tool: PKInkingTool { PKInkingTool(style.inkType, color: inkColor, width: width) }
     var isDashed: Bool { dashed == true && style != .marker }
 
     /// 預設的虛線每一段長度與間隔，依粗細決定

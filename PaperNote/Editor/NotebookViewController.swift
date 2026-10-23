@@ -550,7 +550,9 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         let count = without.strokes.count
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            if self.canvas.drawing.strokes.count == count { self.setDrawing(d) }
+            let current = self.canvas.drawing.strokes.count
+            if current == count { self.setDrawing(d) }
+            DebugLog.add("add strokes step 2: \(current == count ? "added \(n)" : "skipped, strokes=\(current) expected=\(count)") now=\(self.canvas.drawing.strokes.count)")
             done?()
         }
     }
