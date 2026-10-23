@@ -31,6 +31,17 @@ enum InkStyle: String, Codable, CaseIterable, Identifiable {
         }
     }
 
+    /// 筆工具列的「細、中、粗」
+    var styleWidths: [CGFloat] {
+        switch self {
+        case .pen, .monoline: return [1.5, 3, 6]
+        case .fountainPen, .pencil: return [2, 4, 8]
+        case .marker: return [10, 18, 30]
+        case .crayon: return [6, 12, 22]
+        case .watercolor: return [10, 20, 36]
+        }
+    }
+
     var widthRange: ClosedRange<CGFloat> {
         switch self {
         case .pen, .monoline: return 0.5...20
@@ -50,6 +61,8 @@ struct BrushPreset: Codable, Identifiable, Equatable {
     var width: CGFloat
     /// 螢光筆的不透明度（nil 用預設 35%）
     var opacity: CGFloat? = nil
+    /// 虛線（螢光筆不支援；舊存檔沒有這個欄位＝實線）
+    var dashed: Bool? = nil
 
     static let defaultMarkerOpacity: CGFloat = 0.35
 
@@ -57,6 +70,12 @@ struct BrushPreset: Codable, Identifiable, Equatable {
     var effectiveOpacity: CGFloat { style == .marker ? (opacity ?? Self.defaultMarkerOpacity) : 1 }
     var inkColor: UIColor { style == .marker ? color.withAlphaComponent(effectiveOpacity) : color }
     var tool: PKInkingTool { PKInkingTool(style.inkType, color: inkColor, width: width) }
+    var isDashed: Bool { dashed == true && style != .marker }
+
+    /// 虛線每一段的長度與間隔，依實際畫出來的粗細決定
+    static func dashPattern(lineWidth w: CGFloat) -> (dash: CGFloat, gap: CGFloat) {
+        (max(6, w * 3.5), max(4, w * 2.5))
+    }
 }
 
 enum BrushCategory: String {

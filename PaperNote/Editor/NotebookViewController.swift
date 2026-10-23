@@ -117,6 +117,9 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     let pageLabel = UILabel()
     var toolButtons: [EditorTool: UIButton] = [:]
     var presetButtons: [UUID: UIButton] = [:]
+    /// 筆工具列的「細、中、粗」與虛線開關
+    weak var penSizeControl: UISegmentedControl?
+    weak var penDashButton: UIButton?
     var favoriteButton: UIButton!
     var settingsButton: UIButton!
 
@@ -538,6 +541,19 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         return result
     }
 
+    /// 用程式加進去的新筆跡 PencilKit 不一定會重畫：先放不含最後 n 筆的版本，下一刻再補上
+    func setDrawingAddingStrokes(_ d: PKDrawing, added n: Int, then done: (() -> Void)? = nil) {
+        var without = d
+        without.strokes.removeLast(min(n, without.strokes.count))
+        setDrawing(without)
+        let count = without.strokes.count
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if self.canvas.drawing.strokes.count == count { self.setDrawing(d) }
+            done?()
+        }
+    }
+
     func setDrawing(_ d: PKDrawing) {
         isApplyingDrawing = true
         canvas.drawing = d
@@ -685,6 +701,18 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         var drawing = canvas.drawing
         guard drawing.strokes.count == countBefore + 1, let stroke = drawing.strokes.last else { return }
         holdToShape.recordSample(of: stroke, presetID: BrushStore.shared.current.id)
+        // 虛線：放開後把這一筆切成一段一段（上一步回到寫這一筆之前）
+        let preset = BrushStore.shared.current
+        if tool == .pen, preset.isDashed {
+            let width = ShapeRecognizer.samplePoint(of: stroke)?.size.width ?? preset.width
+            let pieces = DashedStroke.apply(stroke, dashed: true, lineWidth: width)
+            drawing.strokes.removeLast()
+            let before = drawing
+            drawing.strokes += pieces
+            setDrawingAddingStrokes(drawing, added: pieces.count)
+            registerCompositeUndo(drawing: before, pageIDs: [])
+            return
+        }
         if BrushStore.shared.current.style == .marker && settings.smartHighlight && snapHighlightToText(stroke) {
             drawing.strokes.removeLast()
             setDrawing(drawing)

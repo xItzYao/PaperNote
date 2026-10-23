@@ -261,6 +261,16 @@ extension NotebookViewController {
                 presetButtons[p.id] = b
                 subBarStack.addArrangedSubview(b)
             }
+            if tool == .pen {
+                subBarStack.addArrangedSubview(toolbarSeparator())
+                for v in penStyleControls() { subBarStack.addArrangedSubview(v) }
+                subBarStack.addArrangedSubview(toolbarSeparator())
+                let ruler = makeButton(symbol: "ruler", title: nil, action: nil)
+                ruler.accessibilityLabel = "尺規"
+                ruler.addAction(UIAction { [weak self] _ in self?.canvas.isRulerActive.toggle() }, for: .touchUpInside)
+                subBarStack.addArrangedSubview(ruler)
+                return
+            }
             let add = makeButton(symbol: "plus", title: nil, action: nil)
             add.accessibilityLabel = "新增常用筆刷"
             add.addAction(UIAction { [weak self] _ in
@@ -409,6 +419,15 @@ extension NotebookViewController {
             if p.style != .marker {
                 UIBezierPath(ovalIn: CGRect(x: rect.midX - dot / 4, y: rect.midY - dot / 4, width: dot / 2, height: dot / 2)).fill()
             }
+            if p.isDashed {
+                let dash = UIBezierPath()
+                dash.move(to: CGPoint(x: inner.minX + 3, y: rect.midY))
+                dash.addLine(to: CGPoint(x: inner.maxX - 3, y: rect.midY))
+                dash.lineWidth = 2
+                dash.setLineDash([3, 2.5], count: 2, phase: 0)
+                UIColor.white.setStroke()
+                dash.stroke()
+            }
             // 筆型字樣
             let mark: String
             switch p.style {
@@ -441,6 +460,78 @@ extension NotebookViewController {
         for p in BrushStore.shared.presets {
             presetButtons[p.id]?.setImage(presetImage(p, selected: p.id == BrushStore.shared.currentID), for: .normal)
         }
+        refreshPenStyleControls()
+    }
+
+    // MARK: 筆的線條樣式
+
+    /// 細、中、粗＋虛線：改的是目前選的這支筆
+    func penStyleControls() -> [UIView] {
+        let size = UISegmentedControl(items: ["細", "中", "粗"])
+        size.addAction(UIAction { [weak self, weak size] _ in
+            guard let self, let i = size?.selectedSegmentIndex else { return }
+            var p = BrushStore.shared.current
+            let widths = p.style.styleWidths
+            guard widths.indices.contains(i) else { return }
+            p.width = widths[i]
+            self.updateCurrentPreset(p)
+        }, for: .valueChanged)
+        penSizeControl = size
+
+        let dash = UIButton(configuration: .plain())
+        dash.accessibilityLabel = "虛線"
+        dash.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            var p = BrushStore.shared.current
+            p.dashed = !p.isDashed
+            self.updateCurrentPreset(p)
+        }, for: .touchUpInside)
+        penDashButton = dash
+        refreshPenStyleControls()
+        return [size, dash]
+    }
+
+    private func updateCurrentPreset(_ p: BrushPreset) {
+        BrushStore.shared.update(p)
+        canvas.tool = p.tool
+        refreshPresetButtons()
+    }
+
+    /// 依目前的筆更新「細、中、粗」與虛線按鈕
+    func refreshPenStyleControls() {
+        let p = BrushStore.shared.current
+        if let size = penSizeControl {
+            let widths = p.style.styleWidths
+            size.selectedSegmentIndex = widths.indices.min { abs(widths[$0] - p.width) < abs(widths[$1] - p.width) } ?? 1
+        }
+        if let dash = penDashButton {
+            var c = dash.configuration ?? .plain()
+            c.image = Self.dashedLineIcon
+            c.baseForegroundColor = p.isDashed ? .systemBlue : .label
+            c.background.backgroundColor = p.isDashed ? UIColor.systemBlue.withAlphaComponent(0.15) : .clear
+            c.background.cornerRadius = 8
+            c.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8)
+            dash.configuration = c
+        }
+    }
+
+    static let dashedLineIcon: UIImage = UIGraphicsImageRenderer(size: CGSize(width: 26, height: 18)).image { _ in
+        let path = UIBezierPath()
+        path.move(to: CGPoint(x: 3, y: 9))
+        path.addLine(to: CGPoint(x: 23, y: 9))
+        path.lineWidth = 2.5
+        path.lineCapStyle = .round
+        path.setLineDash([4, 5], count: 2, phase: 0)
+        UIColor.black.setStroke()
+        path.stroke()
+    }.withRenderingMode(.alwaysTemplate)
+
+    func toolbarSeparator() -> UIView {
+        let v = UIView()
+        v.backgroundColor = .separator
+        v.widthAnchor.constraint(equalToConstant: 1).isActive = true
+        v.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        return v
     }
 
     func presetMenu(_ id: UUID, source: UIButton) -> UIMenu {

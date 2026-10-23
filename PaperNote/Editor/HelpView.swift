@@ -11,7 +11,7 @@ struct HelpView: View {
 
     private let tools: [Item] = [
         Item(symbol: "pencil.tip", title: "筆",
-             detail: "第二列是常用筆刷，點一下切換、再點一下調整，長按可移動或刪除。畫線時筆尖停住約 0.5 秒會變直線，繼續移動可以調整終點；畫圓、三角形、四邊形停住會自動修正。"),
+             detail: "第二列左邊是常用筆刷，點一下切換、再點一下調整，長按可移動或刪除；右邊可以把目前這支筆改成細、中、粗或虛線（虛線在筆離開螢幕後成形）。畫線時筆尖停住約 0.5 秒會變直線，繼續移動可以調整終點；畫圓、三角形、四邊形停住會自動修正，筆不放開繼續拖曳可以調整長寬。"),
         Item(symbol: "highlighter", title: "螢光筆",
              detail: "獨立的螢光筆工具與常用色；畫在 PDF 文字上會自動對齊、放在文字底下。"),
         Item(symbol: "paintpalette", title: "調色盤",

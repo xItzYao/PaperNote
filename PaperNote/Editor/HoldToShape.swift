@@ -25,6 +25,8 @@ struct PendingLiveStroke {
     var endedAt: CFTimeInterval
     /// 畫這條線之前的筆跡（上一步就回到這裡）
     var before: PKDrawing
+    /// 這支筆是虛線：換上去時切成一段一段
+    var dashed = false
     var undoRegistered = false
 }
 
@@ -57,10 +59,15 @@ enum HoldToShape {
 
     /// 把手繪那一筆換成直線：原本的筆跡、之後才畫的新筆跡保留，直線放最後
     static func replacingHandStroke(in strokes: [PKStroke], countBefore: Int, with line: PKStroke) -> [PKStroke] {
-        let date = line.path.creationDate
+        replacingHandStroke(in: strokes, countBefore: countBefore, with: [line])
+    }
+
+    /// 同上，直線可以是好幾段（虛線）；每一段的建立時間都和直線一樣
+    static func replacingHandStroke(in strokes: [PKStroke], countBefore: Int, with lines: [PKStroke]) -> [PKStroke] {
+        guard let date = lines.first?.path.creationDate else { return strokes }
         var kept = Array(strokes.prefix(countBefore))
         kept += strokes.dropFirst(countBefore).filter { $0.path.creationDate > date }
-        kept.append(line)
+        kept += lines
         return kept
     }
 }
@@ -133,7 +140,8 @@ final class HoldToShapeController {
         let now = CACurrentMediaTime()
         pendingPresetID = ls.preset.id
         pending = PendingLiveStroke(stroke: stroke, countBefore: ls.countBefore, until: now + 1.5, endedAt: now,
-                                    before: PKDrawing(strokes: Array(editor.canvas.drawing.strokes.prefix(ls.countBefore))))
+                                    before: PKDrawing(strokes: Array(editor.canvas.drawing.strokes.prefix(ls.countBefore))),
+                                    dashed: ls.preset.isDashed)
         ensureLine()
         for delay in [0.05, 0.15, 0.3, 0.6, 1.0, 1.6] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.ensureLine() }
@@ -209,18 +217,9 @@ final class HoldToShapeController {
             if let id = pendingPresetID { samples[id] = s }
         }
         if !hasLine || handIndex != nil {
-            d.strokes = HoldToShape.replacingHandStroke(in: d.strokes, countBefore: p.countBefore, with: line)
-            // PencilKit 不一定會重畫用程式放進去的新筆跡：先放不含直線的版本，下一刻再加上直線
-            var without = d
-            without.strokes.removeLast()
-            editor.setDrawing(without)
-            let count = without.strokes.count
-            let full = d
-            DispatchQueue.main.async { [weak self] in
-                guard let self, let editor = self.editor else { return }
-                if editor.canvas.drawing.strokes.count == count { editor.setDrawing(full) }
-                self.clearPreview()
-            }
+            let lines = DashedStroke.apply(line, dashed: p.dashed, lineWidth: line.path.first?.size.width ?? 3)
+            d.strokes = HoldToShape.replacingHandStroke(in: d.strokes, countBefore: p.countBefore, with: lines)
+            editor.setDrawingAddingStrokes(d, added: lines.count) { [weak self] in self?.clearPreview() }
         } else {
             clearPreview()
         }
@@ -259,6 +258,14 @@ final class HoldToShapeController {
             previewLayer.path = path.cgPath
             previewLayer.strokeColor = ls.preset.inkColor.cgColor
             previewLayer.lineWidth = width * editor.canvas.zoomScale
+            if ls.preset.isDashed {
+                let z = editor.canvas.zoomScale, pattern = BrushPreset.dashPattern(lineWidth: width)
+                // 圓頭會讓每段看起來長一個線寬，間隔補回來
+                previewLayer.lineDashPattern = [NSNumber(value: Double(max(1, pattern.dash - width) * z)),
+                                                NSNumber(value: Double((pattern.gap + width) * z))]
+            } else {
+                previewLayer.lineDashPattern = nil
+            }
         }
         CATransaction.commit()
     }
