@@ -193,6 +193,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     // 橡皮擦擦螢光標示
     var eraserTracker: TouchTracker!
     var liveShape: LiveShape?
+    /// 剛放上去的直線／圖形：PencilKit 收尾被中斷的那一筆時可能把它蓋掉，這段時間內發現不見就補回去
+    var pendingLiveStroke: (stroke: PKStroke, countBefore: Int, until: CFTimeInterval)?
     var editMenu: UIEditMenuInteraction!
     var pendingMenu: UIMenu?
 
@@ -639,11 +641,13 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     @objc func undoTapped() {
         endTextEditing()
+        pendingLiveStroke = nil
         canvas.undoManager?.undo()
     }
 
     @objc func redoTapped() {
         endTextEditing()
+        pendingLiveStroke = nil
         canvas.undoManager?.redo()
     }
 
@@ -651,18 +655,27 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
         guard !isApplyingDrawing else { return }
+        // PencilKit 改了筆跡（例如收尾被中斷的那一筆）→ 確認直線還在
+        if pendingLiveStroke != nil { DispatchQueue.main.async { [weak self] in self?.ensureLiveStroke() } }
         scheduleSave()
     }
 
     func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
         // 開始寫字 → 收起還沒點的調色盤小圖示
         if let p = paletteOverlay, p.mode == .launcher { dismissPalette() }
+        // 開始寫下一筆：之後就不再補上一條直線（這時改筆跡會打斷正在寫的這一筆）
+        pendingLiveStroke = nil
         toolBeganAt = CACurrentMediaTime()
         strokeCountAtBegin = canvas.drawing.strokes.count
     }
 
     func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
         if liveShape != nil { return }
+        // 被中斷的那一筆這時才結束：不當成新筆跡處理，只確認直線還在
+        if pendingLiveStroke != nil {
+            DispatchQueue.main.async { [weak self] in self?.ensureLiveStroke() }
+            return
+        }
         if !tool.isDrawing {
             let before = strokeCountAtBegin
             DispatchQueue.main.async { [weak self] in self?.absorbStrayStroke(countBefore: before) }
@@ -740,27 +753,33 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             overlay.showLiveShape(nil, color: .clear, width: 0)
             return
         }
-        // 等 PencilKit 處理完被中斷的那一筆再放上去，否則會被它蓋掉；預覽線留到放上去為止
-        commitLiveStroke(ShapeRecognizer.makeStroke(points: ls.points, preset: ls.preset), countBefore: ls.countBefore, attempt: 0)
+        // PencilKit 收尾被中斷的那一筆時可能把直線蓋掉：1.5 秒內只要筆跡有變動或定時檢查發現不見，就補回去
+        let stroke = ShapeRecognizer.makeStroke(points: ls.points, preset: ls.preset)
+        pendingLiveStroke = (stroke, ls.countBefore, CACurrentMediaTime() + 1.5)
+        ensureLiveStroke()
+        for delay in [0.05, 0.15, 0.3, 0.6, 1.0, 1.6] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.ensureLiveStroke() }
+        }
     }
 
-    /// 把直線／圖形放進筆跡；之後再確認一次，被 PencilKit 蓋掉就補回去
-    private func commitLiveStroke(_ stroke: PKStroke, countBefore: Int, attempt: Int) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 0 ? 0.08 : 0.3)) { [weak self] in
-            guard let self else { return }
-            let date = stroke.path.creationDate
-            var d = self.canvas.drawing
-            if !d.strokes.contains(where: { $0.path.creationDate == date }) {
-                // 移除被中斷的那一筆手繪線（比直線早建立的），之後才畫的新筆跡保留
-                var kept = Array(d.strokes.prefix(countBefore))
-                kept += d.strokes.dropFirst(countBefore).filter { $0.path.creationDate > date }
-                kept.append(stroke)
-                d.strokes = kept
-                self.setDrawing(d)
-            }
-            self.overlay.showLiveShape(nil, color: .clear, width: 0)
-            if attempt < 2 { self.commitLiveStroke(stroke, countBefore: countBefore, attempt: attempt + 1) }
+    /// 確認剛放上去的直線／圖形在筆跡裡，並移除被中斷的那一筆手繪線
+    func ensureLiveStroke() {
+        guard let pending = pendingLiveStroke else { return }
+        let stroke = pending.stroke, countBefore = pending.countBefore
+        let date = stroke.path.creationDate
+        var d = canvas.drawing
+        let hasLine = d.strokes.contains { $0.path.creationDate == date }
+        // 比直線早建立、又不在原本筆跡裡的，就是被中斷的那一筆
+        let stray = d.strokes.indices.contains { $0 >= countBefore && d.strokes[$0].path.creationDate < date }
+        if !hasLine || stray {
+            var kept = Array(d.strokes.prefix(countBefore))
+            kept += d.strokes.dropFirst(countBefore).filter { $0.path.creationDate > date }
+            kept.append(stroke)
+            d.strokes = kept
+            setDrawing(d)
         }
+        overlay.showLiveShape(nil, color: .clear, width: 0)
+        if CACurrentMediaTime() > pending.until { pendingLiveStroke = nil }
     }
 
     private func showLiveShapePreview() {
