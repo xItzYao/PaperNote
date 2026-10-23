@@ -117,8 +117,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     let pageLabel = UILabel()
     var toolButtons: [EditorTool: UIButton] = [:]
     var presetButtons: [UUID: UIButton] = [:]
-    /// 筆工具列的「細、中、粗」與虛線開關
-    weak var penSizeControl: UISegmentedControl?
+    /// 筆工具列的「細、中、粗」三個粗細按鈕與虛線開關
+    var penWidthButtons: [UIButton] = []
     weak var penDashButton: UIButton?
     var favoriteButton: UIButton!
     var settingsButton: UIButton!

@@ -248,6 +248,7 @@ extension NotebookViewController {
     func rebuildSubBar() {
         subBarStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         presetButtons = [:]
+        penWidthButtons = []
         switch tool {
         case .pen, .highlighter:
             for p in BrushStore.shared.presets {
@@ -465,18 +466,22 @@ extension NotebookViewController {
 
     // MARK: 筆的線條樣式
 
-    /// 細、中、粗＋虛線：改的是目前選的這支筆
+    /// 細、中、粗（不同粗細的橫線圖示）＋虛線：改的是目前選的這支筆。長按粗細圖示可以自訂 pt
     func penStyleControls() -> [UIView] {
-        let size = UISegmentedControl(items: ["細", "中", "粗"])
-        size.addAction(UIAction { [weak self, weak size] _ in
-            guard let self, let i = size?.selectedSegmentIndex else { return }
-            var p = BrushStore.shared.current
-            let widths = p.style.styleWidths
-            guard widths.indices.contains(i) else { return }
-            p.width = widths[i]
-            self.updateCurrentPreset(p)
-        }, for: .valueChanged)
-        penSizeControl = size
+        let names = ["細", "中", "粗"]
+        penWidthButtons = (0..<3).map { slot in
+            let b = UIButton(configuration: .plain())
+            b.accessibilityLabel = names[slot]
+            b.addAction(UIAction { [weak self] _ in
+                guard let self else { return }
+                var p = BrushStore.shared.current
+                p.width = BrushStore.shared.styleWidths(p.style)[slot]
+                self.updateCurrentPreset(p)
+            }, for: .touchUpInside)
+            b.addGestureRecognizer(UILongPressGestureRecognizer(target: self, action: #selector(penWidthLongPressed(_:))))
+            b.tag = slot
+            return b
+        }
 
         let dash = UIButton(configuration: .plain())
         dash.accessibilityLabel = "虛線"
@@ -488,7 +493,40 @@ extension NotebookViewController {
         }, for: .touchUpInside)
         penDashButton = dash
         refreshPenStyleControls()
-        return [size, dash]
+        return penWidthButtons + [dash]
+    }
+
+    /// 長按粗細圖示：用滑桿自訂這一格的 pt（目前的筆用的是這一格就一起改）
+    @objc func penWidthLongPressed(_ g: UILongPressGestureRecognizer) {
+        guard g.state == .began, let button = g.view as? UIButton else { return }
+        let slot = button.tag
+        let style = BrushStore.shared.current.style
+        let wasUsing = currentWidthSlot() == slot
+        let editor = WidthSlotEditor(title: ["細", "中", "粗"][slot], range: style.widthRange,
+                                     width: BrushStore.shared.styleWidths(style)[slot]) { [weak self] w in
+            guard let self else { return }
+            BrushStore.shared.setStyleWidth(w, slot: slot, style: style)
+            if wasUsing, BrushStore.shared.current.style == style {
+                var p = BrushStore.shared.current
+                p.width = BrushStore.shared.styleWidths(style)[slot]
+                self.updateCurrentPreset(p)
+            } else {
+                self.refreshPenStyleControls()
+            }
+        }
+        let host = UIHostingController(rootView: editor)
+        host.modalPresentationStyle = .popover
+        host.preferredContentSize = CGSize(width: 300, height: 150)
+        host.popoverPresentationController?.sourceView = button
+        host.popoverPresentationController?.sourceRect = button.bounds
+        present(host, animated: true)
+    }
+
+    /// 目前的筆最接近哪一格粗細
+    private func currentWidthSlot() -> Int {
+        let p = BrushStore.shared.current
+        let widths = BrushStore.shared.styleWidths(p.style)
+        return widths.indices.min { abs(widths[$0] - p.width) < abs(widths[$1] - p.width) } ?? 1
     }
 
     private func updateCurrentPreset(_ p: BrushPreset) {
@@ -500,9 +538,19 @@ extension NotebookViewController {
     /// 依目前的筆更新「細、中、粗」與虛線按鈕
     func refreshPenStyleControls() {
         let p = BrushStore.shared.current
-        if let size = penSizeControl {
-            let widths = p.style.styleWidths
-            size.selectedSegmentIndex = widths.indices.min { abs(widths[$0] - p.width) < abs(widths[$1] - p.width) } ?? 1
+        if !penWidthButtons.isEmpty {
+            let widths = BrushStore.shared.styleWidths(p.style)
+            let selected = currentWidthSlot()
+            for (slot, b) in penWidthButtons.enumerated() where widths.indices.contains(slot) {
+                var c = b.configuration ?? .plain()
+                c.image = Self.widthIcon(widths[slot], relativeTo: widths.max() ?? 1)
+                c.baseForegroundColor = slot == selected ? .systemBlue : .label
+                c.background.backgroundColor = slot == selected ? UIColor.systemBlue.withAlphaComponent(0.15) : .clear
+                c.background.cornerRadius = 8
+                c.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 6, bottom: 6, trailing: 6)
+                b.configuration = c
+                b.accessibilityValue = String(format: "%.1f pt", Double(widths[slot]))
+            }
         }
         if let dash = penDashButton {
             var c = dash.configuration ?? .plain()
@@ -513,6 +561,20 @@ extension NotebookViewController {
             c.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8)
             dash.configuration = c
         }
+    }
+
+    /// 粗細圖示：一條橫線，最粗的那格畫 11pt，其他照比例
+    static func widthIcon(_ width: CGFloat, relativeTo maxWidth: CGFloat) -> UIImage {
+        let t = max(1.5, 11 * width / max(maxWidth, 0.1))
+        return UIGraphicsImageRenderer(size: CGSize(width: 28, height: 18)).image { _ in
+            let path = UIBezierPath()
+            path.move(to: CGPoint(x: 3 + t / 2, y: 9))
+            path.addLine(to: CGPoint(x: 25 - t / 2, y: 9))
+            path.lineWidth = t
+            path.lineCapStyle = .round
+            UIColor.black.setStroke()
+            path.stroke()
+        }.withRenderingMode(.alwaysTemplate)
     }
 
     static let dashedLineIcon: UIImage = UIGraphicsImageRenderer(size: CGSize(width: 26, height: 18)).image { _ in
@@ -779,5 +841,34 @@ extension NotebookViewController {
         h.presentationController?.delegate = nil
         host = h
         present(h, animated: true)
+    }
+}
+
+/// 長按「細／中／粗」時的 pt 調整
+struct WidthSlotEditor: View {
+    let title: String
+    let range: ClosedRange<CGFloat>
+    @State var width: CGFloat
+    let onChange: (CGFloat) -> Void
+
+    init(title: String, range: ClosedRange<CGFloat>, width: CGFloat, onChange: @escaping (CGFloat) -> Void) {
+        self.title = title
+        self.range = range
+        _width = State(initialValue: width)
+        self.onChange = onChange
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(title).font(.headline)
+                Spacer()
+                Text(String(format: "%.1f pt", Double(width))).monospacedDigit().foregroundStyle(.secondary)
+            }
+            Capsule().frame(width: 160, height: min(max(width, 1), 30)).frame(maxWidth: .infinity)
+            Slider(value: $width, in: range, step: 0.5)
+                .onChange(of: width) { _, w in onChange(w) }
+        }
+        .padding()
     }
 }

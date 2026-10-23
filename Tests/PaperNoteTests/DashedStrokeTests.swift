@@ -75,3 +75,22 @@ final class DashedStrokeTests: XCTestCase {
         }
     }
 }
+
+final class StyleWidthTests: XCTestCase {
+    override func tearDown() {
+        UserDefaults.standard.removeObject(forKey: "styleWidths.\(InkStyle.pencil.rawValue)")
+        super.tearDown()
+    }
+
+    func testCustomWidthIsSavedPerStyleAndClamped() {
+        let store = BrushStore.shared
+        XCTAssertEqual(store.styleWidths(.pencil), InkStyle.pencil.styleWidths)
+        store.setStyleWidth(5.5, slot: 1, style: .pencil)
+        XCTAssertEqual(store.styleWidths(.pencil)[1], 5.5)
+        // 其他筆型不受影響
+        XCTAssertEqual(store.styleWidths(.monoline), InkStyle.monoline.styleWidths)
+        // 超出範圍會被限制
+        store.setStyleWidth(999, slot: 2, style: .pencil)
+        XCTAssertEqual(store.styleWidths(.pencil)[2], InkStyle.pencil.widthRange.upperBound)
+    }
+}

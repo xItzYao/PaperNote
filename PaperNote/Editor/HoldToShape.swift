@@ -73,7 +73,7 @@ enum HoldToShape {
 }
 
 /// 停住變直線／圖形的完整流程：停住 → 預覽 → 放開 → 等 PencilKit 收尾手繪那一筆 → 換成直線 → 登記上一步。
-/// PencilKit 從頭到尾照常書寫，不會被暫停；狀態都在這裡，編輯器只把事件轉過來。
+/// 停住時只取消 PencilKit 當下那一筆（書寫手勢不會一直關著）；狀態都在這裡，編輯器只把事件轉過來。
 final class HoldToShapeController {
     private weak var editor: NotebookViewController?
     /// 預覽線：疊在畫布最上層（手繪那一筆的上面）
@@ -112,6 +112,11 @@ final class HoldToShapeController {
             ls.anchor = anchor
         }
         live = ls
+        // 取消 PencilKit 正在畫的手繪線，畫面上只留預覽線。
+        // 關掉後馬上打開：只會中斷這一筆，之後的書寫不受影響（不能一直關到放開，新系統上可能恢復不了）
+        let g = editor.canvas.drawingGestureRecognizer
+        g.isEnabled = false
+        g.isEnabled = true
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         showPreview()
     }

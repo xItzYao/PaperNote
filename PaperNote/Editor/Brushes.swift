@@ -160,6 +160,21 @@ final class BrushStore {
         persist()
     }
 
+    // MARK: 細、中、粗（每種筆型各自記住，可以自訂 pt）
+
+    func styleWidths(_ style: InkStyle) -> [CGFloat] {
+        let saved = (UserDefaults.standard.array(forKey: "styleWidths.\(style.rawValue)") as? [Double])?.map { CGFloat($0) }
+        guard let saved, saved.count == 3 else { return style.styleWidths }
+        return saved
+    }
+
+    func setStyleWidth(_ width: CGFloat, slot: Int, style: InkStyle) {
+        var widths = styleWidths(style)
+        guard widths.indices.contains(slot) else { return }
+        widths[slot] = min(max(width, style.widthRange.lowerBound), style.widthRange.upperBound)
+        UserDefaults.standard.set(widths.map { Double($0) }, forKey: "styleWidths.\(style.rawValue)")
+    }
+
     func update(_ preset: BrushPreset) {
         guard let i = allPresets.firstIndex(where: { $0.id == preset.id }) else { return }
         allPresets[i] = preset
