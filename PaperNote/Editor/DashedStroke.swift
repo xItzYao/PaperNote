@@ -36,9 +36,9 @@ enum DashedStroke {
     }
 
     /// 依這支筆的設定切；不是虛線就原樣回傳
-    static func apply(_ stroke: PKStroke, dashed: Bool, lineWidth: CGFloat) -> [PKStroke] {
+    static func apply(_ stroke: PKStroke, dashed: Bool, lineWidth: CGFloat, preset: BrushPreset? = nil) -> [PKStroke] {
         guard dashed else { return [stroke] }
-        let p = BrushPreset.dashPattern(lineWidth: lineWidth)
+        let p = preset?.dashPattern(lineWidth: lineWidth) ?? BrushPreset.defaultDashPattern(lineWidth: lineWidth)
         return split(stroke, dash: p.dash, gap: p.gap)
     }
 }

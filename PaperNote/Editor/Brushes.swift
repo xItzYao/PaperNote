@@ -63,6 +63,9 @@ struct BrushPreset: Codable, Identifiable, Equatable {
     var opacity: CGFloat? = nil
     /// 虛線（螢光筆不支援；舊存檔沒有這個欄位＝實線）
     var dashed: Bool? = nil
+    /// 虛線每段長度、間距，是線寬的幾倍（nil 用預設）；用倍數存，換細中粗時比例不變
+    var dashRatio: CGFloat? = nil
+    var gapRatio: CGFloat? = nil
 
     static let defaultMarkerOpacity: CGFloat = 0.35
 
@@ -72,9 +75,18 @@ struct BrushPreset: Codable, Identifiable, Equatable {
     var tool: PKInkingTool { PKInkingTool(style.inkType, color: inkColor, width: width) }
     var isDashed: Bool { dashed == true && style != .marker }
 
-    /// 虛線每一段的長度與間隔，依實際畫出來的粗細決定
-    static func dashPattern(lineWidth w: CGFloat) -> (dash: CGFloat, gap: CGFloat) {
-        (max(6, w * 3.5), max(4, w * 2.5))
+    static let defaultDashRatio: CGFloat = 3.5
+    static let defaultGapRatio: CGFloat = 2.5
+
+    /// 預設的虛線每一段長度與間隔，依實際畫出來的粗細決定
+    static func defaultDashPattern(lineWidth w: CGFloat) -> (dash: CGFloat, gap: CGFloat) {
+        (max(6, w * defaultDashRatio), max(4, w * defaultGapRatio))
+    }
+
+    /// 這支筆的虛線長度與間隔（有自訂就照自訂的倍數）
+    func dashPattern(lineWidth w: CGFloat) -> (dash: CGFloat, gap: CGFloat) {
+        guard dashRatio != nil || gapRatio != nil else { return Self.defaultDashPattern(lineWidth: w) }
+        return (max(2, w * (dashRatio ?? Self.defaultDashRatio)), max(2, w * (gapRatio ?? Self.defaultGapRatio)))
     }
 }
 

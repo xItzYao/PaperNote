@@ -705,7 +705,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         let preset = BrushStore.shared.current
         if tool == .pen, preset.isDashed {
             let width = ShapeRecognizer.samplePoint(of: stroke)?.size.width ?? preset.width
-            let pieces = DashedStroke.apply(stroke, dashed: true, lineWidth: width)
+            let pieces = DashedStroke.apply(stroke, dashed: true, lineWidth: width, preset: preset)
             drawing.strokes.removeLast()
             let before = drawing
             drawing.strokes += pieces

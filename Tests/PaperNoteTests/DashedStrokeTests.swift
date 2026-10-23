@@ -94,3 +94,39 @@ final class StyleWidthTests: XCTestCase {
         XCTAssertEqual(store.styleWidths(.pencil)[2], InkStyle.pencil.widthRange.upperBound)
     }
 }
+
+final class DashSettingsTests: XCTestCase {
+    func testDefaultPatternWhenNotCustomized() {
+        let pen = BrushPreset(style: .monoline, colorHex: "#000000FF", width: 3)
+        XCTAssertEqual(pen.dashPattern(lineWidth: 3).dash, BrushPreset.defaultDashPattern(lineWidth: 3).dash)
+        XCTAssertEqual(pen.dashPattern(lineWidth: 3).gap, BrushPreset.defaultDashPattern(lineWidth: 3).gap)
+    }
+
+    func testCustomRatiosScaleWithWidth() {
+        var pen = BrushPreset(style: .monoline, colorHex: "#000000FF", width: 3)
+        pen.dashRatio = 4
+        pen.gapRatio = 1
+        XCTAssertEqual(pen.dashPattern(lineWidth: 3).dash, 12)
+        XCTAssertEqual(pen.dashPattern(lineWidth: 3).gap, 3)
+        XCTAssertEqual(pen.dashPattern(lineWidth: 6).gap, 6)
+    }
+
+    func testWiderGapMeansFewerDashes() {
+        var tight = BrushPreset(style: .monoline, colorHex: "#000000FF", width: 3)
+        tight.dashed = true
+        tight.gapRatio = 1
+        var loose = tight
+        loose.gapRatio = 6
+        let line = ShapeRecognizer.makeStroke(points: ShapeRecognizer.segment(CGPoint(x: 0, y: 0), CGPoint(x: 300, y: 0)), preset: tight)
+        let a = DashedStroke.apply(line, dashed: true, lineWidth: 3, preset: tight).count
+        let b = DashedStroke.apply(line, dashed: true, lineWidth: 3, preset: loose).count
+        XCTAssertGreaterThan(a, b)
+    }
+
+    func testOldSavesWithoutDashFieldsStillDecode() throws {
+        let json = #"{"id":"9F0F8A4B-1C1D-4E6B-9A51-6F2B8C1D2E3F","style":"monoline","colorHex":"#000000FF","width":3}"#
+        let p = try JSONDecoder().decode(BrushPreset.self, from: Data(json.utf8))
+        XCTAssertNil(p.dashRatio)
+        XCTAssertFalse(p.isDashed)
+    }
+}

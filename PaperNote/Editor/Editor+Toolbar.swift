@@ -491,6 +491,7 @@ extension NotebookViewController {
             p.dashed = !p.isDashed
             self.updateCurrentPreset(p)
         }, for: .touchUpInside)
+        dash.addGestureRecognizer(UILongPressGestureRecognizer(target: self, action: #selector(penDashLongPressed(_:))))
         penDashButton = dash
         refreshPenStyleControls()
         return penWidthButtons + [dash]
@@ -517,6 +518,30 @@ extension NotebookViewController {
         let host = UIHostingController(rootView: editor)
         host.modalPresentationStyle = .popover
         host.preferredContentSize = CGSize(width: 300, height: 150)
+        host.popoverPresentationController?.sourceView = button
+        host.popoverPresentationController?.sourceRect = button.bounds
+        present(host, animated: true)
+    }
+
+    /// 長按虛線按鈕：調整這支筆的虛線長度與間距（打開就順便切成虛線）
+    @objc func penDashLongPressed(_ g: UILongPressGestureRecognizer) {
+        guard g.state == .began, let button = g.view else { return }
+        var p = BrushStore.shared.current
+        if !p.isDashed {
+            p.dashed = true
+            updateCurrentPreset(p)
+        }
+        let view = DashSettingsView(preset: p) { [weak self] changed in
+            // 只改虛線設定，其他欄位以最新的為準
+            var cur = BrushStore.shared.current
+            guard cur.id == changed.id else { return }
+            cur.dashRatio = changed.dashRatio
+            cur.gapRatio = changed.gapRatio
+            self?.updateCurrentPreset(cur)
+        }
+        let host = UIHostingController(rootView: view)
+        host.modalPresentationStyle = .popover
+        host.preferredContentSize = CGSize(width: 320, height: 300)
         host.popoverPresentationController?.sourceView = button
         host.popoverPresentationController?.sourceRect = button.bounds
         present(host, animated: true)
@@ -870,5 +895,63 @@ struct WidthSlotEditor: View {
                 .onChange(of: width) { _, w in onChange(w) }
         }
         .padding()
+    }
+}
+
+/// 長按虛線按鈕時的設定：線段長度、間距，預覽照這支筆的顏色與粗細
+struct DashSettingsView: View {
+    @State var preset: BrushPreset
+    let onChange: (BrushPreset) -> Void
+
+    private var dash: CGFloat { preset.dashRatio ?? BrushPreset.defaultDashRatio }
+    private var gap: CGFloat { preset.gapRatio ?? BrushPreset.defaultGapRatio }
+
+    var body: some View {
+        let pattern = preset.dashPattern(lineWidth: preset.width)
+        VStack(alignment: .leading, spacing: 10) {
+            Text("虛線樣式").font(.headline)
+            DashPreview(preset: preset).frame(height: 44)
+            HStack {
+                Text("線段長度")
+                Spacer()
+                Text(String(format: "%.1f pt", Double(pattern.dash))).monospacedDigit().foregroundStyle(.secondary)
+            }
+            Slider(value: Binding(get: { dash }, set: { preset.dashRatio = $0 }), in: 1...10, step: 0.5)
+            HStack {
+                Text("間距")
+                Spacer()
+                Text(String(format: "%.1f pt", Double(pattern.gap))).monospacedDigit().foregroundStyle(.secondary)
+            }
+            Slider(value: Binding(get: { gap }, set: { preset.gapRatio = $0 }), in: 0.5...8, step: 0.5)
+            Button("恢復預設") {
+                preset.dashRatio = nil
+                preset.gapRatio = nil
+            }
+            .font(.subheadline)
+        }
+        .padding()
+        .onChange(of: preset) { _, p in onChange(p) }
+    }
+}
+
+/// 用 PencilKit 實際畫一條虛線，和寫出來的一樣
+private struct DashPreview: View {
+    let preset: BrushPreset
+    @Environment(\.displayScale) private var scale
+
+    var body: some View {
+        GeometryReader { geo in
+            Image(uiImage: render(size: geo.size))
+        }
+    }
+
+    private func render(size: CGSize) -> UIImage {
+        let rect = CGRect(origin: .zero, size: size)
+        guard size.width > 30 else { return UIImage() }
+        let line = ShapeRecognizer.makeStroke(points: ShapeRecognizer.segment(CGPoint(x: 12, y: size.height / 2),
+                                                                             CGPoint(x: size.width - 12, y: size.height / 2)),
+                                              preset: preset)
+        let pieces = DashedStroke.apply(line, dashed: true, lineWidth: preset.width, preset: preset)
+        return PKDrawing(strokes: pieces).image(from: rect, scale: scale)
     }
 }

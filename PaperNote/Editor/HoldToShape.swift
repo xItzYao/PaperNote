@@ -27,6 +27,7 @@ struct PendingLiveStroke {
     var before: PKDrawing
     /// 這支筆是虛線：換上去時切成一段一段
     var dashed = false
+    var preset: BrushPreset? = nil
     var undoRegistered = false
 }
 
@@ -146,7 +147,7 @@ final class HoldToShapeController {
         pendingPresetID = ls.preset.id
         pending = PendingLiveStroke(stroke: stroke, countBefore: ls.countBefore, until: now + 1.5, endedAt: now,
                                     before: PKDrawing(strokes: Array(editor.canvas.drawing.strokes.prefix(ls.countBefore))),
-                                    dashed: ls.preset.isDashed)
+                                    dashed: ls.preset.isDashed, preset: ls.preset)
         ensureLine()
         for delay in [0.05, 0.15, 0.3, 0.6, 1.0, 1.6] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.ensureLine() }
@@ -222,7 +223,7 @@ final class HoldToShapeController {
             if let id = pendingPresetID { samples[id] = s }
         }
         if !hasLine || handIndex != nil {
-            let lines = DashedStroke.apply(line, dashed: p.dashed, lineWidth: line.path.first?.size.width ?? 3)
+            let lines = DashedStroke.apply(line, dashed: p.dashed, lineWidth: line.path.first?.size.width ?? 3, preset: p.preset)
             d.strokes = HoldToShape.replacingHandStroke(in: d.strokes, countBefore: p.countBefore, with: lines)
             editor.setDrawingAddingStrokes(d, added: lines.count) { [weak self] in self?.clearPreview() }
         } else {
@@ -264,7 +265,7 @@ final class HoldToShapeController {
             previewLayer.strokeColor = ls.preset.inkColor.cgColor
             previewLayer.lineWidth = width * editor.canvas.zoomScale
             if ls.preset.isDashed {
-                let z = editor.canvas.zoomScale, pattern = BrushPreset.dashPattern(lineWidth: width)
+                let z = editor.canvas.zoomScale, pattern = ls.preset.dashPattern(lineWidth: width)
                 // 圓頭會讓每段看起來長一個線寬，間隔補回來
                 previewLayer.lineDashPattern = [NSNumber(value: Double(max(1, pattern.dash - width) * z)),
                                                 NSNumber(value: Double((pattern.gap + width) * z))]
