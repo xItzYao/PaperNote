@@ -50,6 +50,10 @@ struct LiveShape {
     var shapePoints: [CGPoint]?   // 有值＝封閉圖形；nil＝直線
     var preset: BrushPreset
     var countBefore: Int
+    /// 封閉圖形剛辨識出來的樣子、停住時筆尖的位置、縮放時固定不動的角
+    var baseShape: [CGPoint]? = nil
+    var grab: CGPoint = .zero
+    var anchor: CGPoint = .zero
 
     var points: [CGPoint] { shapePoints ?? ShapeRecognizer.segment(start, end) }
 }
@@ -765,16 +769,39 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         guard tool.isInking, let start = pts.first, let last = pts.last else { return }
         let preset = BrushStore.shared.current
         let shape = ShapeRecognizer.closedShapePoints(pts)
-        liveShape = LiveShape(start: start, end: ShapeRecognizer.snappedLineEnd(from: start, to: last),
-                              shapePoints: shape, preset: preset, countBefore: strokeCountAtBegin)
+        var ls = LiveShape(start: start, end: ShapeRecognizer.snappedLineEnd(from: start, to: last),
+                           shapePoints: shape, preset: preset, countBefore: strokeCountAtBegin)
+        if let shape, !shape.isEmpty {
+            // 封閉圖形：筆不放開繼續拖曳可以調整長寬，離筆尖最遠的那個角固定
+            let xs = shape.map(\.x), ys = shape.map(\.y)
+            let box = CGRect(x: xs.min()!, y: ys.min()!, width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!)
+            let corners = [CGPoint(x: box.minX, y: box.minY), CGPoint(x: box.maxX, y: box.minY),
+                           CGPoint(x: box.minX, y: box.maxY), CGPoint(x: box.maxX, y: box.maxY)]
+            ls.baseShape = shape
+            ls.grab = last
+            ls.anchor = corners.max { $0.distance(to: last) < $1.distance(to: last) }!
+        }
+        liveShape = ls
         // PencilKit 照常畫完這一筆，預覽線疊在上面；放開後再把手繪那一筆換成直線
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         showLiveShapePreview()
     }
 
     func updateLiveShape(_ p: CGPoint) {
-        guard var ls = liveShape, ls.shapePoints == nil else { return }
-        ls.end = ShapeRecognizer.snappedLineEnd(from: ls.start, to: p)
+        guard var ls = liveShape else { return }
+        if let base = ls.baseShape {
+            // 長寬分別依筆尖相對固定角的距離縮放
+            func scale(_ now: CGFloat, _ grab: CGFloat, _ anchor: CGFloat) -> CGFloat {
+                let d = grab - anchor
+                guard abs(d) > 8 else { return 1 }
+                return min(max((now - anchor) / d, 0.1), 10)
+            }
+            let sx = scale(p.x, ls.grab.x, ls.anchor.x), sy = scale(p.y, ls.grab.y, ls.anchor.y)
+            let a = ls.anchor
+            ls.shapePoints = base.map { CGPoint(x: a.x + ($0.x - a.x) * sx, y: a.y + ($0.y - a.y) * sy) }
+        } else {
+            ls.end = ShapeRecognizer.snappedLineEnd(from: ls.start, to: p)
+        }
         liveShape = ls
         showLiveShapePreview()
     }
