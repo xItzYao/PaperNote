@@ -257,6 +257,7 @@ extension NotebookViewController {
     // MARK: 點選
 
     func handleCircuitTap(at p: CGPoint) {
+        if handleCircuitPartHandleTap(p) { return }
         switch circuitMode {
         case let .place(part):
             // 點到已經有的元件就選它，不在上面再疊一個
@@ -284,6 +285,8 @@ extension NotebookViewController {
     }
 
     func circuitPanShouldBegin(at p: CGPoint) -> Bool {
+        // 點在小圓鈕上：當成點擊
+        if let h = circuitPartHandleCenters(), p.distance(to: h.rotate) <= h.radius || p.distance(to: h.flip) <= h.radius { return false }
         switch circuitMode {
         case .wire: return true
         case .select, .place:
@@ -514,6 +517,8 @@ extension NotebookViewController {
     // MARK: 選取外框、接線預覽
 
     func updateCircuitChrome() {
+        let h = circuitPartHandleCenters()
+        overlay.showCircuitPartHandles(rotate: h?.rotate, flip: h?.flip)
         guard tool == .circuit, let ref = circuitTarget, let info = circuitInfo(ref) else {
             overlay.showCircuit(frame: nil, selection: nil)
             return
@@ -558,55 +563,7 @@ extension NotebookViewController {
 
     func buildCircuitRibbon() -> [UIView] {
         var views: [UIView] = []
-        func modeButton(_ symbol: String, _ label: String, _ mode: CircuitMode) -> UIButton {
-            let b = makeButton(symbol: symbol, title: nil, action: nil)
-            b.accessibilityLabel = label
-            var c = b.configuration ?? .plain()
-            let on = circuitMode == mode
-            c.background.backgroundColor = on ? UIColor.systemBlue.withAlphaComponent(0.15) : .clear
-            c.background.cornerRadius = 8
-            c.baseForegroundColor = on ? .systemBlue : .label
-            b.configuration = c
-            b.addAction(UIAction { [weak self] _ in
-                self?.circuitMode = mode
-                self?.rebuildSubBar()
-            }, for: .touchUpInside)
-            return b
-        }
-        views.append(modeButton("cursorarrow", "選取／移動", .select))
-        views.append(modeButton("line.diagonal", "接線", .wire))
-
-        let groups: [(String, CircuitPart, [CircuitPart])] = [
-            ("被動元件", .resistor, [.resistor, .capacitor, .inductor]),
-            ("電源", .voltageSource, [.voltageSource, .currentSource, .ground, .vdd]),
-            ("電晶體", .nmos, [.nmos, .pmos]),
-            ("邏輯閘", .andGate, [.andGate, .orGate, .notGate, .nandGate, .norGate, .xorGate, .xnorGate, .bufferGate]),
-        ]
-        for (title, iconPart, parts) in groups {
-            var config = UIButton.Configuration.plain()
-            var armed = false
-            if case let .place(p) = circuitMode, parts.contains(p) { armed = true }
-            config.image = CircuitRenderer.icon(iconPart, size: 26)
-            config.baseForegroundColor = armed ? .systemBlue : .label
-            config.background.backgroundColor = armed ? UIColor.systemBlue.withAlphaComponent(0.15) : .clear
-            config.background.cornerRadius = 8
-            config.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6)
-            let b = UIButton(configuration: config)
-            b.accessibilityLabel = title
-            b.setContentHuggingPriority(.required, for: .horizontal)
-            b.menu = UIMenu(title: title, children: parts.map { part in
-                UIAction(title: part.title, image: CircuitRenderer.icon(part, size: 26)) { [weak self] _ in
-                    self?.circuitMode = .place(part)
-                    self?.circuitSel = nil
-                    self?.rebuildSubBar()
-                    self?.updateCircuitChrome()
-                    self?.showToast("連續點頁面放置\(part.title)，按「選取」結束")
-                }
-            })
-            b.showsMenuAsPrimaryAction = true
-            views.append(b)
-        }
-
+        circuitLibrary.currentMode = circuitMode
         func action(_ symbol: String, _ label: String, _ handler: @escaping () -> Void) -> UIButton {
             let b = makeButton(symbol: symbol, title: nil, action: nil)
             b.accessibilityLabel = label
@@ -643,6 +600,55 @@ extension NotebookViewController {
         if circuitSel != nil {
             views.append(action("trash", "刪除") { [weak self] in self?.deleteCircuitSelection() })
         }
+        if views.isEmpty {
+            views.append(hintLabel("從左邊的元件庫點一下元件連續擺放，或直接拖到頁面上；「接線」模式畫導線"))
+        }
         return views
+    }
+
+    // MARK: 元件庫
+
+    func selectCircuitMode(_ mode: CircuitMode) {
+        circuitMode = mode
+        if case let .place(part) = mode {
+            circuitSel = nil
+            showToast("連續點頁面放置\(part.title)，按「選取」結束")
+        }
+        rebuildSubBar()
+        updateCircuitChrome()
+    }
+
+    /// 從元件庫拖到頁面上放開（點是 view 座標）：放好後選起來
+    func dropCircuitPart(_ part: CircuitPart, at p: CGPoint) {
+        guard canvas.frame.contains(p), !circuitLibrary.frame.contains(p) else { return }
+        circuitMode = .select
+        placeComponent(part, at: pagesContainer.convert(p, from: view))
+    }
+
+    // MARK: 元件旁的旋轉、翻轉小圓鈕
+
+    /// 選取元件時，旋轉與水平翻轉按鈕的位置（文件座標）
+    func circuitPartHandleCenters() -> (rotate: CGPoint, flip: CGPoint, radius: CGFloat)? {
+        guard tool == .circuit, let ref = circuitTarget, case let .component(id)? = circuitSel,
+              let info = circuitInfo(ref), let c = info.data.components.first(where: { $0.id == id }) else { return nil }
+        let o = docFrame(of: info.element, pageIndex: info.pi).origin
+        let b = CircuitGeometry.bounds(c).offsetBy(dx: o.x, dy: o.y)
+        let s = 30 / canvas.zoomScale
+        let x = b.maxX + s * 0.9
+        return (CGPoint(x: x, y: b.minY + s * 0.3), CGPoint(x: x, y: b.minY + s * 1.5), s * 0.7)
+    }
+
+    /// 點到旋轉或翻轉按鈕就處理，回傳 true
+    private func handleCircuitPartHandleTap(_ p: CGPoint) -> Bool {
+        guard let h = circuitPartHandleCenters() else { return false }
+        if p.distance(to: h.rotate) <= h.radius {
+            modifySelectedComponent { $0.rotation = ($0.rotation + 90) % 360 }
+            return true
+        }
+        if p.distance(to: h.flip) <= h.radius {
+            modifySelectedComponent { $0.flipH.toggle() }
+            return true
+        }
+        return false
     }
 }

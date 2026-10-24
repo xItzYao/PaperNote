@@ -181,6 +181,9 @@ final class OverlayView: UIView {
     let moveHandleImage = CALayer()
     let resizeHandleImage = CALayer()
     let deleteHandleImage = CALayer()
+    /// 電路元件旁的旋轉、水平翻轉按鈕
+    let circuitRotateHandle = CALayer()
+    let circuitFlipHandle = CALayer()
     private static let handleSize: CGFloat = 30
     private var lockLayers: [CALayer] = []
     private static let lockedImage = lockImage(locked: true)
@@ -277,7 +280,9 @@ final class OverlayView: UIView {
         layer.addSublayer(moveHandleMarks)
         for (l, symbol, color) in [(moveHandleImage, "arrow.up.and.down.and.arrow.left.and.right", UIColor.systemTeal),
                                    (resizeHandleImage, "arrow.up.left.and.arrow.down.right", UIColor.systemTeal),
-                                   (deleteHandleImage, "xmark", UIColor.systemRed)] {
+                                   (deleteHandleImage, "xmark", UIColor.systemRed),
+                                   (circuitRotateHandle, "rotate.right", UIColor.systemBlue),
+                                   (circuitFlipHandle, "arrow.left.and.right", UIColor.systemBlue)] {
             l.contents = Self.handleImage(symbol, color: color)
             l.contentsGravity = .resizeAspect
             l.shadowColor = UIColor.black.cgColor
@@ -511,6 +516,22 @@ final class OverlayView: UIView {
     }
 
     /// 表格選取時的「＋」（插入列／欄）與格線拖拉點
+    /// 電路元件旁的旋轉、翻轉按鈕（文件座標的中心點；nil 隱藏）
+    func showCircuitPartHandles(rotate: CGPoint?, flip: CGPoint?) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let s = Self.handleSize * lineScale
+        for (l, p) in [(circuitRotateHandle, rotate), (circuitFlipHandle, flip)] {
+            if let p {
+                l.frame = CGRect(x: p.x - s / 2, y: p.y - s / 2, width: s, height: s)
+                l.isHidden = false
+            } else {
+                l.isHidden = true
+            }
+        }
+        CATransaction.commit()
+    }
+
     func showTableHandles(plus: [CGPoint], grips: [CGPoint]) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)

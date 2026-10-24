@@ -38,6 +38,17 @@ extension NotebookViewController {
             canvas.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
 
+        // 電路元件庫：浮在畫布左邊，只在電路工具顯示
+        view.addSubview(circuitLibrary)
+        circuitLibrary.isHidden = true
+        NSLayoutConstraint.activate([
+            circuitLibrary.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 10),
+            circuitLibrary.topAnchor.constraint(equalTo: canvas.topAnchor, constant: 10),
+            circuitLibrary.bottomAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -10),
+        ])
+        circuitLibrary.onSelectMode = { [weak self] mode in self?.selectCircuitMode(mode) }
+        circuitLibrary.onDrop = { [weak self] part, p in self?.dropCircuitPart(part, at: p) }
+
         // 安全區頂端也塗上底色
         let topFill = UIView()
         topFill.translatesAutoresizingMaskIntoConstraints = false
@@ -217,6 +228,7 @@ extension NotebookViewController {
 
     func applyTool() {
         canvas.drawingGestureRecognizer.isEnabled = tool.isDrawing
+        circuitLibrary.isHidden = tool != .circuit
         if tool.isInking { BrushStore.shared.activeCategory = tool == .highlighter ? .highlighter : .pen }
         switch tool {
         case .pen, .highlighter:
