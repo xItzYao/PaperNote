@@ -286,7 +286,7 @@ extension NotebookViewController {
 
     func circuitPanShouldBegin(at p: CGPoint) -> Bool {
         // 點在小圓鈕上：當成點擊
-        if let h = circuitPartHandleCenters(), p.distance(to: h.rotate) <= h.radius || p.distance(to: h.flip) <= h.radius { return false }
+        if let h = circuitPartHandleCenters(), [h.rotate, h.flip, h.delete].contains(where: { p.distance(to: $0) <= h.radius }) { return false }
         switch circuitMode {
         case .wire: return true
         case .select, .place:
@@ -560,7 +560,7 @@ extension NotebookViewController {
 
     func updateCircuitChrome() {
         let h = circuitPartHandleCenters()
-        overlay.showCircuitPartHandles(rotate: h?.rotate, flip: h?.flip)
+        overlay.showCircuitPartHandles(rotate: h?.rotate, flip: h?.flip, delete: h?.delete)
         guard tool == .circuit, let ref = circuitTarget, let info = circuitInfo(ref) else {
             overlay.showCircuit(frame: nil, selection: nil)
             return
@@ -670,14 +670,14 @@ extension NotebookViewController {
     // MARK: 元件旁的旋轉、翻轉小圓鈕
 
     /// 選取元件時，旋轉與水平翻轉按鈕的位置（文件座標）
-    func circuitPartHandleCenters() -> (rotate: CGPoint, flip: CGPoint, radius: CGFloat)? {
+    func circuitPartHandleCenters() -> (rotate: CGPoint, flip: CGPoint, delete: CGPoint, radius: CGFloat)? {
         guard tool == .circuit, let ref = circuitTarget, case let .component(id)? = circuitSel,
               let info = circuitInfo(ref), let c = info.data.components.first(where: { $0.id == id }) else { return nil }
         let o = docFrame(of: info.element, pageIndex: info.pi).origin
         let b = CircuitGeometry.bounds(c).offsetBy(dx: o.x, dy: o.y)
         let s = 30 / canvas.zoomScale
         let x = b.maxX + s * 0.9
-        return (CGPoint(x: x, y: b.minY + s * 0.3), CGPoint(x: x, y: b.minY + s * 1.5), s * 0.7)
+        return (CGPoint(x: x, y: b.minY + s * 0.3), CGPoint(x: x, y: b.minY + s * 1.5), CGPoint(x: x, y: b.minY + s * 2.7), s * 0.7)
     }
 
     /// 點到旋轉或翻轉按鈕就處理，回傳 true
@@ -689,6 +689,10 @@ extension NotebookViewController {
         }
         if p.distance(to: h.flip) <= h.radius {
             modifySelectedComponent { $0.flipH.toggle() }
+            return true
+        }
+        if p.distance(to: h.delete) <= h.radius {
+            deleteCircuitSelection()
             return true
         }
         return false

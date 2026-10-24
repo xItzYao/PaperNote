@@ -161,6 +161,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var circuitGateInputs: [CircuitPart: Int] = [:]
     /// 電路元件庫（浮在頁面左邊，見 CircuitLibrary.swift）
     let circuitLibrary = CircuitLibraryView()
+    /// PencilKit 開始書寫的時間（收尾後清掉）；下筆時還沒清掉就代表上一筆卡住了
+    var pkUsingSince: CFTimeInterval?
     /// 筆身點兩下切到接線前的模式（再點兩下切回來）
     var circuitModeBeforeWire: CircuitMode = .select
     /// 每種元件上次的方向與翻轉，連續擺放時沿用
@@ -676,6 +678,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     }
 
     func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
+        pkUsingSince = CACurrentMediaTime()
         holdToShape.pencilKitBegan()
         // 下筆就關掉工具列的小視窗（粗細、虛線、筆刷設定）
         dismissToolPopover()
@@ -686,6 +689,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     }
 
     func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
+        pkUsingSince = nil
         // 停住變直線的那一筆：交給 holdToShape 換成直線，不當成新筆跡處理
         if holdToShape.pencilKitEnded() { return }
         if !tool.isDrawing {

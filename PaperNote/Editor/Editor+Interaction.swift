@@ -49,8 +49,18 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             guard let self else { return }
             self.pencilDown = true
             self.holdToShape.pencilTouchedDown()
+            let g = self.canvas.drawingGestureRecognizer
+            let since = self.pkUsingSince.map { String(format: "%.1fs", CACurrentMediaTime() - $0) } ?? "nil"
+            DebugLog.add("pencil down tool=\(self.tool) drawGR enabled=\(g.isEnabled) state=\(g.state.rawValue) pkUsing=\(since) presented=\(self.presentedViewController.map { String(describing: type(of: $0)) } ?? "nil")")
             // 保險：書寫工具下 PencilKit 的書寫手勢一定要開著
-            if self.tool.isDrawing, !self.canvas.drawingGestureRecognizer.isEnabled { self.canvas.drawingGestureRecognizer.isEnabled = true }
+            if self.tool.isDrawing, !g.isEnabled { g.isEnabled = true }
+            // 上一筆一直沒收到「結束」：PencilKit 卡在書寫中，之後的筆和橡皮擦都會被忽略 → 重設書寫手勢
+            if self.tool.isDrawing, let s = self.pkUsingSince, CACurrentMediaTime() - s > 0.8 {
+                DebugLog.add("pencilkit stuck in a stroke, resetting drawing gesture")
+                self.pkUsingSince = nil
+                g.isEnabled = false
+                g.isEnabled = true
+            }
         }
         pencilPointTracker.onEnded = { [weak self] in
             self?.pencilDown = false

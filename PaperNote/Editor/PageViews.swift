@@ -184,6 +184,7 @@ final class OverlayView: UIView {
     /// 電路元件旁的旋轉、水平翻轉按鈕
     let circuitRotateHandle = CALayer()
     let circuitFlipHandle = CALayer()
+    let circuitDeleteHandle = CALayer()
     private static let handleSize: CGFloat = 30
     private var lockLayers: [CALayer] = []
     private static let lockedImage = lockImage(locked: true)
@@ -282,7 +283,8 @@ final class OverlayView: UIView {
                                    (resizeHandleImage, "arrow.up.left.and.arrow.down.right", UIColor.systemTeal),
                                    (deleteHandleImage, "xmark", UIColor.systemRed),
                                    (circuitRotateHandle, "rotate.right", UIColor.systemBlue),
-                                   (circuitFlipHandle, "arrow.left.and.right", UIColor.systemBlue)] {
+                                   (circuitFlipHandle, "arrow.left.and.right", UIColor.systemBlue),
+                                   (circuitDeleteHandle, "trash", UIColor.systemRed)] {
             l.contents = Self.handleImage(symbol, color: color)
             l.contentsGravity = .resizeAspect
             l.shadowColor = UIColor.black.cgColor
@@ -517,11 +519,11 @@ final class OverlayView: UIView {
 
     /// 表格選取時的「＋」（插入列／欄）與格線拖拉點
     /// 電路元件旁的旋轉、翻轉按鈕（文件座標的中心點；nil 隱藏）
-    func showCircuitPartHandles(rotate: CGPoint?, flip: CGPoint?) {
+    func showCircuitPartHandles(rotate: CGPoint?, flip: CGPoint?, delete: CGPoint?) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         let s = Self.handleSize * lineScale
-        for (l, p) in [(circuitRotateHandle, rotate), (circuitFlipHandle, flip)] {
+        for (l, p) in [(circuitRotateHandle, rotate), (circuitFlipHandle, flip), (circuitDeleteHandle, delete)] {
             if let p {
                 l.frame = CGRect(x: p.x - s / 2, y: p.y - s / 2, width: s, height: s)
                 l.isHidden = false

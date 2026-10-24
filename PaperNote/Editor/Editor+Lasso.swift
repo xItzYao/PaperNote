@@ -272,6 +272,13 @@ extension NotebookViewController {
         ]
         // 圈到筆跡：可以直接改顏色
         if !sel.strokeIndices.isEmpty { children.insert(lassoColorMenu(), at: 0) }
+        // 圈到電路圖：可以直接回到電路工具編輯
+        if let circuit = sel.elements.first(where: { ref in locate(ref).map { pages[$0.0].elements[$0.1].isCircuit } ?? false }) {
+            children.insert(UIAction(title: "編輯電路圖", image: UIImage(systemName: "bolt")) { [weak self] _ in
+                self?.clearLassoSelection()
+                self?.editCircuit(circuit)
+            }, at: 0)
+        }
         presentMenu(UIMenu(children: children), atDocPoint: CGPoint(x: sel.bounds.midX, y: sel.bounds.minY))
     }
 
@@ -365,6 +372,7 @@ extension NotebookViewController {
 
     private func deleteLasso() {
         guard let sel = lassoSel else { return }
+        DebugLog.add("lasso delete strokes=\(sel.strokeIndices.count) elements=\(sel.elements.count) highlights=\(sel.highlights.count)")
         registerCompositeUndo(drawing: canvas.drawing, pageIDs: affectedPageIDs(sel))
         var drawing = canvas.drawing
         for i in sel.strokeIndices.sorted(by: >) where drawing.strokes.indices.contains(i) {

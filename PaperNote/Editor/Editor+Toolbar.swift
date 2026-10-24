@@ -200,6 +200,7 @@ extension NotebookViewController {
     // MARK: - Tools
 
     func setTool(_ t: EditorTool) {
+        DebugLog.add("tool \(tool) -> \(t)")
         endTextEditing()
         dismissToolPopover()
         if t != tool {
