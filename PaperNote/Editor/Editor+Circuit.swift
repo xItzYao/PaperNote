@@ -231,6 +231,12 @@ extension NotebookViewController {
     func placeComponent(_ part: CircuitPart, at p: CGPoint) {
         var comp = CircuitComponent(part: part, position: .zero)
         comp.inputs = circuitGateInputs[part] ?? 2
+        // 沿用這種元件上次的方向與翻轉
+        if let style = circuitPartStyle[part] {
+            comp.rotation = style.rotation
+            comp.flipH = style.flipH
+            comp.flipV = style.flipV
+        }
         if let ref = circuitAt(p, margin: 60), var d = circuitInfo(ref)?.data {
             comp.position = CircuitData.snap(circuitLocal(p, ref))
             d.components.append(comp)
@@ -242,8 +248,8 @@ extension NotebookViewController {
             d.components = [comp]
             circuitTarget = createCircuit(at: p, data: d)
         }
+        // 停在放置模式，可以連續點著放；剛放的這個先選起來，方便旋轉、翻轉
         circuitSel = .component(comp.id)
-        circuitMode = .select
         rebuildSubBar()
         updateCircuitChrome()
     }
@@ -253,7 +259,15 @@ extension NotebookViewController {
     func handleCircuitTap(at p: CGPoint) {
         switch circuitMode {
         case let .place(part):
-            placeComponent(part, at: p)
+            // 點到已經有的元件就選它，不在上面再疊一個
+            if let hit = circuitHit(at: p), case .component = hit.selection {
+                circuitTarget = hit.ref
+                circuitSel = hit.selection
+                rebuildSubBar()
+                updateCircuitChrome()
+            } else {
+                placeComponent(part, at: p)
+            }
         case .wire:
             break
         case .select:
@@ -272,9 +286,8 @@ extension NotebookViewController {
     func circuitPanShouldBegin(at p: CGPoint) -> Bool {
         switch circuitMode {
         case .wire: return true
-        case .select:
+        case .select, .place:
             return circuitDragTarget(at: p) != nil
-        case .place: return false
         }
     }
 
@@ -288,15 +301,13 @@ extension NotebookViewController {
             case .wire:
                 wireDraft = WireDraft(ref: circuitAt(start, margin: 80), ink: [start])
                 handleWirePan(g, p)
-            case .select: handleSelectDrag(g, start)
-            case .place: break
+            case .select, .place: handleSelectDrag(g, start)
             }
             return
         }
         switch circuitMode {
         case .wire: handleWirePan(g, p)
-        case .select: handleSelectDrag(g, p)
-        case .place: break
+        case .select, .place: handleSelectDrag(g, p)
         }
     }
 
@@ -469,6 +480,9 @@ extension NotebookViewController {
         let old = data.components[ci]
         change(&data.components[ci])
         let new = data.components[ci]
+        // 記住這種元件的方向、翻轉、輸入數量，之後放的同種元件都照這樣
+        circuitPartStyle[new.part] = (new.rotation, new.flipH, new.flipV)
+        if new.part.hasVariableInputs { circuitGateInputs[new.part] = new.inputs }
         let oldPins = CircuitGeometry.pins(old), newPins = CircuitGeometry.pins(new)
         if oldPins.count == newPins.count {
             data.reattach(from: oldPins, to: newPins)
@@ -586,7 +600,7 @@ extension NotebookViewController {
                     self?.circuitSel = nil
                     self?.rebuildSubBar()
                     self?.updateCircuitChrome()
-                    self?.showToast("點一下頁面放置\(part.title)")
+                    self?.showToast("連續點頁面放置\(part.title)，按「選取」結束")
                 }
             })
             b.showsMenuAsPrimaryAction = true

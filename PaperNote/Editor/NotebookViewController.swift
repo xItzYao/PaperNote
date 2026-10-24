@@ -159,6 +159,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var circuitDrag: CircuitDrag?
     var wireDraft: WireDraft?
     var circuitGateInputs: [CircuitPart: Int] = [:]
+    /// 每種元件上次的方向與翻轉，連續擺放時沿用
+    var circuitPartStyle: [CircuitPart: (rotation: Int, flipH: Bool, flipV: Bool)] = [:]
 
     // 自訂套索
     var lassoPoints: [CGPoint] = []
