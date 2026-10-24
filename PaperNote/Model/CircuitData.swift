@@ -369,7 +369,9 @@ extension CircuitData {
         }
         guard let k, k + 2 < simple.count else { return nil }
         let corner = simple[k + 1]
-        let tail = simple[(k + 1)...]
+        // 線尾用原始筆跡量：化簡會把在同一條線上來回的部分吃掉
+        guard let ci = ink.firstIndex(of: corner) else { return nil }
+        let tail = ink[ci...]
         let xs = tail.map(\.x), ys = tail.map(\.y)
         guard let minX = xs.min(), let maxX = xs.max(), let minY = ys.min(), let maxY = ys.max() else { return nil }
         // 線尾：左右兩邊都超過 6、幾乎沒有上下移動、不會太長
