@@ -122,5 +122,17 @@ check("branch wire starts on the line", mid.wires[1].points == [P(140, 100), P(1
 check("branch from mid-wire gets a dot", mid.junctions().map(PointKey.init) == [PointKey(P(140, 100))])
 check("branch from mid-wire is not a crossing", mid.crossings().isEmpty)
 
+// 13. 手繪 VDD／接地：線尾左右畫一小橫
+let downThenBar = stride(from: 0, through: 60, by: 4).map { P(100, CGFloat($0)) } + [P(88, 61), P(112, 60), P(100, 60)]
+let gnd = CircuitData.terminalGesture(downThenBar)
+check("down + bar is ground", gnd?.part == .ground)
+check("ground corner at the bar", gnd.map { abs($0.corner.y - 60) < 3 && abs($0.corner.x - 100) < 3 } == true)
+let upThenBar = stride(from: 0, through: 60, by: 4).map { P(100, CGFloat(100 - $0)) } + [P(112, 39), P(88, 40), P(100, 40)]
+check("up + bar is VDD", CircuitData.terminalGesture(upThenBar)?.part == .vdd)
+// 一般往下再往右的 L 形導線不是符號
+let lShape = stride(from: 0, through: 60, by: 4).map { P(100, CGFloat($0)) } + [P(130, 60), P(160, 60)]
+check("L-shaped wire is not a terminal", CircuitData.terminalGesture(lShape) == nil)
+check("straight wire is not a terminal", CircuitData.terminalGesture(stride(from: 0, through: 80, by: 4).map { P(100, CGFloat($0)) }) == nil)
+
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

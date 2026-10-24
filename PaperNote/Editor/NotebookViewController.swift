@@ -161,6 +161,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var circuitGateInputs: [CircuitPart: Int] = [:]
     /// 電路元件庫（浮在頁面左邊，見 CircuitLibrary.swift）
     let circuitLibrary = CircuitLibraryView()
+    /// 筆身點兩下切到接線前的模式（再點兩下切回來）
+    var circuitModeBeforeWire: CircuitMode = .select
     /// 每種元件上次的方向與翻轉，連續擺放時沿用
     var circuitPartStyle: [CircuitPart: (rotation: Int, flipH: Bool, flipV: Bool)] = [:]
 

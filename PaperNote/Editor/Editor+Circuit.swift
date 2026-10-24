@@ -419,17 +419,18 @@ extension NotebookViewController {
         return CGPoint(x: s.x + o.x, y: s.y + o.y)
     }
 
-    /// 依筆跡排出直角導線（文件座標），轉角對齊電路圖（或頁面）的格點
-    private func wireRoute(_ w: WireDraft) -> (ref: ElementRef?, points: [CGPoint])? {
+    /// 接線用的電路圖與格點原點（沒有電路圖就用頁面內容的原點）
+    private func wireFrame(_ w: WireDraft) -> (ref: ElementRef?, origin: CGPoint)? {
         guard let first = w.ink.first, let last = w.ink.last else { return nil }
         let ref = w.ref ?? circuitAt(last, margin: 80)
-        let o: CGPoint
-        if let ref, let origin = circuitOrigin(ref) {
-            o = origin
-        } else {
-            let pi = pageIndex(containing: first) ?? nearestPageIndex(to: first)
-            o = pages.indices.contains(pi) ? contentOrigin(pi) : .zero
-        }
+        if let ref, let origin = circuitOrigin(ref) { return (ref, origin) }
+        let pi = pageIndex(containing: first) ?? nearestPageIndex(to: first)
+        return (ref, pages.indices.contains(pi) ? contentOrigin(pi) : .zero)
+    }
+
+    /// 依筆跡排出直角導線（文件座標），轉角對齊電路圖（或頁面）的格點
+    private func wireRoute(_ w: WireDraft) -> (ref: ElementRef?, points: [CGPoint])? {
+        guard let first = w.ink.first, let last = w.ink.last, case let (ref, o)? = wireFrame(w) else { return nil }
         func local(_ q: CGPoint) -> CGPoint { CGPoint(x: q.x - o.x, y: q.y - o.y) }
         let s = local(wireSnap(first, ref: ref)), e = local(wireSnap(last, ref: ref))
         let z = canvas.zoomScale
@@ -450,29 +451,70 @@ extension NotebookViewController {
             w.ink.append(p)
             wireDraft = nil
             overlay.showCircuitDraft(nil, ink: nil)
-            guard case let (endRef, route)? = wireRoute(w), route.count >= 2 else { return }
-            if let ref = endRef, var data = circuitInfo(ref)?.data {
-                let local = route.map { circuitLocal($0, ref) }
-                let wire = CircuitWire(points: local)
-                data.wires.append(wire)
-                circuitTarget = ref
-                circuitSel = .wire(wire.id)
-                updateCircuit(ref, data: data)
-            } else {
-                // 新的電路圖：起點放在內容座標 (60, 60)
-                let start = route[0]
-                let base = CGPoint(x: start.x - 60, y: start.y - 60)
-                let wire = CircuitWire(points: route.map { CGPoint(x: $0.x - base.x, y: $0.y - base.y) })
-                var data = CircuitData()
-                data.wires = [wire]
-                circuitTarget = createCircuit(at: start, data: data)
-                circuitSel = .wire(wire.id)
+            // 線尾左右畫一小橫：手繪的 VDD／接地
+            if let t = terminalPlacement(w) {
+                commitWire(ref: t.ref, route: t.route, terminal: (t.part, t.position))
+                return
             }
-            rebuildSubBar()
+            guard case let (endRef, route)? = wireRoute(w), route.count >= 2 else { return }
+            commitWire(ref: endRef, route: route)
         default:
             wireDraft = nil
             overlay.showCircuitDraft(nil, ink: nil)
         }
+    }
+
+    /// 手繪 VDD／接地：回傳到轉角為止的導線、元件種類與位置（文件座標）
+    private func terminalPlacement(_ w: WireDraft) -> (ref: ElementRef?, route: [CGPoint], part: CircuitPart, position: CGPoint)? {
+        guard let first = w.ink.first, case let (ref, o)? = wireFrame(w) else { return nil }
+        let z = canvas.zoomScale
+        let ink = w.ink.map { CGPoint(x: $0.x - o.x, y: $0.y - o.y) }
+        guard let t = CircuitData.terminalGesture(ink, tolerance: max(4, 8 / z)) else { return nil }
+        let corner = CircuitData.snap(t.corner)
+        let s = CGPoint(x: wireSnap(first, ref: ref).x - o.x, y: wireSnap(first, ref: ref).y - o.y)
+        guard let cut = ink.indices.min(by: { ink[$0].distance(to: t.corner) < ink[$1].distance(to: t.corner) }) else { return nil }
+        let route = CircuitData.penRoute(Array(ink[...cut]), from: s, to: corner, tolerance: max(4, 8 / z), minRun: max(10, 20 / z))
+        // 接地的接腳在元件上方 20、VDD 的在下方 20：讓接腳剛好落在轉角
+        let pos = t.part == .ground ? CGPoint(x: corner.x, y: corner.y + 20) : CGPoint(x: corner.x, y: corner.y - 20)
+        func doc(_ q: CGPoint) -> CGPoint { CGPoint(x: q.x + o.x, y: q.y + o.y) }
+        return (ref, route.map(doc), t.part, doc(pos))
+    }
+
+    /// 把導線（和手繪的 VDD／接地）放進電路圖；點都是文件座標
+    private func commitWire(ref endRef: ElementRef?, route: [CGPoint], terminal: (part: CircuitPart, position: CGPoint)? = nil) {
+        var comp = terminal.map { CircuitComponent(part: $0.part, position: .zero) }
+        let hasWire = route.count >= 2
+        if let ref = endRef, var data = circuitInfo(ref)?.data {
+            var wire: CircuitWire?
+            if hasWire {
+                let w = CircuitWire(points: route.map { circuitLocal($0, ref) })
+                data.wires.append(w)
+                wire = w
+            }
+            if var c = comp, let t = terminal {
+                c.position = CircuitData.snap(circuitLocal(t.position, ref))
+                data.components.append(c)
+                comp = c
+            }
+            circuitTarget = ref
+            circuitSel = comp.map { .component($0.id) } ?? wire.map { .wire($0.id) }
+            updateCircuit(ref, data: data)
+        } else {
+            // 新的電路圖：起點放在內容座標 (60, 60)
+            guard let start = route.first ?? terminal?.position else { return }
+            let base = CGPoint(x: start.x - 60, y: start.y - 60)
+            func rel(_ q: CGPoint) -> CGPoint { CGPoint(x: q.x - base.x, y: q.y - base.y) }
+            var data = CircuitData()
+            if hasWire { data.wires = [CircuitWire(points: route.map(rel))] }
+            if var c = comp, let t = terminal {
+                c.position = rel(t.position)
+                data.components = [c]
+                comp = c
+            }
+            circuitTarget = createCircuit(at: start, data: data)
+            circuitSel = comp.map { .component($0.id) } ?? data.wires.first.map { .wire($0.id) }
+        }
+        rebuildSubBar()
     }
 
     // MARK: 編輯選取的元件

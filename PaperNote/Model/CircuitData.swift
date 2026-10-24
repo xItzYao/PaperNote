@@ -352,6 +352,31 @@ extension CircuitData {
         return left.dropLast() + right
     }
 
+    /// 手繪 VDD／GND：一條直線往下（或往上）畫，線尾左右來回畫一小橫。
+    /// 往下 → 接地，往上 → VDD。回傳線尾那一小橫的位置（轉角）與元件種類；不像就回傳 nil。
+    /// 線尾那一橫要「左右兩邊都畫到」，一般往下再往右的 L 形導線不會被當成符號。
+    static func terminalGesture(_ ink: [CGPoint], tolerance: CGFloat = 6) -> (corner: CGPoint, part: CircuitPart)? {
+        let simple = simplify(ink, tolerance: tolerance)
+        guard simple.count >= 3 else { return nil }
+        // 最後一段夠長的垂直段
+        var k: Int?
+        for i in stride(from: simple.count - 2, through: 0, by: -1) {
+            let a = simple[i], b = simple[i + 1]
+            if abs(b.y - a.y) > abs(b.x - a.x), abs(b.y - a.y) >= 20 {
+                k = i
+                break
+            }
+        }
+        guard let k, k + 2 < simple.count else { return nil }
+        let corner = simple[k + 1]
+        let tail = simple[(k + 1)...]
+        let xs = tail.map(\.x), ys = tail.map(\.y)
+        guard let minX = xs.min(), let maxX = xs.max(), let minY = ys.min(), let maxY = ys.max() else { return nil }
+        // 線尾：左右兩邊都超過 6、幾乎沒有上下移動、不會太長
+        guard corner.x - minX > 6, maxX - corner.x > 6, maxY - minY < 14, maxX - minX < 80 else { return nil }
+        return (corner, simple[k + 1].y > simple[k].y ? .ground : .vdd)
+    }
+
     /// 依手寫筆跡排出直角導線：筆跡拆成水平／垂直的幾段，轉角對齊格點，頭尾分別接到 s 和 e
     static func penRoute(_ ink: [CGPoint], from s: CGPoint, to e: CGPoint,
                          tolerance: CGFloat = 6, minRun: CGFloat = 15) -> [CGPoint] {
