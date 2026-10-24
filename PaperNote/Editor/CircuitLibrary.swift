@@ -174,8 +174,8 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
     // MARK: 拖到頁面上
 
     /// 往右拖才算拖元件；上下滑是捲動元件庫
-    func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
-        guard let pan = g as? UIPanGestureRecognizer else { return true }
+    override func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        guard let pan = g as? PartDragGesture else { return super.gestureRecognizerShouldBegin(g) }
         let v = pan.velocity(in: self)
         return v.x > abs(v.y)
     }
