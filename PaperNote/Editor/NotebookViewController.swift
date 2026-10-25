@@ -67,8 +67,8 @@ final class EditorSettings {
         get { bool("pixelEraser", false) }
         set { d.set(newValue, forKey: "pixelEraser") }
     }
-    /// 局部擦除的三個大小（舊版有四個，存的值取最接近的）
-    static let eraserSizes: [CGFloat] = [8, 16, 32]
+    /// 局部擦除的三個大小（舊版的大小取最接近的）
+    static let eraserSizes: [CGFloat] = [16, 32, 60]
     var eraserWidth: CGFloat {
         get {
             let v = d.object(forKey: "eraserWidth") as? CGFloat ?? 16

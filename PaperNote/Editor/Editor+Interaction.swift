@@ -52,6 +52,8 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         pencilPointTracker.onBegan = { [weak self] _ in
             guard let self else { return }
             self.pencilDown = true
+            // 頁面還在慣性捲動時下筆：先停住，筆跡才不會跟著頁面滑走
+            self.canvas.stopMomentum()
             self.holdToShape.pencilTouchedDown()
             let g = self.canvas.drawingGestureRecognizer
             let since = self.pkUsingSince.map { String(format: "%.1fs", CACurrentMediaTime() - $0) } ?? "nil"

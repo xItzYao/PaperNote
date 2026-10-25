@@ -44,6 +44,14 @@ extension CGRect {
     var center: CGPoint { CGPoint(x: midX, y: midY) }
 }
 
+extension UIScrollView {
+    /// 還在慣性捲動就停在目前的位置
+    func stopMomentum() {
+        guard isDecelerating else { return }
+        setContentOffset(contentOffset, animated: false)
+    }
+}
+
 extension CGPoint {
     func distance(to p: CGPoint) -> CGFloat { hypot(x - p.x, y - p.y) }
     static func + (a: CGPoint, b: CGPoint) -> CGPoint { CGPoint(x: a.x + b.x, y: a.y + b.y) }
