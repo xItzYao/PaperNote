@@ -524,13 +524,11 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     // MARK: - Scroll / zoom
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        liveInkView.clearFinished()
         updateVisiblePages()
         updatePageIndicator()
     }
 
     func scrollViewDidZoom(_ scrollView: UIScrollView) {
-        liveInkView.clearFinished()
         updateZoomLayout()
     }
 
