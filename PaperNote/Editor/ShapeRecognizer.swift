@@ -340,6 +340,8 @@ final class TouchTracker: UIGestureRecognizer {
 final class PalmBlocker: UIGestureRecognizer {
     var isPalm: ((UITouch) -> Bool)?
     private var palmTouches = Set<UITouch>()
+    /// 現在有手掌壓在螢幕上（這時候頁面不能捲動）
+    var holdingPalm: Bool { !palmTouches.isEmpty }
 
     override init(target: Any?, action: Selector?) {
         super.init(target: target, action: action)

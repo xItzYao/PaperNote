@@ -85,7 +85,18 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
 
         palmBlocker = PalmBlocker(target: nil, action: nil)
         palmBlocker.delegate = self
-        palmBlocker.isPalm = { [weak self] t in self?.isPalmTouch(t) ?? false }
+        palmBlocker.isPalm = { [weak self] t in
+            guard let self else { return false }
+            let palm = self.isPalmTouch(t)
+            // 除錯紀錄：每個手指觸碰被判成手掌與否，以及判斷的依據
+            if t.type == .direct {
+                let since = String(format: "%.2f", CACurrentMediaTime() - self.lastPencilTime)
+                let p = t.location(in: self.view)
+                let rel = self.lastPencilPoint.map { String(format: "(%.0f, %.0f)", p.x - $0.x, p.y - $0.y) } ?? "nil"
+                DebugLog.add("finger down r=\(String(format: "%.1f", t.majorRadius)) palm=\(palm) pencilDown=\(self.pencilDown) sincePencil=\(since)s fromPencil=\(rel) holdingPalm=\(self.palmBlocker.holdingPalm)")
+            }
+            return palm
+        }
         canvas.addGestureRecognizer(palmBlocker)
 
         setupInkCapture()

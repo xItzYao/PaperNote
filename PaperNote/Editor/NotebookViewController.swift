@@ -528,6 +528,10 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         updatePageIndicator()
     }
 
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        DebugLog.add("scroll begin")
+    }
+
     func scrollViewDidZoom(_ scrollView: UIScrollView) {
         updateZoomLayout()
     }
