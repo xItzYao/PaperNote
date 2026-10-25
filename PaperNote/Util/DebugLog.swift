@@ -14,7 +14,8 @@ enum DebugLog {
 
     static var text: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        let header = "PaperNote \(version) / \(UIDevice.current.systemName) \(UIDevice.current.systemVersion)"
+        let ink = EditorSettings.shared.customInk ? "開" : "關"
+        let header = "PaperNote \(version) (\(BuildInfo.commit)) / \(UIDevice.current.systemName) \(UIDevice.current.systemVersion) / 自製筆刷 \(ink)"
         return ([header] + lines).joined(separator: "\n")
     }
 }

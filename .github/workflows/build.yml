@@ -80,6 +80,9 @@ jobs:
       - name: Generate project
         run: xcodegen generate
 
+      - name: Stamp build commit
+        run: sed -i '' "s/\"dev\"/\"${GITHUB_SHA::7}\"/" PaperNote/Util/BuildInfo.swift
+
       - name: Build (unsigned)
         run: |
           set -o pipefail
