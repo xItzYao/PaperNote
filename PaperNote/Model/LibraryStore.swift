@@ -14,6 +14,35 @@ enum LibraryError: LocalizedError {
     }
 }
 
+/// zip 匯入的結果
+struct ZipImportResult {
+    var notebooks: [NotebookMeta] = []
+    /// 放匯入筆記本的資料夾名稱（zip 裡沒有 PDF 時是 nil）
+    var folderName: String?
+    /// 不是 PDF、沒有匯入的檔案
+    var skipped: [String] = []
+    /// 讀不出來的 PDF：檔名、原因
+    var failed: [(name: String, reason: String)] = []
+
+    /// 給使用者看的說明
+    var summary: String {
+        var lines: [String] = []
+        if notebooks.isEmpty {
+            lines.append("zip 裡沒有可以匯入的 PDF。")
+        } else {
+            lines.append("已匯入 \(notebooks.count) 本筆記本，放在「\(folderName ?? "")」資料夾。")
+        }
+        if !skipped.isEmpty {
+            lines.append("有 \(skipped.count) 個檔案不是 PDF，沒有匯入。")
+            if skipped.contains(where: { $0.lowercased().hasSuffix(".goodnotes") }) {
+                lines.append("其中有 GoodNotes 格式的檔案：請在 GoodNotes 匯出時選「PDF」格式。")
+            }
+        }
+        for f in failed { lines.append("「\(f.name)」沒有匯入：\(f.reason)") }
+        return lines.joined(separator: "\n")
+    }
+}
+
 /// 管理資料夾與筆記本清單（Documents/library.json）。
 /// 每本筆記本的內容放在 Documents/Notebooks/<id>/，可在「檔案」App 直接備份。
 final class LibraryStore: ObservableObject {
@@ -305,6 +334,60 @@ final class LibraryStore: ObservableObject {
         index.notebooks.append(meta)
         save()
         return meta
+    }
+
+    /// 匯入 zip（例如從 GoodNotes 一次匯出好幾本的 PDF）：每個 PDF 變成一本筆記本，
+    /// 全部放進一個新資料夾，zip 裡的資料夾照樣建立；不是 PDF 的檔案略過
+    func importZip(from url: URL, folder: UUID?) throws -> ZipImportResult {
+        let access = url.startAccessingSecurityScopedResource()
+        defer { if access { url.stopAccessingSecurityScopedResource() } }
+
+        let archive = try ZipArchive(url: url)
+        func isJunk(_ e: ZipArchive.Entry) -> Bool {
+            e.path.hasPrefix("__MACOSX/") || e.name.hasPrefix("._") || e.name == ".DS_Store"
+        }
+        let files = archive.entries.filter { !$0.isDirectory && !isJunk($0) }
+        let pdfs = files.filter { $0.name.lowercased().hasSuffix(".pdf") }
+        var result = ZipImportResult()
+        result.skipped = files.filter { !$0.name.lowercased().hasSuffix(".pdf") }.map(\.name)
+        guard !pdfs.isEmpty else { return result }
+
+        // 外層資料夾：zip 裡只有一個最上層資料夾就用它的名字，否則用 zip 的檔名
+        var dirs: [[String]] = pdfs.map { e in Array(e.path.split(separator: "/").map(String.init).dropLast()) }
+        let topName: String
+        if let first = dirs.first?.first, dirs.allSatisfy({ $0.first == first }) {
+            topName = first
+            dirs = dirs.map { Array($0.dropFirst()) }
+        } else {
+            topName = url.deletingPathExtension().lastPathComponent
+        }
+        let top = createFolder(name: topName, parent: folder)
+        result.folderName = top.name
+        var folderIDs: [String: UUID] = ["": top.id]
+        func folderID(_ comps: [String]) -> UUID {
+            let key = comps.joined(separator: "/")
+            if let id = folderIDs[key] { return id }
+            let f = createFolder(name: comps[comps.count - 1], parent: folderID(Array(comps.dropLast())))
+            folderIDs[key] = f.id
+            return f.id
+        }
+
+        let tmp = fm.temporaryDirectory.appendingPathComponent("zip-import-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: tmp) }
+        for (entry, comps) in zip(pdfs, dirs) {
+            // 解到暫存資料夾、保留原本的檔名（筆記本名稱用檔名）
+            let dir = tmp.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            do {
+                try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+                let file = dir.appendingPathComponent(entry.name)
+                try archive.extract(entry, to: file)
+                result.notebooks.append(try importPDF(from: file, folder: folderID(comps)))
+            } catch {
+                result.failed.append((entry.name, error.localizedDescription))
+            }
+            try? fm.removeItem(at: dir)
+        }
+        return result
     }
 
     func renameNotebook(_ id: UUID, to title: String) {

@@ -29,6 +29,7 @@ struct RootView: View {
     @State private var path: [FolderRoute] = []
     @State private var showEditor = false
     @State private var importError: String?
+    @State private var importSummary: String?
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -44,13 +45,24 @@ struct RootView: View {
         }
         .onAppear { BackupManager.shared.start() }
         .onOpenURL { url in
-            guard url.pathExtension.lowercased() == "pdf" else { return }
             do {
-                let meta = try store.importPDF(from: url, folder: path.last?.id)
-                open(meta.id, nil)
+                switch url.pathExtension.lowercased() {
+                case "pdf":
+                    let meta = try store.importPDF(from: url, folder: path.last?.id)
+                    open(meta.id, nil)
+                case "zip":
+                    importSummary = try store.importZip(from: url, folder: path.last?.id).summary
+                default:
+                    break
+                }
             } catch {
                 importError = error.localizedDescription
             }
+        }
+        .alert("匯入完成", isPresented: Binding(get: { importSummary != nil }, set: { if !$0 { importSummary = nil } })) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(importSummary ?? "")
         }
         .alert("匯入失敗", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
             Button("好", role: .cancel) {}
@@ -107,6 +119,9 @@ struct FolderView: View {
     @State private var deleteTarget: LibraryItem?
     @State private var shareItem: ShareItem?
     @State private var errorMessage: String?
+    @State private var importSummary: String?
+    @State private var importing = false
+    @State private var showMigration = false
     @State private var showFavorites = false
     @State private var exporting = false
     @State private var showAbout = false
@@ -199,7 +214,8 @@ struct FolderView: View {
                 }
                 Menu {
                     Button { showNewNotebook = true } label: { Label("新增筆記本", systemImage: "book.closed") }
-                    Button { showImporter = true } label: { Label("匯入 PDF", systemImage: "doc.richtext") }
+                    Button { showImporter = true } label: { Label("匯入 PDF 或 zip", systemImage: "doc.richtext") }
+                    Button { showMigration = true } label: { Label("從 GoodNotes 搬家…", systemImage: "shippingbox") }
                     Button { newFolderName = ""; showNewFolder = true } label: { Label("新增資料夾", systemImage: "folder.badge.plus") }
                 } label: {
                     Image(systemName: "plus")
@@ -214,7 +230,7 @@ struct FolderView: View {
             ScrollView {
                 ContentUnavailableView(search.isEmpty ? "這裡還沒有東西" : "找不到符合的筆記本",
                                        systemImage: search.isEmpty ? "books.vertical" : "magnifyingglass",
-                                       description: Text(search.isEmpty ? "按右上角的「＋」新增筆記本、匯入 PDF 或建立資料夾。" : ""))
+                                       description: Text(search.isEmpty ? "按右上角的「＋」新增筆記本、匯入 PDF（或從 GoodNotes 搬家）或建立資料夾。" : ""))
                     .padding(.top, 80)
             }
         } else if viewMode == "list" {
@@ -340,27 +356,61 @@ struct FolderView: View {
         }
     }
 
+    /// 匯入 PDF 與 zip；只匯入一個 PDF 時直接打開它
+    private func importFiles(_ urls: [URL]) {
+        importing = true
+        // 先讓「正在匯入…」顯示出來（大的 zip 要一點時間）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            var last: NotebookMeta?
+            var summaries: [String] = []
+            for url in urls {
+                do {
+                    if url.pathExtension.lowercased() == "zip" {
+                        summaries.append(try store.importZip(from: url, folder: folderID).summary)
+                    } else {
+                        last = try store.importPDF(from: url, folder: folderID)
+                    }
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
+            }
+            importing = false
+            if !summaries.isEmpty {
+                importSummary = summaries.joined(separator: "\n\n")
+            } else if urls.count == 1, let m = last {
+                open(m.id, nil)
+            }
+        }
+    }
+
     /// 匯入、新增、重新命名、移動、刪除等彈出視窗
     private func sheets<Content: View>(_ base: Content) -> some View {
         base
         .overlay {
-            if exporting {
-                ProgressView("正在匯出 PDF…")
+            if exporting || importing {
+                ProgressView(exporting ? "正在匯出 PDF…" : "正在匯入…")
                     .padding(24)
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
             }
         }
-        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.pdf], allowsMultipleSelection: true) { result in
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.pdf, .zip], allowsMultipleSelection: true) { result in
             switch result {
             case let .success(urls):
-                var last: NotebookMeta?
-                for url in urls {
-                    do { last = try store.importPDF(from: url, folder: folderID) } catch { errorMessage = error.localizedDescription }
-                }
-                if urls.count == 1, let m = last { open(m.id, nil) }
+                importFiles(urls)
             case let .failure(error):
                 errorMessage = error.localizedDescription
             }
+        }
+        .sheet(isPresented: $showMigration) {
+            GoodNotesMigrationView {
+                showMigration = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { showImporter = true }
+            }
+        }
+        .alert("匯入完成", isPresented: Binding(get: { importSummary != nil }, set: { if !$0 { importSummary = nil } })) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(importSummary ?? "")
         }
         .sheet(isPresented: $showNewNotebook) {
             NewNotebookSheet { title, paper, landscape in
