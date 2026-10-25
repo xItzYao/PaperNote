@@ -249,8 +249,6 @@ extension NotebookViewController {
         if panTouchTypesDefault == nil { panTouchTypesDefault = canvas.panGestureRecognizer.allowedTouchTypes }
         canvas.panGestureRecognizer.allowedTouchTypes = customInkActive
             ? [NSNumber(value: UITouch.TouchType.direct.rawValue)] : (panTouchTypesDefault ?? [])
-        // 換筆、改書寫方式時 PencilKit 可能自己把書寫手勢打開，最後再設一次
-        canvas.drawingGestureRecognizer.isEnabled = pencilKitDraws
         updateGestureAvailability()
         configurePencilKitGestures()
 

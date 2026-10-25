@@ -434,10 +434,7 @@ extension NotebookViewController {
         if let u = s.updateIndex { d.pendingUpdates[u] = 0 }
         inkDraft = d
         liveInkView.begin(screen(s.point), width: w * canvas.zoomScale, color: preset.color)
-        // PencilKit 不應該同時在寫；萬一還開著就關掉並記下來
-        let g = canvas.drawingGestureRecognizer
-        DebugLog.add("custom ink begin drawGR=\(g.isEnabled) state=\(g.state.rawValue) zoom=\(String(format: "%.2f", canvas.zoomScale))")
-        if g.isEnabled { g.isEnabled = false }
+        DebugLog.add("custom ink begin drawGR=\(canvas.drawingGestureRecognizer.isEnabled)")
     }
 
     func inkMoved(_ new: [InkCaptureRecognizer.Sample]) {
