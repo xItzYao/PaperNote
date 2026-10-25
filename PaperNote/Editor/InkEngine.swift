@@ -136,19 +136,24 @@ enum InkGeometry {
 
 // MARK: - 接收 Pencil 的取樣點
 
-/// 「筆」工具改用自製筆刷時的手勢：每個取樣點（含系統合併的點與預測點）都交出來
+/// 「筆」工具改用自製筆刷時的手勢：每個真實取樣點（含系統合併的點）都交出來。
+/// 不用系統的預測點：預測猜錯時筆尖會先衝出去再縮回來，寫起來像果凍；
+/// Pencil 先給估計值、稍後補上準確的位置與筆壓，也一併交出來更新
 final class InkCaptureRecognizer: UIGestureRecognizer {
     struct Sample {
         var point: CGPoint
         /// 0...1 的筆壓（手指沒有筆壓，當成 0.5）
         var force: CGFloat
+        /// 之後還會補上準確值的話，用這個編號對應（見 onUpdate）
+        var updateIndex: NSNumber? = nil
     }
 
     var allowFinger = false
     weak var coordinateView: UIView?
     var onBegin: ((Sample) -> Void)?
-    /// 新的取樣點、目前的預測點
-    var onMove: (([Sample], [Sample]) -> Void)?
+    var onMove: (([Sample]) -> Void)?
+    /// 之前估計的取樣點補上了準確的位置／筆壓
+    var onUpdate: ((Sample) -> Void)?
     var onEnd: ((_ cancelled: Bool) -> Void)?
     private var tracked: UITouch?
 
@@ -161,7 +166,14 @@ final class InkCaptureRecognizer: UIGestureRecognizer {
 
     private func sample(_ t: UITouch) -> Sample {
         let f: CGFloat = t.type == .pencil && t.maximumPossibleForce > 0 ? min(t.force / t.maximumPossibleForce, 1) : 0.5
-        return Sample(point: t.preciseLocation(in: coordinateView), force: f)
+        let pending = !t.estimatedPropertiesExpectingUpdates.intersection([.location, .force]).isEmpty
+        return Sample(point: t.preciseLocation(in: coordinateView), force: f,
+                      updateIndex: pending ? t.estimationUpdateIndex : nil)
+    }
+
+    override func touchesEstimatedPropertiesUpdated(_ touches: Set<UITouch>) {
+        guard tracked != nil else { return }
+        for t in touches { onUpdate?(sample(t)) }
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
@@ -178,14 +190,14 @@ final class InkCaptureRecognizer: UIGestureRecognizer {
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
         guard let t = tracked, touches.contains(t) else { return }
-        let coalesced = (event.coalescedTouches(for: t) ?? [t]).map(sample)
-        let predicted = (event.predictedTouches(for: t) ?? []).map(sample)
-        onMove?(coalesced, predicted)
+        onMove?((event.coalescedTouches(for: t) ?? [t]).map(sample))
         state = .changed
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
         guard let t = tracked, touches.contains(t) else { return }
+        // 放開那一刻的位置也要算進去
+        onMove?((event.coalescedTouches(for: t) ?? [t]).map(sample))
         tracked = nil
         onEnd?(false)
         state = .ended
@@ -212,9 +224,7 @@ final class LiveInkView: UIView {
     typealias Run = (points: [(CGPoint, CGFloat)], color: UIColor)
     /// 螢幕座標的點與線寬
     private(set) var points: [(CGPoint, CGFloat)] = []
-    private var predicted: [(CGPoint, CGFloat)] = []
     private var color: UIColor = .black
-    private var lastPredictedRect = CGRect.null
     /// 已經存進頁面、等頁面畫好的筆跡
     private var finished: [Run] = []
     private var clearFinishedWork: DispatchWorkItem?
@@ -238,28 +248,30 @@ final class LiveInkView: UIView {
     func begin(_ p: CGPoint, width: CGFloat, color: UIColor) {
         self.color = color
         points = [(p, width)]
-        predicted = []
-        lastPredictedRect = .null
         setNeedsDisplay(rect(points))
     }
 
-    func add(_ new: [(CGPoint, CGFloat)], predicted pred: [(CGPoint, CGFloat)]) {
+    func add(_ new: [(CGPoint, CGFloat)]) {
+        guard !new.isEmpty else { return }
         let from = max(0, points.count - 1)
         points += new
-        predicted = pred
-        let predRect = pred.isEmpty || points.isEmpty ? CGRect.null : rect([points[points.count - 1]] + pred)
-        let dirty = rect(points[from...]).union(lastPredictedRect).union(predRect)
-        lastPredictedRect = predRect
+        let dirty = rect(points[from...])
         if !dirty.isNull { setNeedsDisplay(dirty) }
+    }
+
+    /// 第 i 點補上了準確的位置／線寬
+    func replace(_ i: Int, with p: (CGPoint, CGFloat)) {
+        guard points.indices.contains(i) else { return }
+        let around = points[max(0, i - 1)...min(points.count - 1, i + 1)]
+        let old = rect(around)
+        points[i] = p
+        setNeedsDisplay(old.union(rect(points[max(0, i - 1)...min(points.count - 1, i + 1)])))
     }
 
     /// 這一筆已經存進頁面：先留在畫面上，過一下再拿掉
     func finish() {
-        if !lastPredictedRect.isNull { setNeedsDisplay(lastPredictedRect) }
         if !points.isEmpty { finished.append((points, color)) }
         points = []
-        predicted = []
-        lastPredictedRect = .null
         clearFinishedWork?.cancel()
         let w = DispatchWorkItem { [weak self] in self?.clearFinished() }
         clearFinishedWork = w
@@ -276,9 +288,7 @@ final class LiveInkView: UIView {
 
     func clear() {
         points = []
-        predicted = []
         finished = []
-        lastPredictedRect = .null
         setNeedsDisplay()
     }
 
@@ -287,7 +297,7 @@ final class LiveInkView: UIView {
         ctx.setLineCap(.round)
         ctx.setLineJoin(.round)
         for run in finished { draw(run.points, run.color, in: ctx, rect: rect) }
-        if !points.isEmpty { draw(points + predicted, color, in: ctx, rect: rect) }
+        if !points.isEmpty { draw(points, color, in: ctx, rect: rect) }
     }
 
     private func draw(_ all: [(CGPoint, CGFloat)], _ color: UIColor, in ctx: CGContext, rect: CGRect) {
@@ -378,6 +388,8 @@ struct InkDraft {
     var colorHex: String
     var baseWidth: CGFloat
     var pressure: Bool
+    /// 還會補上準確值的取樣點：編號 → points 的索引
+    var pendingUpdates: [NSNumber: Int] = [:]
 }
 
 extension NotebookViewController {
@@ -390,7 +402,8 @@ extension NotebookViewController {
         inkRecognizer.coordinateView = pagesContainer
         inkRecognizer.delegate = self
         inkRecognizer.onBegin = { [weak self] s in self?.inkBegan(s) }
-        inkRecognizer.onMove = { [weak self] new, pred in self?.inkMoved(new, predicted: pred) }
+        inkRecognizer.onMove = { [weak self] new in self?.inkMoved(new) }
+        inkRecognizer.onUpdate = { [weak self] s in self?.inkUpdated(s) }
         inkRecognizer.onEnd = { [weak self] cancelled in self?.inkEnded(cancelled: cancelled) }
         canvas.addGestureRecognizer(inkRecognizer)
         liveInkView.translatesAutoresizingMaskIntoConstraints = false
@@ -403,9 +416,9 @@ extension NotebookViewController {
         ])
     }
 
-    /// 筆壓對應的線寬：鋼筆、毛筆隨筆壓變化，其他筆型粗細固定
+    /// 筆壓對應的線寬：鋼筆、毛筆隨筆壓變化（變化幅度不大，線條邊緣才不會一顆一顆），其他筆型粗細固定
     private func inkWidth(_ draft: InkDraft, force: CGFloat) -> CGFloat {
-        draft.pressure ? draft.baseWidth * (0.5 + 0.9 * force) : draft.baseWidth
+        draft.pressure ? draft.baseWidth * (0.7 + 0.6 * force) : draft.baseWidth
     }
 
     private func screen(_ p: CGPoint) -> CGPoint { pagesContainer.convert(p, to: liveInkView) }
@@ -418,23 +431,38 @@ extension NotebookViewController {
                          pressure: preset.style == .pen || preset.style == .fountainPen)
         let w = inkWidth(d, force: s.force)
         d.points = [InkPoint(s.point, width: w)]
+        if let u = s.updateIndex { d.pendingUpdates[u] = 0 }
         inkDraft = d
         liveInkView.begin(screen(s.point), width: w * canvas.zoomScale, color: preset.color)
+        // PencilKit 不應該同時在寫；萬一還開著就關掉並記下來
+        let g = canvas.drawingGestureRecognizer
+        DebugLog.add("custom ink begin drawGR=\(g.isEnabled) state=\(g.state.rawValue) zoom=\(String(format: "%.2f", canvas.zoomScale))")
+        if g.isEnabled { g.isEnabled = false }
     }
 
-    func inkMoved(_ new: [InkCaptureRecognizer.Sample], predicted: [InkCaptureRecognizer.Sample]) {
+    func inkMoved(_ new: [InkCaptureRecognizer.Sample]) {
         guard var d = inkDraft else { return }
         let z = canvas.zoomScale
         var added: [(CGPoint, CGFloat)] = []
         for s in new {
-            // 跟上一點幾乎重疊的不記（不是圓滑，只是去掉重複點）
-            if let last = d.points.last, hypot(last.point.x - s.point.x, last.point.y - s.point.y) < 0.25 { continue }
+            // 跟上一點完全重疊的不記（不是圓滑，只是去掉重複點）
+            if let last = d.points.last, s.updateIndex == nil, hypot(last.point.x - s.point.x, last.point.y - s.point.y) < 0.05 { continue }
             let w = inkWidth(d, force: s.force)
+            if let u = s.updateIndex { d.pendingUpdates[u] = d.points.count }
             d.points.append(InkPoint(s.point, width: w))
             added.append((screen(s.point), w * z))
         }
         inkDraft = d
-        liveInkView.add(added, predicted: predicted.map { (screen($0.point), inkWidth(d, force: $0.force) * z) })
+        liveInkView.add(added)
+    }
+
+    /// Pencil 補上了準確的位置／筆壓：換掉之前的估計值
+    func inkUpdated(_ s: InkCaptureRecognizer.Sample) {
+        guard var d = inkDraft, let u = s.updateIndex, let i = d.pendingUpdates[u], d.points.indices.contains(i) else { return }
+        let w = inkWidth(d, force: s.force)
+        d.points[i] = InkPoint(s.point, width: w)
+        inkDraft = d
+        liveInkView.replace(i, with: (screen(s.point), w * canvas.zoomScale))
     }
 
     func inkEnded(cancelled: Bool) {
@@ -448,6 +476,7 @@ extension NotebookViewController {
         let stroke = InkGeometry.offset(InkStroke(colorHex: d.colorHex, points: d.points), by: CGPoint(x: -o.x, y: -o.y))
         updatePage(pi) { $0.ink.append(stroke) }
         liveInkView.finish()
+        DebugLog.add("custom ink end points=\(d.points.count) cancelled=\(cancelled) pkStrokes=\(canvas.drawing.strokes.count)")
     }
 
     /// 橡皮擦擦自製筆刷的筆跡；同一次擦除只登記一次上一步

@@ -702,6 +702,11 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     }
 
     func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
+        if customInkActive {
+            // 自製筆刷時 PencilKit 不該寫字；寫了就會和自製筆刷疊在一起
+            DebugLog.add("pencilkit began while custom ink active, disabling it")
+            canvas.drawingGestureRecognizer.isEnabled = false
+        }
         pkUsingSince = CACurrentMediaTime()
         holdToShape.pencilKitBegan()
         // 下筆就關掉工具列的小視窗（粗細、虛線、筆刷設定）
@@ -716,7 +721,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         pkUsingSince = nil
         // 停住變直線的那一筆：交給 holdToShape 換成直線，不當成新筆跡處理
         if holdToShape.pencilKitEnded() { return }
-        if !tool.isDrawing {
+        // 自製筆刷時 PencilKit 多寫出來的那一筆也拿掉，不和自製筆刷疊在一起
+        if !tool.isDrawing || customInkActive {
             let before = strokeCountAtBegin
             DispatchQueue.main.async { [weak self] in self?.absorbStrayStroke(countBefore: before) }
             return

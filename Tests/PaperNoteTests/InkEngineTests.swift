@@ -160,7 +160,7 @@ final class InkEngineFlowTests: XCTestCase {
             let t = CGFloat(i) / 20
             return .init(point: CGPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t), force: 0.5)
         }
-        editor.inkMoved(samples, predicted: [])
+        editor.inkMoved(samples)
         editor.inkEnded(cancelled: false)
         spin()
     }
@@ -177,6 +177,19 @@ final class InkEngineFlowTests: XCTestCase {
         editor.setTool(.highlighter)
         XCTAssertTrue(editor.canvas.drawingGestureRecognizer.isEnabled, "螢光筆照樣用 PencilKit")
         XCTAssertFalse(editor.inkRecognizer.isEnabled)
+    }
+
+    func testEstimatedSampleIsReplacedByTheAccurateOne() {
+        let a = docPoint(100, 200)
+        editor.inkBegan(.init(point: a, force: 0.5))
+        editor.inkMoved([.init(point: docPoint(110, 200), force: 0.1, updateIndex: 7),
+                         .init(point: docPoint(120, 200), force: 0.5)])
+        // Pencil 補上第 7 號取樣點的準確位置
+        editor.inkUpdated(.init(point: docPoint(110, 203), force: 0.5, updateIndex: 7))
+        editor.inkEnded(cancelled: false)
+        let pts = editor.pages[0].ink[0].points.map(\.point)
+        XCTAssertEqual(pts.count, 3)
+        XCTAssertEqual(pts[1].y, 203, accuracy: 0.01, "要用補上的準確位置")
     }
 
     func testStrokeIsSavedInPageContentCoordinates() {
