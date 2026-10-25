@@ -224,6 +224,84 @@ final class InkEngineFlowTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
     }
 
+    private func spin(_ seconds: TimeInterval) {
+        RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+    }
+
+    /// 螢幕上這塊區域（文件座標）的墨水量：白紙上每個像素有多深
+    private func darkness(ofDocRect r: CGRect) -> Double {
+        let region = editor.pagesContainer.convert(r, to: window)
+        let fmt = UIGraphicsImageRendererFormat()
+        fmt.scale = window.screen.scale
+        let img = UIGraphicsImageRenderer(size: region.size, format: fmt).image { _ in
+            window.drawHierarchy(in: CGRect(origin: CGPoint(x: -region.minX, y: -region.minY), size: window.bounds.size),
+                                 afterScreenUpdates: true)
+        }
+        guard let cg = img.cgImage else { return 0 }
+        let w = cg.width, h = cg.height
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return stride(from: 0, to: px.count, by: 4).reduce(0.0) { $0 + Double(255 - min(px[$1], px[$1 + 1], px[$1 + 2])) }
+    }
+
+    /// 回報的問題：細線寫的時候正常，筆離開後突然變粗，過一下才變回來（寫的時候的筆跡和頁面上的筆跡疊在一起）
+    func testThinStrokeKeepsItsLookAfterLift() {
+        let saved = BrushStore.shared.current
+        var p = saved
+        p.style = .pen
+        p.width = 0.4
+        BrushStore.shared.update(p)
+        defer { BrushStore.shared.update(saved) }
+
+        let a = docPoint(100, 300), b = docPoint(400, 340)
+        editor.inkBegan(.init(point: a, force: 0.5))
+        editor.inkMoved((1...150).map { i -> InkCaptureRecognizer.Sample in
+            let t = CGFloat(i) / 150
+            return .init(point: CGPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t + sin(t * 25) * 10), force: 0.5)
+        })
+        spin(0.1)
+        let area = CGRect(x: a.x, y: a.y - 20, width: b.x - a.x, height: b.y - a.y + 40).insetBy(dx: -10, dy: -10)
+        let writing = darkness(ofDocRect: area)
+        editor.inkEnded(cancelled: false)
+        var afterLift: [Double] = []
+        for _ in 0..<12 {
+            spin(0.04)
+            afterLift.append(darkness(ofDocRect: area))
+        }
+        spin(1.5)
+        let settled = darkness(ofDocRect: area)
+        XCTAssertGreaterThan(settled, 0, "筆跡要畫在頁面上")
+        XCTAssertEqual(writing / settled, 1, accuracy: 0.12, "寫的時候和放開後要一樣粗")
+        for (i, d) in afterLift.enumerated() {
+            XCTAssertEqual(d / settled, 1, accuracy: 0.12, "放開後 \((i + 1) * 40)ms 粗細變了（變粗＝兩層疊在一起，變淡＝閃一下）")
+        }
+    }
+
+    /// 回報的問題：局部擦除的範圍比橡皮擦的圓圈大。圓圈大小是螢幕上的大小，放大頁面時擦到的範圍要跟著變小
+    func testPixelEraserMatchesItsOnScreenSize() {
+        let pixelBefore = EditorSettings.shared.pixelEraser, widthBefore = EditorSettings.shared.eraserWidth
+        EditorSettings.shared.pixelEraser = true
+        EditorSettings.shared.eraserWidth = 16
+        defer {
+            EditorSettings.shared.pixelEraser = pixelBefore
+            EditorSettings.shared.eraserWidth = widthBefore
+        }
+        write(from: docPoint(100, 200), to: docPoint(300, 200))
+        editor.canvas.zoomScale = editor.fitZoom * 2
+        spin(0.1)
+        let z = editor.canvas.zoomScale
+        editor.setTool(.eraser)
+        editor.inkEraseUndoRegistered = []
+        editor.eraseInk(at: docPoint(200, 200))
+        func length(_ s: InkStroke) -> CGFloat {
+            zip(s.points, s.points.dropFirst()).reduce(0) { $0 + hypot($1.1.point.x - $1.0.point.x, $1.1.point.y - $1.0.point.y) }
+        }
+        let left = editor.pages[0].ink.reduce(0) { $0 + length($1) }
+        XCTAssertEqual(200 - left, 16 / z, accuracy: 0.05, "擦掉的長度＝螢幕上圓圈的直徑")
+    }
+
     func testInkClaimsPencilWithoutTogglingPencilKit() {
         XCTAssertTrue(editor.customInkActive)
         XCTAssertTrue(editor.inkRecognizer.isEnabled)
