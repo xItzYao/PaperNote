@@ -56,12 +56,11 @@ final class TabStore {
         persist()
     }
 
-    /// 開啟筆記本：已經開著就切過去，否則加在目前分頁後面
+    /// 開啟筆記本：已經開著就切過去，否則加在最右邊（不會插進群組中間）
     func open(_ id: UUID, page: UUID?) {
         if let page { pendingPage[id] = page }
         if !state.tabs.contains(where: { $0.notebookID == id }) {
-            let insertAt = state.active.flatMap { a in state.tabs.firstIndex { $0.notebookID == a } }.map { $0 + 1 } ?? state.tabs.count
-            state.tabs.insert(OpenTab(notebookID: id, groupID: nil), at: insertAt)
+            state.tabs.append(OpenTab(notebookID: id, groupID: nil))
         }
         state.active = id
         expandGroupContaining(id)

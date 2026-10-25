@@ -48,6 +48,20 @@ final class TabReorderTests: XCTestCase {
         XCTAssertEqual(group(d), g.id, "放在群組中間就加入群組")
     }
 
+    /// 回報的問題：在群組裡的分頁開著時打開新筆記本，新分頁插進群組中間。新分頁一律放在最右邊
+    func testNewTabOpensAtTheFarRight() {
+        let (a, b, c, d) = (ids[0], ids[1], ids[2], ids[3])
+        let g = store.createGroup(name: "G", with: a)
+        store.move(b, to: g.id)
+        store.activate(a)
+        let e = UUID()
+        ids.append(e)
+        store.open(e, page: nil)
+        XCTAssertEqual(order, [a, b, c, d, e])
+        XCTAssertNil(group(e), "新分頁不屬於任何群組")
+        XCTAssertEqual(store.state.active, e)
+    }
+
     func testDroppingAtGroupEdgeKeepsOutsiders() {
         let (a, b, c, d) = (ids[0], ids[1], ids[2], ids[3])
         let g = store.createGroup(name: "G", with: a)
