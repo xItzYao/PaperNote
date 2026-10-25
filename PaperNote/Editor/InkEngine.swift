@@ -156,6 +156,7 @@ final class InkCaptureRecognizer: UIGestureRecognizer {
     var onUpdate: ((Sample) -> Void)?
     var onEnd: ((_ cancelled: Bool) -> Void)?
     private var tracked: UITouch?
+    private var lastForce: CGFloat = 0.5
 
     override init(target: Any?, action: Selector?) {
         super.init(target: target, action: action)
@@ -183,6 +184,7 @@ final class InkCaptureRecognizer: UIGestureRecognizer {
                 continue
             }
             tracked = t
+            lastForce = 0.5
             state = .began
             onBegin?(sample(t))
         }
@@ -190,14 +192,16 @@ final class InkCaptureRecognizer: UIGestureRecognizer {
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
         guard let t = tracked, touches.contains(t) else { return }
-        onMove?((event.coalescedTouches(for: t) ?? [t]).map(sample))
+        let samples = (event.coalescedTouches(for: t) ?? [t]).map(sample)
+        if let f = samples.last?.force { lastForce = f }
+        onMove?(samples)
         state = .changed
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
         guard let t = tracked, touches.contains(t) else { return }
-        // 放開那一刻的位置也要算進去
-        onMove?((event.coalescedTouches(for: t) ?? [t]).map(sample))
+        // 放開那一刻的位置也要算進去；筆壓用放開前的（離開螢幕時筆壓是 0，線尾會突然變細）
+        onMove?((event.coalescedTouches(for: t) ?? [t]).map { var s = sample($0); s.force = lastForce; return s })
         tracked = nil
         onEnd?(false)
         state = .ended
@@ -416,7 +420,7 @@ extension NotebookViewController {
         ])
     }
 
-    /// 筆壓對應的線寬：鋼筆、毛筆隨筆壓變化（變化幅度不大，線條邊緣才不會一顆一顆），其他筆型粗細固定
+    /// 筆壓對應的線寬：只有毛筆／沾水筆隨筆壓變化，其他筆型照設定的粗細畫（線尾不會變細）
     private func inkWidth(_ draft: InkDraft, force: CGFloat) -> CGFloat {
         draft.pressure ? draft.baseWidth * (0.7 + 0.6 * force) : draft.baseWidth
     }
@@ -428,7 +432,7 @@ extension NotebookViewController {
         if let p = paletteOverlay, p.mode == .launcher { dismissPalette() }
         let preset = BrushStore.shared.current
         var d = InkDraft(points: [], colorHex: preset.colorHex, baseWidth: max(preset.width, 0.1),
-                         pressure: preset.style == .pen || preset.style == .fountainPen)
+                         pressure: preset.style == .fountainPen)
         let w = inkWidth(d, force: s.force)
         d.points = [InkPoint(s.point, width: w)]
         if let u = s.updateIndex { d.pendingUpdates[u] = 0 }

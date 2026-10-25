@@ -179,6 +179,33 @@ final class InkEngineFlowTests: XCTestCase {
         XCTAssertFalse(editor.inkRecognizer.isEnabled)
     }
 
+    func testChangingPenWidthKeepsPencilKitOff() {
+        // 調粗細會換一支新的筆；不能因此讓 PencilKit 又開始寫
+        var p = BrushStore.shared.current
+        let width = p.width
+        p.width = width + 0.7
+        BrushStore.shared.update(p)
+        editor.setCanvasTool(BrushStore.shared.current.tool)
+        editor.applyTool()
+        XCTAssertFalse(editor.canvas.drawingGestureRecognizer.isEnabled)
+        p.width = width
+        BrushStore.shared.update(p)
+    }
+
+    func testPenWidthDoesNotThinWithPressure() {
+        var p = BrushStore.shared.current
+        let style = p.style
+        p.style = .pen
+        BrushStore.shared.update(p)
+        editor.inkBegan(.init(point: docPoint(100, 200), force: 0.9))
+        editor.inkMoved([.init(point: docPoint(120, 200), force: 0.5), .init(point: docPoint(140, 200), force: 0.05)])
+        editor.inkEnded(cancelled: false)
+        let ws = editor.pages[0].ink[0].points.map(\.width)
+        XCTAssertEqual(Set(ws).count, 1, "筆照設定的粗細畫，放開前不會變細")
+        p.style = style
+        BrushStore.shared.update(p)
+    }
+
     func testEstimatedSampleIsReplacedByTheAccurateOne() {
         let a = docPoint(100, 200)
         editor.inkBegan(.init(point: a, force: 0.5))

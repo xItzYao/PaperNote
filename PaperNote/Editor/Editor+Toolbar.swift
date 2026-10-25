@@ -589,6 +589,8 @@ extension NotebookViewController {
 
     /// 把筆交給 PencilKit。一樣的筆不重設：每次換筆 PencilKit 都要重新準備，太頻繁會暫時不理會書寫
     func setCanvasTool(_ t: PKInkingTool) {
+        // 自製筆刷時不把筆交給 PencilKit：設定 canvas.tool 會讓 PencilKit 自己把書寫手勢打開，變成兩邊一起寫
+        guard !customInkActive else { return }
         if let old = canvas.tool as? PKInkingTool,
            old.inkType == t.inkType, old.width == t.width, old.color == t.color { return }
         canvas.tool = t
