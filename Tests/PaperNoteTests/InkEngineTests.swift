@@ -170,26 +170,19 @@ final class InkEngineFlowTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
     }
 
-    func testPencilKitIsOffAndInkRecognizerOn() {
+    func testInkClaimsPencilWithoutTogglingPencilKit() {
         XCTAssertTrue(editor.customInkActive)
-        XCTAssertFalse(editor.canvas.drawingGestureRecognizer.isEnabled, "自製筆刷時 PencilKit 不能同時寫")
         XCTAssertTrue(editor.inkRecognizer.isEnabled)
+        // PencilKit 的書寫手勢不開關（開關它會讓 PencilKit 卡住），改成等自製筆刷失敗才開始
+        XCTAssertTrue(editor.canvas.drawingGestureRecognizer.isEnabled)
+        XCTAssertTrue(editor.gestureRecognizer(editor.inkRecognizer, shouldBeRequiredToFailBy: editor.canvas.drawingGestureRecognizer))
+        XCTAssertTrue(editor.gestureRecognizer(editor.inkRecognizer, shouldBeRequiredToFailBy: editor.canvas.panGestureRecognizer))
         editor.setTool(.highlighter)
-        XCTAssertTrue(editor.canvas.drawingGestureRecognizer.isEnabled, "螢光筆照樣用 PencilKit")
-        XCTAssertFalse(editor.inkRecognizer.isEnabled)
-    }
-
-    func testChangingPenWidthKeepsPencilKitOff() {
-        // 調粗細會換一支新的筆；不能因此讓 PencilKit 又開始寫
-        var p = BrushStore.shared.current
-        let width = p.width
-        p.width = width + 0.7
-        BrushStore.shared.update(p)
-        editor.setCanvasTool(BrushStore.shared.current.tool)
-        editor.applyTool()
-        XCTAssertFalse(editor.canvas.drawingGestureRecognizer.isEnabled)
-        p.width = width
-        BrushStore.shared.update(p)
+        XCTAssertFalse(editor.inkRecognizer.isEnabled, "螢光筆照樣用 PencilKit")
+        XCTAssertFalse(editor.gestureRecognizer(editor.inkRecognizer, shouldBeRequiredToFailBy: editor.canvas.drawingGestureRecognizer))
+        editor.setTool(.eraser)
+        editor.setTool(.pen)
+        XCTAssertTrue(editor.canvas.drawingGestureRecognizer.isEnabled)
     }
 
     func testPenWidthDoesNotThinWithPressure() {

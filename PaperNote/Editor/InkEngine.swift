@@ -399,8 +399,6 @@ struct InkDraft {
 extension NotebookViewController {
     /// 「筆」工具目前用自製筆刷
     var customInkActive: Bool { tool == .pen && settings.customInk }
-    /// PencilKit 負責書寫的時候（自製筆刷時關掉 PencilKit 的書寫手勢；只在換工具、換設定時切換）
-    var pencilKitDraws: Bool { tool.isDrawing && !customInkActive }
 
     func setupInkCapture() {
         inkRecognizer.coordinateView = pagesContainer

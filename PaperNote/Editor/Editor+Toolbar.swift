@@ -228,7 +228,7 @@ extension NotebookViewController {
     }
 
     func applyTool() {
-        canvas.drawingGestureRecognizer.isEnabled = pencilKitDraws
+        canvas.drawingGestureRecognizer.isEnabled = tool.isDrawing
         circuitLibrary.isHidden = tool != .circuit
         if tool.isInking { BrushStore.shared.activeCategory = tool == .highlighter ? .highlighter : .pen }
         switch tool {
@@ -245,10 +245,6 @@ extension NotebookViewController {
         // 只有開啟「用手指書寫」時，手指才用來截圖、選字、畫表格線、圈選；否則單指捲動
         let fingerUsedByTool = settings.fingerDrawing && (tool.drawsWithPan || customInkActive)
         canvas.panGestureRecognizer.minimumNumberOfTouches = fingerUsedByTool ? 2 : 1
-        // 自製筆刷時 PencilKit 不接 Pencil，捲動手勢也不能接，否則 Pencil 一畫頁面就跟著捲
-        if panTouchTypesDefault == nil { panTouchTypesDefault = canvas.panGestureRecognizer.allowedTouchTypes }
-        canvas.panGestureRecognizer.allowedTouchTypes = customInkActive
-            ? [NSNumber(value: UITouch.TouchType.direct.rawValue)] : (panTouchTypesDefault ?? [])
         updateGestureAvailability()
         configurePencilKitGestures()
 
@@ -589,8 +585,6 @@ extension NotebookViewController {
 
     /// 把筆交給 PencilKit。一樣的筆不重設：每次換筆 PencilKit 都要重新準備，太頻繁會暫時不理會書寫
     func setCanvasTool(_ t: PKInkingTool) {
-        // 自製筆刷時不把筆交給 PencilKit：設定 canvas.tool 會讓 PencilKit 自己把書寫手勢打開，變成兩邊一起寫
-        guard !customInkActive else { return }
         if let old = canvas.tool as? PKInkingTool,
            old.inkType == t.inkType, old.width == t.width, old.color == t.color { return }
         canvas.tool = t

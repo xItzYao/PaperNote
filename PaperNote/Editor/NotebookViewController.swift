@@ -179,8 +179,6 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var inkDraft: InkDraft?
     /// 這次擦除已經登記過上一步的頁面（下筆時清空）
     var inkEraseUndoRegistered: Set<UUID> = []
-    /// 畫布捲動手勢原本接受的觸碰種類（自製筆刷時改成只接受手指）
-    var panTouchTypesDefault: [NSNumber]?
 
     // 自訂套索
     var lassoPoints: [CGPoint] = []

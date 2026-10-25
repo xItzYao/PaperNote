@@ -331,7 +331,7 @@ extension NotebookViewController {
     }
 
     func configurePencilKitGestures() {
-        let drawingTool = pencilKitDraws
+        let drawingTool = tool.isDrawing
         var all: [UIGestureRecognizer] = []
         func collect(_ v: UIView) {
             if v is UITextView || v === pagesContainer { return }
