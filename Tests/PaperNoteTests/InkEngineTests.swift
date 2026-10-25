@@ -103,6 +103,18 @@ final class InkEngineTests: XCTestCase {
         XCTAssertTrue(out[1].points.allSatisfy { $0.point.x > 55 })
     }
 
+    func testPixelEraserCutsExactlyAtTheCircleEvenWithSparsePoints() {
+        // 寫得快時取樣點很稀：只擦掉圓圈裡那一段，不能連整段線一起不見
+        let line = stroke([(0, 0), (100, 0)], width: 1)
+        let out = InkGeometry.erase([line], at: CGPoint(x: 50, y: 0), radius: 5, partial: true)!
+        XCTAssertEqual(out.count, 2)
+        XCTAssertEqual(out[0].points.first!.point.x, 0, accuracy: 0.01)
+        XCTAssertEqual(out[0].points.last!.point.x, 45, accuracy: 0.01)
+        XCTAssertEqual(out[1].points.first!.point.x, 55, accuracy: 0.01)
+        XCTAssertEqual(out[1].points.last!.point.x, 100, accuracy: 0.01)
+        XCTAssertNil(InkGeometry.erase([line], at: CGPoint(x: 50, y: 8), radius: 5, partial: true), "圓圈沒碰到線就不變")
+    }
+
     func testLassoCirclesStrokeWhenAnyPointIsInside() {
         let s = stroke([(0, 0), (200, 0)])
         let path = UIBezierPath(rect: CGRect(x: 180, y: -10, width: 40, height: 20))

@@ -174,6 +174,8 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         if g !== palmBlocker, touch.type == .direct, isPalmTouch(touch) { return false }
         // 編輯文字時，點文字框內部交給 UITextView
         if let tv = editingTextView, touch.view?.isDescendant(of: tv) == true { return false }
+        // 自製筆刷只收 Pencil（開了「用手指書寫」才收手指）；沒收到觸碰就不會擋住頁面捲動
+        if g === inkRecognizer { return touch.type == .pencil || settings.fingerDrawing }
         if g === textLongPress {
             // 手指長按：剪貼簿有東西就能貼上；PDF 頁面上也可以選字（選取工具有自己的長按選單）
             // 套索、截圖工具 Pencil 長按也可以貼上（套索長按圈選範圍內則打開套索選單）

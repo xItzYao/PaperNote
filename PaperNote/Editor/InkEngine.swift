@@ -104,28 +104,63 @@ enum InkGeometry {
         return false
     }
 
-    /// 橡皮擦擦過 p：整筆擦除時拿掉碰到的筆跡；局部擦除時把碰到的點去掉、剩下的切成好幾筆。沒有變化回傳 nil
+    /// 橡皮擦擦過 p：整筆擦除時拿掉碰到的筆跡；局部擦除時剛好沿著圓圈的邊把線切斷，圓圈外的部分留著。沒有變化回傳 nil
     static func erase(_ strokes: [InkStroke], at p: CGPoint, radius: CGFloat, partial: Bool) -> [InkStroke]? {
         var changed = false
         var out: [InkStroke] = []
         for s in strokes {
-            guard hits(s, at: p, radius: radius) else {
+            if partial, let pieces = cut(s, at: p, radius: radius) {
+                changed = true
+                out += pieces
+            } else if !partial, hits(s, at: p, radius: radius) {
+                changed = true
+            } else {
                 out.append(s)
-                continue
             }
-            changed = true
-            guard partial else { continue }
-            var run: [InkPoint] = []
-            func flush() {
-                if run.count >= 2 { out.append(InkStroke(colorHex: s.colorHex, points: run)) }
-                run = []
-            }
-            for q in s.points {
-                if hypot(q.point.x - p.x, q.point.y - p.y) <= radius + q.width / 2 { flush() } else { run.append(q) }
-            }
-            flush()
         }
         return changed ? out : nil
+    }
+
+    /// 把線在圓圈（圓心 p、半徑 r）裡面的部分切掉；圓圈沒碰到線回傳 nil
+    static func cut(_ s: InkStroke, at p: CGPoint, radius r: CGFloat) -> [InkStroke]? {
+        guard let first = s.points.first,
+              bounds(of: s).insetBy(dx: -r, dy: -r).contains(p) else { return nil }
+        func inside(_ q: InkPoint) -> Bool { hypot(q.point.x - p.x, q.point.y - p.y) < r }
+        if s.points.count == 1 { return inside(first) ? [] : nil }
+        guard zip(s.points, s.points.dropFirst()).contains(where: { distance(p, $0.point, $1.point) < r }) else { return nil }
+
+        var pieces: [InkStroke] = []
+        var run: [InkPoint] = inside(first) ? [] : [first]
+        func flush() {
+            if run.count >= 2 { pieces.append(InkStroke(colorHex: s.colorHex, points: run)) }
+            run = []
+        }
+        for (a, b) in zip(s.points, s.points.dropFirst()) {
+            // 線段和圓的交點：|a + t(b - a) - p| = r
+            let dx = b.point.x - a.point.x, dy = b.point.y - a.point.y
+            let fx = a.point.x - p.x, fy = a.point.y - p.y
+            let qa = dx * dx + dy * dy, qb = 2 * (fx * dx + fy * dy), qc = fx * fx + fy * fy - r * r
+            let disc = qb * qb - 4 * qa * qc
+            var ts: [CGFloat] = []
+            if qa > 0, disc > 0 {
+                let sq = disc.squareRoot()
+                ts = [(-qb - sq) / (2 * qa), (-qb + sq) / (2 * qa)].filter { $0 > 0 && $0 < 1 }
+            }
+            for t in ts {
+                let q = InkPoint(CGPoint(x: a.point.x + dx * t, y: a.point.y + dy * t), width: a.width + (b.width - a.width) * t)
+                if run.isEmpty {
+                    run = [q]        // 從圓圈裡出來
+                } else {
+                    run.append(q)    // 走進圓圈
+                    flush()
+                }
+            }
+            if !inside(b) {
+                if run.isEmpty { run = [b] } else { run.append(b) }
+            }
+        }
+        flush()
+        return pieces
     }
 
     /// 套索：筆跡有任何一點在範圍內就算圈到
@@ -310,6 +345,14 @@ final class LiveInkView: UIView {
         color.setFill()
         if all.count == 1 {
             ctx.fillEllipse(in: CGRect(x: first.0.x - first.1 / 2, y: first.0.y - first.1 / 2, width: first.1, height: first.1))
+            return
+        }
+        // 粗細都一樣：畫成一條路徑（和頁面那層一樣）。一段一段畫的話，細線的反鋸齒邊緣會互相疊加，看起來變粗
+        if all.allSatisfy({ $0.1 == first.1 }) {
+            ctx.setLineWidth(first.1)
+            ctx.move(to: first.0)
+            for (p, _) in all.dropFirst() { ctx.addLine(to: p) }
+            ctx.strokePath()
             return
         }
         for (a, b) in zip(all, all.dropFirst()) {
