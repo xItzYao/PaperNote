@@ -120,6 +120,16 @@ open PaperNote.xcodeproj
 - 只有在你自己連結 Google Drive 後，才會把筆記檔上傳到**你自己的** Google Drive。
 - 完整說明請見[隱私權政策](PRIVACY.md)。
 
+## 授權
+
+本專案以 [GNU General Public License v3.0](LICENSE)（GPL-3.0）授權。
+
+- 你可以自由使用、修改、再散布這份程式碼。
+- 如果你發布修改過的版本，也必須以 GPL-3.0 公開原始碼，並保留原本的版權與授權聲明。
+- 本軟體不提供任何保證，詳見 [LICENSE](LICENSE)。
+
+歡迎回報問題或送 Pull Request 一起改進。
+
 ## 支持
 
 如果這個 App 對你有幫助，歡迎[請我喝杯咖啡](https://buymeacoffee.com/happytw) ☕
