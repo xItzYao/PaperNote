@@ -134,5 +134,29 @@ let lShape = stride(from: 0, through: 60, by: 4).map { P(100, CGFloat($0)) } + [
 check("L-shaped wire is not a terminal", CircuitData.terminalGesture(lShape) == nil)
 check("straight wire is not a terminal", CircuitData.terminalGesture(stride(from: 0, through: 80, by: 4).map { P(100, CGFloat($0)) }) == nil)
 
+// 14. 拖動元件：接在導線中段的分支（T 字接點）也要跟著接上
+var tee = CircuitData()
+tee.components = [CircuitComponent(part: .resistor, position: P(100, 100))]
+tee.wires = [CircuitWire(points: [P(130, 100), P(200, 100), P(200, 200)]),
+             CircuitWire(points: [P(160, 100), P(160, 50)])]
+let teeOld = CircuitGeometry.pins(tee.components[0])
+tee.components[0].position = P(100, 150)
+tee.reattach(from: teeOld, to: CircuitGeometry.pins(tee.components[0]))
+check("attached wire follows the pin", tee.wires[0].points.first == P(130, 150))
+check("T branch re-attaches to the moved wire", tee.wires.count == 2 && tee.wires[1].points.first == P(160, 150))
+check("T branch is still a junction", tee.junctions().map(PointKey.init).contains(PointKey(P(160, 150))))
+
+// 15. 導線從接腳中間穿過：拖動時兩邊都跟著走
+var through = CircuitData()
+through.components = [CircuitComponent(part: .resistor, position: P(100, 100))]
+through.wires = [CircuitWire(points: [P(130, 50), P(130, 150)])]
+let thOld = CircuitGeometry.pins(through.components[0])
+through.components[0].position = P(120, 100)
+through.reattach(from: thOld, to: CircuitGeometry.pins(through.components[0]))
+let thPin = P(150, 100)
+check("wire through a pin is split in two", through.wires.count == 2)
+check("both halves follow the pin", through.wires.allSatisfy { $0.points.first == thPin || $0.points.last == thPin })
+check("far ends stay put", Set(through.wires.flatMap { [$0.points.first!, $0.points.last!] }.map(PointKey.init)).isSuperset(of: [PointKey(P(130, 50)), PointKey(P(130, 150))]))
+
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

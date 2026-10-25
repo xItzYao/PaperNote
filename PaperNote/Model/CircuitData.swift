@@ -205,9 +205,14 @@ extension CircuitData {
         return simplified
     }
 
-    /// 元件移動／旋轉後，接在舊接腳上的導線端點跟著移到新接腳
+    /// 元件移動／旋轉後，接在舊接腳上的導線跟著走：
+    /// 1. 從接腳中間穿過的導線先在接腳處切成兩條（都以接腳為端點）
+    /// 2. 端點在舊接腳上的導線移到新接腳，相鄰的轉角跟著調整
+    /// 3. 原本接在這些導線上（T 字接點）、現在脫開的分支，接回那條導線上最近的位置
     mutating func reattach(from oldPins: [CGPoint], to newPins: [CGPoint]) {
         guard oldPins.count == newPins.count else { return }
+        splitWires(at: oldPins)
+        var before = wires
         for i in wires.indices {
             var pts = wires[i].points
             guard pts.count >= 2 else { continue }
@@ -215,6 +220,92 @@ extension CircuitData {
             if let k = oldPins.firstIndex(of: pts[pts.count - 1]) { pts[pts.count - 1] = newPins[k]; pts = Self.reroute(pts, movedFirst: false) }
             wires[i].points = Self.orthogonalize(pts)
         }
+        // 分支跟著接回去；分支的分支下一輪再處理
+        for _ in 0..<4 {
+            let moved = wires
+            if !reconnectBranches(before: before) { break }
+            before = moved
+        }
+        wires.removeAll { $0.points.count < 2 }
+    }
+
+    /// 接腳落在導線中間（線段內或中間的轉角）：從那裡切成兩條
+    private mutating func splitWires(at pins: [CGPoint]) {
+        for pin in pins {
+            var i = 0
+            while i < wires.count {
+                let pts = wires[i].points
+                var cut: (index: Int, insert: Bool)?
+                for k in 0..<max(0, pts.count - 1) {
+                    if k > 0 && pts[k] == pin { cut = (k, false); break }
+                    if Self.segment(pts[k], pts[k + 1], contains: pin) { cut = (k + 1, true); break }
+                }
+                if let c = cut {
+                    var first = Array(pts[..<c.index])
+                    var second = Array(pts[c.index...])
+                    if c.insert {
+                        first.append(pin)
+                        second.insert(pin, at: 0)
+                    } else {
+                        first.append(pin)
+                    }
+                    wires[i].points = first
+                    wires.insert(CircuitWire(points: second), at: i + 1)
+                    i += 2
+                } else {
+                    i += 1
+                }
+            }
+        }
+    }
+
+    /// 端點原本在別條導線上、那條線改了走線後脫開的，移到那條線上最近的位置。有移動就回傳 true
+    private mutating func reconnectBranches(before: [CircuitWire]) -> Bool {
+        let pins = allPins
+        var changed = false
+        for wi in wires.indices {
+            for first in [true, false] {
+                let pts = wires[wi].points
+                guard pts.count >= 2 else { continue }
+                let end = first ? pts[0] : pts[pts.count - 1]
+                if pins.contains(end) { continue }
+                for vj in before.indices where vj != wi && vj < wires.count {
+                    guard Self.polyline(before[vj].points, contains: end),
+                          !Self.polyline(wires[vj].points, contains: end),
+                          let q = Self.nearestPoint(on: wires[vj].points, to: end) else { continue }
+                    wires[wi].points = Self.movingEnd(pts, first: first, to: q)
+                    changed = true
+                    break
+                }
+            }
+        }
+        return changed
+    }
+
+    /// 點在折線上（含端點與轉角）
+    static func polyline(_ pts: [CGPoint], contains p: CGPoint) -> Bool {
+        if pts.contains(p) { return true }
+        for k in 0..<max(0, pts.count - 1) where segment(pts[k], pts[k + 1], contains: p) { return true }
+        return false
+    }
+
+    /// 折線上離 p 最近的點（沿線方向對齊格點）
+    static func nearestPoint(on pts: [CGPoint], to p: CGPoint) -> CGPoint? {
+        var best: CGPoint?
+        var bestD = CGFloat.greatestFiniteMagnitude
+        for k in 0..<max(0, pts.count - 1) {
+            let a = pts[k], b = pts[k + 1]
+            var q: CGPoint
+            if a.y == b.y {
+                q = CGPoint(x: min(max(snap(p).x, min(a.x, b.x)), max(a.x, b.x)), y: a.y)
+            } else {
+                q = CGPoint(x: a.x, y: min(max(snap(p).y, min(a.y, b.y)), max(a.y, b.y)))
+            }
+            let d = hypot(q.x - p.x, q.y - p.y)
+            if d < bestD { bestD = d; best = q }
+        }
+        return best
+    }
         wires.removeAll { $0.points.count < 2 }
     }
 
