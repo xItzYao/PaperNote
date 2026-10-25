@@ -10,7 +10,10 @@ final class PageOverviewController: UIViewController, UICollectionViewDataSource
     private var selectedIDs = Set<UUID>()
     private let currentID: UUID?
     private let thumbs = NSCache<NSUUID, UIImage>()
-    private var rendering = Set<UUID>()
+    /// 等著畫的縮圖（後加的先畫：捲到哪裡就先畫哪裡）
+    private var waiting: [UUID] = []
+    private var drawingThumb = false
+    private let thumbQueue = DispatchQueue(label: "PaperNote.overview.thumbs", qos: .userInitiated)
     private var didScrollToCurrent = false
 
     /// 目前顯示的頁面與原本的頁碼（0 起算）
@@ -216,20 +219,38 @@ final class PageOverviewController: UIViewController, UICollectionViewDataSource
         }
     }
 
-    /// 縮圖在主執行緒一張一張畫；快速捲過、已經離開畫面的就不畫
+    /// 縮圖在背景執行緒一張一張畫（主執行緒只取資料，捲動不會卡）；快速捲過、已經離開畫面的就不畫
     private func requestThumbnail(_ id: UUID) {
-        guard !rendering.contains(id) else { return }
-        rendering.insert(id)
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            defer { self.rendering.remove(id) }
-            let shown = self.collection.indexPathsForVisibleItems.compactMap { self.collection.cellForItem(at: $0) as? PageThumbCell }
-            guard let cell = shown.first(where: { $0.pageID == id }),
-                  let editor = self.editor, let i = editor.pageIndex(of: id) else { return }
-            let w = self.layout.itemSize.width * self.traitCollection.displayScale
-            guard let img = editor.session.renderThumbnail(pageIndex: i, width: max(120, w)) else { return }
-            self.thumbs.setObject(img, forKey: id as NSUUID)
-            cell.thumbnail = img
+        waiting.removeAll { $0 == id }
+        waiting.append(id)
+        drawNextThumbnail()
+    }
+
+    private func visibleCell(_ id: UUID) -> PageThumbCell? {
+        collection.visibleCells.lazy.compactMap { $0 as? PageThumbCell }.first { $0.pageID == id }
+    }
+
+    private func drawNextThumbnail() {
+        guard !drawingThumb, let editor else { return }
+        // 從最新的開始，跳過已經捲出畫面的
+        while let id = waiting.popLast() {
+            guard thumbs.object(forKey: id as NSUUID) == nil, visibleCell(id) != nil, let i = editor.pageIndex(of: id) else { continue }
+            let w = layout.itemSize.width * traitCollection.displayScale
+            guard let job = editor.session.thumbnailJob(pageIndex: i, width: max(120, w)) else { continue }
+            drawingThumb = true
+            thumbQueue.async { [weak self] in
+                let img = job()
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.drawingThumb = false
+                    if let img {
+                        self.thumbs.setObject(img, forKey: id as NSUUID)
+                        self.visibleCell(id)?.thumbnail = img
+                    }
+                    self.drawNextThumbnail()
+                }
+            }
+            return
         }
     }
 

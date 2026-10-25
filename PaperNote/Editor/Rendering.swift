@@ -113,13 +113,19 @@ enum PageRenderer {
 
     /// 畫整頁（背景＋物件＋筆跡），整頁座標。用於匯出、縮圖。
     static func drawFullPage(_ page: Page, session: NotebookSession, in ctx: CGContext, inkScale: CGFloat) {
-        let snap = session.backgroundSnapshot(for: page)
+        drawFullPage(page, snapshot: session.backgroundSnapshot(for: page), drawing: session.drawings[page.id],
+                     image: { session.image(named: $0) }, in: ctx, inkScale: inkScale)
+    }
+
+    /// 同上，但需要的資料都先取好（不碰 session），可以在背景執行緒畫
+    static func drawFullPage(_ page: Page, snapshot snap: BackgroundSnapshot, drawing: PKDrawing?,
+                             image: (String) -> UIImage?, in ctx: CGContext, inkScale: CGFloat) {
         drawBackground(snap, in: ctx)
         ctx.saveGState()
         ctx.translateBy(x: page.insets.left, y: page.insets.top)
-        drawElements(page.elements, session: session, in: ctx)
+        drawElements(page.elements, image: image, in: ctx)
         InkRenderer.draw(page.ink, in: ctx)
-        if let drawing = session.drawings[page.id], !drawing.strokes.isEmpty {
+        if let drawing, !drawing.strokes.isEmpty {
             let rect = CGRect(x: -page.insets.left, y: -page.insets.top, width: snap.fullSize.width, height: snap.fullSize.height)
             let img = inkImage(drawing, rect: rect, scale: inkScale)
             img.draw(in: rect)
@@ -146,9 +152,13 @@ enum PageRenderer {
     }
 
     static func drawElements(_ elements: [PageElement], session: NotebookSession, in ctx: CGContext) {
+        drawElements(elements, image: { session.image(named: $0) }, in: ctx)
+    }
+
+    static func drawElements(_ elements: [PageElement], image: (String) -> UIImage?, in ctx: CGContext) {
         UIGraphicsPushContext(ctx)
         for e in elements {
-            ElementRenderer.draw(e, in: e.frame, session: session)
+            ElementRenderer.draw(e, in: e.frame, image: image)
         }
         UIGraphicsPopContext()
     }
@@ -165,9 +175,14 @@ enum PageRenderer {
 enum ElementRenderer {
     /// 在目前的 UIKit context 中畫物件
     static func draw(_ e: PageElement, in rect: CGRect, session: NotebookSession?) {
+        draw(e, in: rect, image: { session?.image(named: $0) })
+    }
+
+    /// image：依檔名取圖片（背景執行緒畫縮圖時用事先取好的圖片）
+    static func draw(_ e: PageElement, in rect: CGRect, image: (String) -> UIImage?) {
         switch e.content {
         case let .image(data):
-            session?.image(named: data.file)?.draw(in: rect)
+            image(data.file)?.draw(in: rect)
         case let .table(t):
             drawTable(t, in: rect)
         case let .text(t):

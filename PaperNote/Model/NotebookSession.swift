@@ -245,17 +245,31 @@ final class NotebookSession {
     // MARK: Thumbnails
 
     func renderThumbnail(pageIndex: Int, width: CGFloat = 360) -> UIImage? {
+        thumbnailJob(pageIndex: pageIndex, width: width)?()
+    }
+
+    /// 畫縮圖要用的資料在這裡（主執行緒）先取好；回傳的工作可以丟到背景執行緒畫，不會卡住畫面
+    func thumbnailJob(pageIndex: Int, width: CGFloat) -> (() -> UIImage?)? {
         guard let page = document.pages[safe: pageIndex] else { return nil }
         let size = fullSize(of: page)
         guard size.width > 0 else { return nil }
-        let scale = width / size.width
-        let fmt = UIGraphicsImageRendererFormat()
-        fmt.scale = 1
-        fmt.opaque = true
-        let out = CGSize(width: width, height: (size.height * scale).rounded())
-        return UIGraphicsImageRenderer(size: out, format: fmt).image { rc in
-            rc.cgContext.scaleBy(x: scale, y: scale)
-            PageRenderer.drawFullPage(page, session: self, in: rc.cgContext, inkScale: max(scale * 2, 0.5))
+        let snap = backgroundSnapshot(for: page)
+        let drawing = drawings[page.id]
+        var images: [String: UIImage] = [:]
+        for e in page.elements {
+            if case let .image(d) = e.content { images[d.file] = image(named: d.file) }
+        }
+        return {
+            let scale = width / size.width
+            let fmt = UIGraphicsImageRendererFormat()
+            fmt.scale = 1
+            fmt.opaque = true
+            let out = CGSize(width: width, height: (size.height * scale).rounded())
+            return UIGraphicsImageRenderer(size: out, format: fmt).image { rc in
+                rc.cgContext.scaleBy(x: scale, y: scale)
+                PageRenderer.drawFullPage(page, snapshot: snap, drawing: drawing, image: { images[$0] },
+                                          in: rc.cgContext, inkScale: max(scale * 2, 0.5))
+            }
         }
     }
 
