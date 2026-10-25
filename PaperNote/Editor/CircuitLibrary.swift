@@ -100,6 +100,8 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
                 i += 2
             }
             body.isHidden = collapsedNames.contains(name)
+            // 動畫中途內容不要畫到下面的分類上
+            body.clipsToBounds = true
             stack.addArrangedSubview(sectionHeader(name, body: body))
             stack.addArrangedSubview(body)
         }
@@ -125,24 +127,43 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
         let b = UIButton(configuration: c)
         b.contentHorizontalAlignment = .leading
         b.setContentCompressionResistancePriority(.required, for: .vertical)
-        func refresh() {
+        func refresh(_ collapsed: Bool) {
             var cfg = b.configuration ?? .plain()
             var t = AttributedString(name)
             t.font = .systemFont(ofSize: 11, weight: .semibold)
             cfg.attributedTitle = t
-            cfg.image = UIImage(systemName: body.isHidden ? "chevron.right" : "chevron.down",
+            cfg.image = UIImage(systemName: collapsed ? "chevron.right" : "chevron.down",
                                 withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold))
             cfg.imagePlacement = .trailing
             cfg.imagePadding = 6
             b.configuration = cfg
         }
-        refresh()
-        b.addAction(UIAction { [weak body] _ in
+        refresh(body.isHidden)
+        b.addAction(UIAction { [weak self, weak body] _ in
             guard let body else { return }
-            UIView.animate(withDuration: 0.2) { body.isHidden.toggle() }
-            refresh()
+            let collapse = !body.isHidden
+            refresh(collapse)
+            let host = self?.stack
+            if collapse {
+                // 收起：元件先淡出，再把下面的分類往上收
+                UIView.animate(withDuration: 0.12, animations: { body.alpha = 0 }) { _ in
+                    UIView.animate(withDuration: 0.2) {
+                        body.isHidden = true
+                        host?.layoutIfNeeded()
+                    }
+                }
+            } else {
+                // 展開：先撐開空間，再讓元件淡入
+                body.alpha = 0
+                UIView.animate(withDuration: 0.2, animations: {
+                    body.isHidden = false
+                    host?.layoutIfNeeded()
+                }) { _ in
+                    UIView.animate(withDuration: 0.12) { body.alpha = 1 }
+                }
+            }
             var collapsed = Set(UserDefaults.standard.stringArray(forKey: Self.collapsedKey) ?? [])
-            if body.isHidden { collapsed.insert(name) } else { collapsed.remove(name) }
+            if collapse { collapsed.insert(name) } else { collapsed.remove(name) }
             UserDefaults.standard.set(Array(collapsed), forKey: Self.collapsedKey)
         }, for: .touchUpInside)
         return b
