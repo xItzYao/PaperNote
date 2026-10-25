@@ -39,7 +39,7 @@ enum CircuitRenderer {
     /// 方塊元件的文字：標題與每支接腳的名字。位置跟著旋轉、翻轉，但字永遠是正的
     private static func drawBlockLabels(_ c: CircuitComponent, _ b: CircuitBlockLayout, color: UIColor) {
         let t = CircuitGeometry.transform(c)
-        let inner = CircuitBlockLayout.halfWidth - 11
+        let inner = b.halfWidth - 11
         func text(_ name: String, at p: CGPoint, size: CGFloat, bold: Bool = false) {
             let inverted = name.hasPrefix("~")
             let label = inverted ? String(name.dropFirst()) : name
@@ -60,12 +60,11 @@ enum CircuitRenderer {
                 bar.stroke()
             }
         }
-        let ys = CircuitGeometry.spread
-        for (name, y) in zip(b.left, ys(b.left.count)) where b.clock.map({ b.left[$0] != name }) ?? true {
+        for (name, y) in zip(b.left, b.sideOffsets(b.left.count)) where b.clock.map({ b.left[$0] != name }) ?? true {
             text(name, at: CGPoint(x: -inner, y: y), size: 8)
         }
-        for (name, y) in zip(b.right, ys(b.right.count)) { text(name, at: CGPoint(x: inner, y: y), size: 8) }
-        for (name, x) in zip(b.bottom, ys(b.bottom.count)) { text(name, at: CGPoint(x: x, y: b.height / 2 - 7), size: 8) }
+        for (name, y) in zip(b.right, b.sideOffsets(b.right.count)) { text(name, at: CGPoint(x: inner, y: y), size: 8) }
+        for (name, x) in zip(b.bottom, CircuitGeometry.spread(b.bottom.count)) { text(name, at: CGPoint(x: x, y: b.bottomEdge(at: x) - 7), size: 8) }
         text(b.title, at: CGPoint(x: 0, y: -b.height / 2 - 7), size: 9, bold: true)
     }
 
@@ -195,13 +194,23 @@ enum CircuitRenderer {
 
     /// 方塊元件：長方形本體、每支接腳的引線；時脈腳畫三角形
     private static func blockSymbol(_ b: CircuitBlockLayout, _ s: UIBezierPath) {
-        let w = CircuitBlockLayout.halfWidth, h = b.height / 2, x = CircuitBlockLayout.pinX
-        s.append(UIBezierPath(rect: CGRect(x: -w, y: -h, width: w * 2, height: h * 2)))
-        for y in CircuitGeometry.spread(b.left.count) { line(s, pt(-x, y), pt(-w, y)) }
-        for y in CircuitGeometry.spread(b.right.count) { line(s, pt(w, y), pt(x, y)) }
-        for px in CircuitGeometry.spread(b.bottom.count) { line(s, pt(px, h), pt(px, h + 20)) }
+        let w = b.halfWidth, h = b.height / 2, x = b.pinX
+        if b.trapezoid {
+            // 多工器：左邊寬、右邊窄的梯形
+            let k = b.trapezoidInset
+            s.move(to: pt(-w, -h))
+            s.addLine(to: pt(w, -h + k))
+            s.addLine(to: pt(w, h - k))
+            s.addLine(to: pt(-w, h))
+            s.close()
+        } else {
+            s.append(UIBezierPath(rect: CGRect(x: -w, y: -h, width: w * 2, height: h * 2)))
+        }
+        for y in b.sideOffsets(b.left.count) { line(s, pt(-x, y), pt(-w, y)) }
+        for y in b.sideOffsets(b.right.count) { line(s, pt(w, y), pt(x, y)) }
+        for px in CircuitGeometry.spread(b.bottom.count) { line(s, pt(px, b.bottomEdge(at: px)), pt(px, h + 20)) }
         if let k = b.clock {
-            let y = CircuitGeometry.spread(b.left.count)[k]
+            let y = b.sideOffsets(b.left.count)[k]
             s.move(to: pt(-w, y - 6))
             s.addLine(to: pt(-w + 9, y))
             s.addLine(to: pt(-w, y + 6))

@@ -79,8 +79,9 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
             stack.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -6),
         ])
         // 內容不高時，面板就縮到內容高度
+        // 優先權要低於內容的抗壓縮：高度不夠時讓元件庫捲動，而不是把分類標題擠扁
         let fit = heightAnchor.constraint(equalTo: stack.heightAnchor, constant: 44)
-        fit.priority = .defaultHigh
+        fit.priority = .defaultLow
         fit.isActive = true
 
         // 選取、接線
@@ -119,16 +120,15 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
     /// 分類標題列：點一下展開或收起底下的元件
     private func sectionHeader(_ name: String, body: UIView) -> UIButton {
         var c = UIButton.Configuration.plain()
-        c.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 6, bottom: 6, trailing: 6)
-        c.baseForegroundColor = .label
-        c.background.backgroundColor = UIColor.secondarySystemBackground
-        c.background.cornerRadius = 6
+        c.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 4, bottom: 4, trailing: 4)
+        c.baseForegroundColor = .tertiaryLabel
         let b = UIButton(configuration: c)
         b.contentHorizontalAlignment = .leading
+        b.setContentCompressionResistancePriority(.required, for: .vertical)
         func refresh() {
             var cfg = b.configuration ?? .plain()
             var t = AttributedString(name)
-            t.font = .systemFont(ofSize: 12, weight: .semibold)
+            t.font = .systemFont(ofSize: 11, weight: .semibold)
             cfg.attributedTitle = t
             cfg.image = UIImage(systemName: body.isHidden ? "chevron.right" : "chevron.down",
                                 withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold))

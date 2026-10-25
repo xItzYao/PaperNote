@@ -132,25 +132,41 @@ struct CircuitBlockLayout: Equatable {
     /// 左邊第幾支腳是時脈（畫三角形）
     var clock: Int?
 
-    /// 本體高度（左右兩邊較多的那邊，每支腳 20）
-    var height: CGFloat { CGFloat(max(left.count, right.count, 2)) * 20 + 20 }
-    static let halfWidth: CGFloat = 40
-    static let pinX: CGFloat = 60
+    /// 本體寬度的一半、接腳的 x、左右接腳的間距（正反器、閂鎖用窄高的小方塊）
+    var halfWidth: CGFloat = 40
+    var pinX: CGFloat = 60
+    var spacing: CGFloat = 20
+    /// 多工器：畫成梯形（左邊寬、右邊窄）
+    var trapezoid = false
+
+    /// 梯形右邊比左邊每側縮進多少
+    var trapezoidInset: CGFloat { trapezoid ? min(height / 2 * 0.4, 40) : 0 }
+
+    /// 下緣在 x 處的 y（梯形的下緣是斜的）
+    func bottomEdge(at x: CGFloat) -> CGFloat { height / 2 - trapezoidInset * (x + halfWidth) / (2 * halfWidth) }
+
+    /// 本體高度（依左右兩邊較多的那邊）
+    var height: CGFloat { CGFloat(max(left.count, right.count, 2)) * spacing + (spacing >= 40 ? 0 : 20) }
+
+    /// 左右接腳的 y
+    func sideOffsets(_ n: Int) -> [CGFloat] { CircuitGeometry.spread(n, spacing: spacing) }
 }
 
 enum CircuitGeometry {
     static func blockLayout(_ c: CircuitComponent) -> CircuitBlockLayout? {
         switch c.part {
         case .dFlipFlop:
-            return CircuitBlockLayout(title: "D FF", left: ["D", "CLK"], bottom: [], right: ["Q", "~Q"], clock: 1)
+            return CircuitBlockLayout(title: "D FF", left: ["D", "CLK"], bottom: [], right: ["Q", "~Q"], clock: 1,
+                                      halfWidth: 20, pinX: 30, spacing: 40)
         case .dLatch:
-            return CircuitBlockLayout(title: "D Latch", left: ["D", "EN"], bottom: [], right: ["Q", "~Q"], clock: nil)
+            return CircuitBlockLayout(title: "D Latch", left: ["D", "EN"], bottom: [], right: ["Q", "~Q"], clock: nil,
+                                      halfWidth: 20, pinX: 30, spacing: 40)
         case .mux:
             let n = min(max(c.inputs, 2), 16)
             var k = 0
             while (1 << k) < n { k += 1 }
             return CircuitBlockLayout(title: "MUX", left: (0..<n).map { "I\($0)" }, bottom: (0..<k).map { "S\($0)" },
-                                      right: ["Y"], clock: nil)
+                                      right: ["Y"], clock: nil, trapezoid: true)
         case .decoder:
             let n = min(max(c.inputs, 1), 4)
             return CircuitBlockLayout(title: "DEC", left: (0..<n).map { "A\($0)" }, bottom: [],
@@ -164,17 +180,17 @@ enum CircuitGeometry {
         }
     }
 
-    /// 一排接腳的位置：以 0 為中心、間隔 20（都落在格點上）
-    static func spread(_ n: Int) -> [CGFloat] {
-        (0..<n).map { (CGFloat($0) - CGFloat(n - 1) / 2) * 20 }
+    /// 一排接腳的位置：以 0 為中心、間隔 spacing（20 的倍數，都落在格點上）
+    static func spread(_ n: Int, spacing: CGFloat = 20) -> [CGFloat] {
+        (0..<n).map { (CGFloat($0) - CGFloat(n - 1) / 2) * spacing }
     }
 
     /// 方塊元件的接腳（順序：左、下、右）
     static func blockPins(_ b: CircuitBlockLayout) -> [CGPoint] {
-        let x = CircuitBlockLayout.pinX
-        return spread(b.left.count).map { CGPoint(x: -x, y: $0) }
+        let x = b.pinX
+        return b.sideOffsets(b.left.count).map { CGPoint(x: -x, y: $0) }
             + spread(b.bottom.count).map { CGPoint(x: $0, y: b.height / 2 + 20) }
-            + spread(b.right.count).map { CGPoint(x: x, y: $0) }
+            + b.sideOffsets(b.right.count).map { CGPoint(x: x, y: $0) }
     }
 
     /// 每支接腳的名字（改大小時，接在同名接腳上的導線跟著走）
@@ -227,7 +243,7 @@ enum CircuitGeometry {
             // 上方留給標題，下方留給選擇線
             let top = -b.height / 2 - 14
             let bottom = b.height / 2 + (b.bottom.isEmpty ? 0 : 20)
-            return CGRect(x: -CircuitBlockLayout.pinX, y: top, width: CircuitBlockLayout.pinX * 2, height: bottom - top)
+            return CGRect(x: -b.pinX, y: top, width: b.pinX * 2, height: bottom - top)
         }
         switch c.part {
         case .resistor, .capacitor, .inductor: return CGRect(x: -30, y: -14, width: 60, height: 28)
