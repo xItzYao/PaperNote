@@ -11,3 +11,22 @@ enum TestWindow {
         return w
     }
 }
+
+/// 測試用的觸碰（只用到種類、大小、位置）
+final class FakeTouch: UITouch {
+    private let kind: UITouch.TouchType
+    private let radius: CGFloat
+    private let point: CGPoint
+
+    init(type: UITouch.TouchType, radius: CGFloat = 10, location: CGPoint = .zero) {
+        kind = type
+        self.radius = radius
+        point = location
+        super.init()
+    }
+
+    override var type: UITouch.TouchType { kind }
+    override var majorRadius: CGFloat { radius }
+    override func location(in view: UIView?) -> CGPoint { point }
+    override var view: UIView? { nil }
+}

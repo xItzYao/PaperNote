@@ -142,14 +142,15 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
     func isPalmTouch(_ t: UITouch) -> Bool {
         let mode = settings.palmRejection
         guard mode != "off", t.type == .direct else { return false }
-        // 只擋很大面積的觸碰（整個手掌）；一般手指平放也不會超過
-        if t.majorRadius > 55 { return true }
+        // 實測手指（含用指腹滑）的觸碰半徑有 31、42、52；手掌比這大很多
+        // 只擋很大面積的觸碰（整個手掌）；手指壓得再用力也不會超過
+        if t.majorRadius >= 70 { return true }
         let now = CACurrentMediaTime()
         // 筆尖正在接觸螢幕，或剛離開不到 0.3 秒
         // （超過 3 秒沒收到筆尖移動就不算「正在寫字」，避免狀態卡住讓頁面一直沒反應）
         if pencilDown && now - lastPencilTime < 3 { return true }
-        // 筆剛離開：只擋手掌大小的觸碰。手指（就算用指腹滑）半徑大多在 30 以下，馬上就能捲動頁面
-        guard t.majorRadius >= 40 else { return false }
+        // 筆剛離開：只擋比手指大的觸碰，手指馬上就能捲動頁面
+        guard t.majorRadius >= 60 else { return false }
         if now - lastPencilTime < 0.3 { return true }
         // 剛寫完 1.5 秒內，筆尖附近下方、寫字那一側的觸碰（手掌常壓的位置）
         guard now - lastPencilTime < 1.5, let pp = lastPencilPoint else { return false }

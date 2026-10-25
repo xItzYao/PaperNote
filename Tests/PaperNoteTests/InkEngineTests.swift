@@ -469,16 +469,3 @@ final class InkEngineFlowTests: XCTestCase {
     }
 }
 
-/// 測試用的觸碰（只用到種類、大小、位置）
-private final class FakeTouch: UITouch {
-    private let kind: UITouch.TouchType
-    init(type: UITouch.TouchType) {
-        kind = type
-        super.init()
-    }
-    override var type: UITouch.TouchType { kind }
-    override var majorRadius: CGFloat { 10 }
-    override func location(in view: UIView?) -> CGPoint { .zero }
-    override var view: UIView? { nil }
-}
-
