@@ -186,7 +186,7 @@ final class InkEngineFlowTests: XCTestCase {
         notebookID = meta.id
         let session = try NotebookSession(id: meta.id)
         editor = NotebookViewController(session: session, initialPageID: nil, onClose: {})
-        window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 1366))
+        window = try TestWindow.make()
         window.rootViewController = editor
         window.makeKeyAndVisible()
         editor.view.layoutIfNeeded()
@@ -233,7 +233,9 @@ final class InkEngineFlowTests: XCTestCase {
         let region = editor.pagesContainer.convert(r, to: window)
         let fmt = UIGraphicsImageRendererFormat()
         fmt.scale = window.screen.scale
-        let img = UIGraphicsImageRenderer(size: region.size, format: fmt).image { _ in
+        let img = UIGraphicsImageRenderer(size: region.size, format: fmt).image { rc in
+            UIColor.white.setFill()
+            rc.fill(CGRect(origin: .zero, size: region.size))
             window.drawHierarchy(in: CGRect(origin: CGPoint(x: -region.minX, y: -region.minY), size: window.bounds.size),
                                  afterScreenUpdates: true)
         }
@@ -281,6 +283,7 @@ final class InkEngineFlowTests: XCTestCase {
         }
         spin(1.5)
         let settled = darkness(ofDocRect: area)
+        print("INKDIAG window=\(window.bounds.size) region=\(editor.pagesContainer.convert(area, to: window))")
         print("INKDIAG writing=\(Int(writing)) settled=\(Int(settled)) zoom=\(editor.canvas.zoomScale) scale=\(window.screen.scale)")
         XCTAssertGreaterThan(settled, 0, "筆跡要畫在頁面上")
         XCTAssertEqual(writing / settled, 1, accuracy: 0.12, "寫的時候和放開後要一樣粗")

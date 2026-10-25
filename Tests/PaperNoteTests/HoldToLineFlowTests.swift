@@ -13,7 +13,7 @@ final class HoldToLineFlowTests: XCTestCase {
         notebookID = meta.id
         let session = try NotebookSession(id: meta.id)
         editor = NotebookViewController(session: session, initialPageID: nil, onClose: {})
-        window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 1366))
+        window = try TestWindow.make()
         window.rootViewController = editor
         window.makeKeyAndVisible()
         editor.view.layoutIfNeeded()
