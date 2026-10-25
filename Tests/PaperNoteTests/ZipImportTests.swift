@@ -88,6 +88,22 @@ final class ZipImportTests: XCTestCase {
         XCTAssertTrue(result.skipped.isEmpty, "macOS 的隱藏檔不算")
     }
 
+    /// 同一個 zip 匯入好幾次：新資料夾加上 (2)、(3)，原本的不動
+    func testImportingAgainNumbersTheNewFolder() throws {
+        let zipURL = try goodNotesLikeExport()
+        let names = try (0..<3).map { _ in try XCTUnwrap(store.importZip(from: zipURL, folder: nil).folderName) }
+        let tops = store.folders(in: nil).filter { $0.name.hasPrefix("GoodNotes 匯出") }
+        createdFolders += tops.map(\.id)
+        XCTAssertEqual(names, ["GoodNotes 匯出", "GoodNotes 匯出 (2)", "GoodNotes 匯出 (3)"])
+        XCTAssertEqual(Set(tops.map(\.name)), Set(names))
+        for top in tops {
+            XCTAssertEqual(store.notebooks(in: top.id).map(\.title), ["工程數學"], "每一份都完整")
+        }
+        // 子資料夾在新資料夾裡面，不用編號
+        let second = try XCTUnwrap(tops.first { $0.name == "GoodNotes 匯出 (2)" })
+        XCTAssertEqual(store.folders(in: second.id).map(\.name), ["電子學"])
+    }
+
     func testCorruptEntryIsReportedAndOthersStillImport() throws {
         var bytes = TestZip.stored([("好的.pdf", pdf(pages: 1)), ("壞的.pdf", pdf(pages: 1))])
         // 破壞第二個檔案的內容（CRC 對不上）

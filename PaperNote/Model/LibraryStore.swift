@@ -361,7 +361,14 @@ final class LibraryStore: ObservableObject {
         } else {
             topName = url.deletingPathExtension().lastPathComponent
         }
-        let top = createFolder(name: topName, parent: folder)
+        // 已經有同名資料夾（例如同一個 zip 匯入第二次）：新資料夾加上 (2)、(3)…，一眼看得出是哪一次匯入的
+        let siblings = Set(folders(in: folder).map(\.name))
+        var name = topName, n = 2
+        while siblings.contains(name) {
+            name = "\(topName) (\(n))"
+            n += 1
+        }
+        let top = createFolder(name: name, parent: folder)
         result.folderName = top.name
         var folderIDs: [String: UUID] = ["": top.id]
         func folderID(_ comps: [String]) -> UUID {
