@@ -306,8 +306,6 @@ extension CircuitData {
         }
         return best
     }
-        wires.removeAll { $0.points.count < 2 }
-    }
 
     /// 端點移動後，讓相鄰的轉角跟著移，盡量保持原本的走線
     private static func reroute(_ pts: [CGPoint], movedFirst: Bool) -> [CGPoint] {
