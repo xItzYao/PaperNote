@@ -55,7 +55,7 @@ extension NotebookViewController {
     func handleLassoPan(_ g: UIPanGestureRecognizer, _ p: CGPoint) {
         switch g.state {
         case .began:
-            if let sel = lassoSel, sel.bounds.insetBy(dx: -14 / canvas.zoomScale, dy: -14 / canvas.zoomScale).contains(p) {
+            if lassoSelectionHit(p) {
                 beginLassoMove(at: p)
             } else {
                 clearLassoSelection()
@@ -80,6 +80,13 @@ extension NotebookViewController {
             lassoPoints = []
             overlay.showLassoPath(nil)
         }
+    }
+
+    /// p 在圈選範圍內（含一點邊界）：按下去是移動，不是重新圈選
+    func lassoSelectionHit(_ p: CGPoint) -> Bool {
+        guard let sel = lassoSel else { return false }
+        let m = 14 / canvas.zoomScale
+        return sel.bounds.insetBy(dx: -m, dy: -m).contains(p)
     }
 
     func clearLassoSelection() {

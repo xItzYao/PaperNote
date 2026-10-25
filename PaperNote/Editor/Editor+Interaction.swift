@@ -182,6 +182,8 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         }
         // 截圖、PDF 文字、手繪表格、套索：沒開「用手指書寫」時只接受 Pencil，手指只用來捲動
         if g === toolPan, tool.drawsWithPan {
+            // 套索：手指按在圈選範圍內可以直接拖著移動（範圍外照樣捲動頁面）
+            if tool == .lasso, touch.type == .direct, lassoSelectionHit(touch.location(in: pagesContainer)) { return true }
             return touch.type == .pencil || settings.fingerDrawing
         }
         // 套索模式下 Pencil 或手指點鎖頭都可以
@@ -209,7 +211,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         case .textSelect: handleTextPan(g, p)
         case .select: handleElementPan(g, p)
         case .pageResize: handlePageResizePan(g, p)
-        case .lasso: handleLassoPan(g, p)
+        case .lasso: handleLassoPan(g, g.state == .began ? panTouchDownPoint(g) : p)
         case .tableDraw: handleTableDrawPan(g, p)
         case .circuit: handleCircuitPan(g, p)
         default: break

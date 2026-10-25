@@ -13,6 +13,9 @@ final class TabsViewController: UIViewController {
     private var editors: [UUID: NotebookViewController] = [:]
     private var recent: [UUID] = []
     private let maxLoaded = 4
+    /// 拖曳排序時的插入位置提示
+    private let dropMarker = UIView()
+    private weak var dropHighlighted: UIView?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -41,6 +44,11 @@ final class TabsViewController: UIViewController {
         stack.alignment = .center
         stack.translatesAutoresizingMaskIntoConstraints = false
         scroll.addSubview(stack)
+        // 整條分頁列接受拖曳：放在分頁左右邊緣＝排序，放在分頁中間＝組成群組
+        scroll.addInteraction(UIDropInteraction(delegate: self))
+        dropMarker.backgroundColor = .systemBlue
+        dropMarker.layer.cornerRadius = 1.5
+        dropMarker.isHidden = true
 
         // 安全區頂端也塗上分頁列的底色
         let topFill = UIView()
@@ -173,6 +181,7 @@ final class TabsViewController: UIViewController {
 
     private func rebuildTabs() {
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        hideDropFeedback()
         let s = store.state
         var shownGroups = Set<UUID>()
         var activeChip: UIView?
@@ -226,10 +235,9 @@ final class TabsViewController: UIViewController {
 
         let chip = TabChip(arrangedSubviews: [titleButton, close])
         chip.notebookID = id
-        // 長按出現選單；長按後拖曳到另一個分頁或群組上放開，就會組成／加入群組
+        // 長按出現選單；長按後拖曳：放到別的分頁左右邊緣＝排序，放到分頁或群組中間＝組成／加入群組
         chip.addInteraction(UIContextMenuInteraction(delegate: self))
         chip.addInteraction(UIDragInteraction(delegate: self))
-        chip.addInteraction(UIDropInteraction(delegate: self))
         chip.axis = .horizontal
         chip.alignment = .center
         chip.spacing = 0
@@ -281,7 +289,6 @@ final class TabsViewController: UIViewController {
         wrap.groupID = g.id
         wrap.layer.cornerRadius = 8
         wrap.addInteraction(UIContextMenuInteraction(delegate: self))
-        wrap.addInteraction(UIDropInteraction(delegate: self))
         return wrap
     }
 
@@ -407,43 +414,104 @@ extension TabsViewController: UIContextMenuInteractionDelegate, UIDragInteractio
         session.localDragSession != nil
     }
 
+    /// 放開時會怎樣：加入群組、插到某個分頁前後、或沒有變化
+    private enum TabDrop {
+        case join(TabChip)
+        case insert(anchor: UUID?, after: Bool, markerX: CGFloat)
+        case none
+    }
+
+    private func dropPlan(_ session: UIDropSession) -> TabDrop {
+        guard let dragged = session.localDragSession?.items.first?.localObject as? UUID else { return .none }
+        let chips = stack.arrangedSubviews.compactMap { $0 as? TabChip }
+        guard let first = chips.first, let last = chips.last else { return .none }
+        let x = session.location(in: stack).x
+        let half = stack.spacing / 2
+        if x > last.frame.maxX + half { return .insert(anchor: nil, after: false, markerX: last.frame.maxX + half) }
+        guard let chip = chips.first(where: { x >= $0.frame.minX - half && x <= $0.frame.maxX + half }) ?? (x < first.frame.minX ? first : nil)
+        else { return .none }
+        if chip.notebookID == dragged { return .none }
+        let f = (x - chip.frame.minX) / max(chip.frame.width, 1)
+        let before = chip.frame.minX - half, after = chip.frame.maxX + half
+        if let id = chip.notebookID {
+            if f < 0.3 { return .insert(anchor: id, after: false, markerX: before) }
+            if f > 0.7 { return .insert(anchor: id, after: true, markerX: after) }
+            return .join(chip)
+        }
+        if let gid = chip.groupID, let g = store.group(gid) {
+            let ids = store.state.tabs.filter { $0.groupID == gid }.map(\.notebookID)
+            if f < 0.3, let firstID = ids.first { return .insert(anchor: firstID, after: false, markerX: before) }
+            // 收合的群組：右邊緣放到整個群組後面；展開的群組右邊緊接著群組裡的分頁，所以算加入
+            if g.collapsed, f > 0.7, let lastID = ids.last { return .insert(anchor: lastID, after: true, markerX: after) }
+            return .join(chip)
+        }
+        return .none
+    }
+
     func dropInteraction(_ interaction: UIDropInteraction, sessionDidUpdate session: UIDropSession) -> UIDropProposal {
-        guard let chip = interaction.view as? TabChip,
-              let dragged = session.localDragSession?.items.first?.localObject as? UUID,
-              chip.notebookID != dragged else { return UIDropProposal(operation: .forbidden) }
-        setDropHighlight(chip, true)
+        autoScrollTabs(session)
+        hideDropFeedback()
+        switch dropPlan(session) {
+        case let .join(chip):
+            chip.layer.borderWidth = 2
+            chip.layer.borderColor = UIColor.systemBlue.cgColor
+            dropHighlighted = chip
+        case let .insert(_, _, x):
+            if dropMarker.superview !== stack { stack.addSubview(dropMarker) }
+            dropMarker.frame = CGRect(x: x - 1.5, y: (stack.bounds.height - 28) / 2, width: 3, height: 28)
+            dropMarker.isHidden = false
+        case .none:
+            return UIDropProposal(operation: .cancel)
+        }
         return UIDropProposal(operation: .move)
     }
 
     func dropInteraction(_ interaction: UIDropInteraction, sessionDidExit session: UIDropSession) {
-        if let chip = interaction.view as? TabChip { setDropHighlight(chip, false) }
+        hideDropFeedback()
     }
 
     func dropInteraction(_ interaction: UIDropInteraction, sessionDidEnd session: UIDropSession) {
-        if let chip = interaction.view as? TabChip { setDropHighlight(chip, false) }
+        hideDropFeedback()
     }
 
     func dropInteraction(_ interaction: UIDropInteraction, performDrop session: UIDropSession) {
-        guard let chip = interaction.view as? TabChip,
-              let dragged = session.localDragSession?.items.first?.localObject as? UUID else { return }
-        if let gid = chip.groupID {
-            // 拖到群組上 → 加入群組
-            store.move(dragged, to: gid)
-        } else if let target = chip.notebookID, target != dragged {
-            if let gid = store.state.tabs.first(where: { $0.notebookID == target })?.groupID {
+        guard let dragged = session.localDragSession?.items.first?.localObject as? UUID else { return }
+        switch dropPlan(session) {
+        case let .join(chip):
+            if let gid = chip.groupID {
+                // 拖到群組上 → 加入群組
                 store.move(dragged, to: gid)
-            } else {
-                // 拖到另一個分頁上 → 兩個組成新群組
-                let g = store.createGroup(name: "", with: target)
-                store.move(dragged, to: g.id)
+            } else if let target = chip.notebookID {
+                if let gid = store.state.tabs.first(where: { $0.notebookID == target })?.groupID {
+                    store.move(dragged, to: gid)
+                } else {
+                    // 拖到另一個分頁中間 → 兩個組成新群組
+                    let g = store.createGroup(name: "", with: target)
+                    store.move(dragged, to: g.id)
+                }
             }
+        case let .insert(anchor, after, _):
+            store.reorder(dragged, next: anchor, after: after)
+        case .none:
+            return
         }
         rebuildTabs()
     }
 
-    private func setDropHighlight(_ chip: UIView, _ on: Bool) {
-        chip.layer.borderWidth = on ? 2 : 0
-        chip.layer.borderColor = UIColor.systemBlue.cgColor
+    private func hideDropFeedback() {
+        dropHighlighted?.layer.borderWidth = 0
+        dropHighlighted = nil
+        dropMarker.isHidden = true
+    }
+
+    /// 拖到分頁列左右兩端時自動捲動，才能排到畫面外的位置
+    private func autoScrollTabs(_ session: UIDropSession) {
+        let x = session.location(in: scroll).x - scroll.contentOffset.x
+        let maxX = max(0, scroll.contentSize.width - scroll.bounds.width)
+        var off = scroll.contentOffset.x
+        if x < 36 { off -= 12 } else if x > scroll.bounds.width - 36 { off += 12 }
+        off = min(max(off, 0), maxX)
+        if off != scroll.contentOffset.x { scroll.contentOffset.x = off }
     }
 }
 

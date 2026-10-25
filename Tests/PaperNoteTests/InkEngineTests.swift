@@ -162,6 +162,12 @@ final class InkEngineFlowTests: XCTestCase {
         }
         editor.inkMoved(samples, predicted: [])
         editor.inkEnded(cancelled: false)
+        spin()
+    }
+
+    /// 讓 run loop 跑一下：真的使用時每一筆都是分開的觸控事件，上一步也分開登記
+    private func spin() {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
     }
 
     func testPencilKitIsOffAndInkRecognizerOn() {
@@ -189,6 +195,7 @@ final class InkEngineFlowTests: XCTestCase {
         XCTAssertEqual(editor.pages[0].ink.count, 1)
         editor.undoTapped()
         XCTAssertTrue(editor.pages[0].ink.isEmpty)
+        spin()
         editor.redoTapped()
         XCTAssertEqual(editor.pages[0].ink.count, 1)
     }
@@ -202,8 +209,10 @@ final class InkEngineFlowTests: XCTestCase {
         editor.setTool(.eraser)
         editor.inkEraseUndoRegistered = []
         editor.eraseInk(at: docPoint(150, 200))
+        spin()
         editor.eraseInk(at: docPoint(150, 300))
         XCTAssertTrue(editor.pages[0].ink.isEmpty)
+        spin()
         editor.undoTapped()
         XCTAssertEqual(editor.pages[0].ink.count, 2, "一次擦除一次復原")
     }

@@ -119,6 +119,25 @@ final class TabStore {
         prune(existing: Set(state.tabs.map(\.notebookID)))
     }
 
+    /// 拖曳排序：把 tab 放到 anchor 的前面（after = false）或後面；anchor 為 nil 表示放到最後。
+    /// 放在同一群組的兩個分頁中間就加入那個群組；放在群組的頭尾，原本就在這個群組的留在群組裡，其他的不加入
+    func reorder(_ tab: UUID, next anchor: UUID?, after: Bool) {
+        guard anchor != tab, let from = state.tabs.firstIndex(where: { $0.notebookID == tab }) else { return }
+        var t = state.tabs.remove(at: from)
+        var insertAt = state.tabs.count
+        var groupID: UUID?
+        if let anchor, let ai = state.tabs.firstIndex(where: { $0.notebookID == anchor }) {
+            insertAt = after ? ai + 1 : ai
+            if let g = state.tabs[ai].groupID {
+                let otherSide = after ? state.tabs[safe: ai + 1]?.groupID : state.tabs[safe: ai - 1]?.groupID
+                if otherSide == g || t.groupID == g { groupID = g }
+            }
+        }
+        t.groupID = groupID
+        state.tabs.insert(t, at: insertAt)
+        prune(existing: Set(state.tabs.map(\.notebookID)))
+    }
+
     func toggleCollapsed(_ groupID: UUID) {
         guard let i = state.groups.firstIndex(where: { $0.id == groupID }) else { return }
         state.groups[i].collapsed.toggle()
