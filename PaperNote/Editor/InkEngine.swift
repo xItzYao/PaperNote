@@ -329,7 +329,7 @@ final class LiveInkView: UIView {
 final class PageInkView: UIView {
     private var strokes: [InkStroke] = []
     private var offset: CGPoint = .zero
-    private var hidden: Set<UUID> = []
+    private var hiddenIDs: Set<UUID> = []
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -350,8 +350,8 @@ final class PageInkView: UIView {
 
     /// 套索移動中先藏起來的筆跡
     func setHidden(_ ids: Set<UUID>) {
-        guard ids != hidden else { return }
-        hidden = ids
+        guard ids != hiddenIDs else { return }
+        hiddenIDs = ids
         rebuild()
     }
 
@@ -377,7 +377,7 @@ final class PageInkView: UIView {
         }
         let o = offset
         func pt(_ p: InkPoint) -> CGPoint { CGPoint(x: p.point.x + o.x, y: p.point.y + o.y) }
-        for s in strokes where !hidden.contains(s.id) {
+        for s in strokes where !hiddenIDs.contains(s.id) {
             guard let first = s.points.first else { continue }
             if s.points.allSatisfy({ $0.w == first.w }) {
                 let p = path(s.colorHex, first.width)
