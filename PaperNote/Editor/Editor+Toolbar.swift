@@ -325,8 +325,13 @@ extension NotebookViewController {
             }, for: .valueChanged)
             subBarStack.addArrangedSubview(kind)
             if settings.pixelEraser {
-                let sizes: [CGFloat] = [8, 16, 32, 60]
-                let size = UISegmentedControl(items: ["細", "中", "粗", "特粗"])
+                // 三個大小：小圓、中圓、大圓
+                let sizes = EditorSettings.eraserSizes
+                let icons = [6, 10, 15].map { pt -> UIImage in
+                    UIImage(systemName: "circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: CGFloat(pt)))!
+                }
+                let size = UISegmentedControl(items: icons)
+                for (i, name) in ["小", "中", "大"].enumerated() { icons[i].accessibilityLabel = "橡皮擦\(name)" }
                 size.selectedSegmentIndex = sizes.firstIndex(of: settings.eraserWidth) ?? 1
                 size.addAction(UIAction { [weak self, weak size] _ in
                     guard let i = size?.selectedSegmentIndex, sizes.indices.contains(i) else { return }

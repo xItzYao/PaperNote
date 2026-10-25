@@ -67,8 +67,13 @@ final class EditorSettings {
         get { bool("pixelEraser", false) }
         set { d.set(newValue, forKey: "pixelEraser") }
     }
+    /// 局部擦除的三個大小（舊版有四個，存的值取最接近的）
+    static let eraserSizes: [CGFloat] = [8, 16, 32]
     var eraserWidth: CGFloat {
-        get { d.object(forKey: "eraserWidth") as? CGFloat ?? 16 }
+        get {
+            let v = d.object(forKey: "eraserWidth") as? CGFloat ?? 16
+            return Self.eraserSizes.min { abs($0 - v) < abs($1 - v) } ?? 16
+        }
         set { d.set(newValue, forKey: "eraserWidth") }
     }
     /// 畫線停住變直線／圖形

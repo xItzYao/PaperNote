@@ -359,11 +359,16 @@ extension NotebookViewController {
 
     // MARK: 橡皮擦擦掉螢光標示
 
+    /// 橡皮擦的半徑（文件座標）。大小是螢幕上的大小（和 PencilKit 橡皮擦的圓圈一樣），放大頁面時擦到的範圍跟著變小
+    var eraserRadius: CGFloat {
+        (settings.pixelEraser ? settings.eraserWidth / 2 : 4) / canvas.zoomScale
+    }
+
     func eraseHighlights(at p: CGPoint) {
         guard tool == .eraser, let i = pageIndex(containing: p) else { return }
         let o = contentOrigin(i)
         let local = CGPoint(x: p.x - o.x, y: p.y - o.y)
-        let radius = settings.pixelEraser ? settings.eraserWidth / 2 : 4
+        let radius = eraserRadius
         func hit(_ r: CGRect) -> Bool { r.insetBy(dx: -radius, dy: -radius).contains(local) }
         guard pages[i].highlights.contains(where: { $0.rects.contains(where: hit) }) else { return }
         let pixel = settings.pixelEraser

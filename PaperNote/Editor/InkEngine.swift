@@ -258,15 +258,15 @@ final class InkCaptureRecognizer: UIGestureRecognizer {
 
 // MARK: - 寫的時候的筆跡（螢幕座標、原生解析度）
 
-/// 寫的時候直接畫在螢幕上；放開後先留著一下，等頁面那層（CATiledLayer，非同步）畫好才拿掉，避免閃一下
+/// 寫的時候直接畫在螢幕上。放開後留到頁面那層（CATiledLayer，在背景畫）真的畫好這一筆才拿掉：
+/// 太早拿掉會閃一下，太晚拿掉兩層疊在一起，細線看起來會變粗
 final class LiveInkView: UIView {
     typealias Run = (points: [(CGPoint, CGFloat)], color: UIColor)
     /// 螢幕座標的點與線寬
     private(set) var points: [(CGPoint, CGFloat)] = []
     private var color: UIColor = .black
     /// 已經存進頁面、等頁面畫好的筆跡
-    private var finished: [Run] = []
-    private var clearFinishedWork: DispatchWorkItem?
+    private var finished: [UUID: Run] = [:]
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -307,27 +307,26 @@ final class LiveInkView: UIView {
         setNeedsDisplay(old.union(rect(points[max(0, i - 1)...min(points.count - 1, i + 1)])))
     }
 
-    /// 這一筆已經存進頁面：先留在畫面上，過一下再拿掉
-    func finish() {
-        if !points.isEmpty { finished.append((points, color)) }
+    /// 這一筆已經存進頁面：留在畫面上，等頁面畫好後用 remove 拿掉（頁面一直沒畫到，例如畫到頁面外，1 秒後拿掉）
+    func finish(id: UUID) {
+        if !points.isEmpty { finished[id] = (points, color) }
         points = []
-        clearFinishedWork?.cancel()
-        let w = DispatchWorkItem { [weak self] in self?.clearFinished() }
-        clearFinishedWork = w
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: w)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.remove([id]) }
+    }
+
+    func remove(_ ids: [UUID]) {
+        let dirty = ids.compactMap { finished.removeValue(forKey: $0) }.reduce(CGRect.null) { $0.union(rect($1.points)) }
+        if !dirty.isNull { setNeedsDisplay(dirty) }
     }
 
     /// 拿掉已經存進頁面的筆跡（捲動、縮放時馬上拿掉，否則會和頁面錯開）
     func clearFinished() {
-        guard !finished.isEmpty else { return }
-        let dirty = finished.reduce(CGRect.null) { $0.union(rect($1.points)) }
-        finished = []
-        setNeedsDisplay(dirty)
+        remove(Array(finished.keys))
     }
 
     func clear() {
         points = []
-        finished = []
+        finished = [:]
         setNeedsDisplay()
     }
 
@@ -335,7 +334,7 @@ final class LiveInkView: UIView {
         guard let ctx = UIGraphicsGetCurrentContext() else { return }
         ctx.setLineCap(.round)
         ctx.setLineJoin(.round)
-        for run in finished { draw(run.points, run.color, in: ctx, rect: rect) }
+        for run in finished.values { draw(run.points, run.color, in: ctx, rect: rect) }
         if !points.isEmpty { draw(points, color, in: ctx, rect: rect) }
     }
 
@@ -370,13 +369,20 @@ final class LiveInkView: UIView {
 
 // MARK: - 頁面上的筆跡（CATiledLayer：放大也清晰）
 
+/// 畫好的區塊直接出現，不淡入（淡入的那一下筆跡會變淡）
+final class InkTiledLayer: CATiledLayer {
+    override class func fadeDuration() -> CFTimeInterval { 0 }
+}
+
 final class PageInkView: UIView {
-    override class var layerClass: AnyClass { FastTiledLayer.self }
+    override class var layerClass: AnyClass { InkTiledLayer.self }
 
     private let lock = NSLock()
     private var _strokes: [InkStroke] = []
     private var _offset: CGPoint = .zero
     private var _hidden: Set<UUID> = []
+    /// 等著被畫出來的筆跡：還沒畫到的點（這個 view 的座標）、全部畫好後要做的事
+    private var _awaiting: [UUID: (points: [CGPoint], done: () -> Void)] = [:]
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -407,6 +413,14 @@ final class PageInkView: UIView {
         setNeedsDisplay(dirty.offsetBy(dx: offset.x, dy: offset.y))
     }
 
+    /// 這一筆（頁面內容座標）所在的區塊都畫好後呼叫 done（在主執行緒）
+    func whenDrawn(_ stroke: InkStroke, _ done: @escaping () -> Void) {
+        lock.lock()
+        let o = _offset
+        _awaiting[stroke.id] = (stroke.points.map { CGPoint(x: $0.point.x + o.x, y: $0.point.y + o.y) }, done)
+        lock.unlock()
+    }
+
     /// 套索移動中先藏起來的筆跡
     func setHidden(_ ids: Set<UUID>) {
         lock.lock()
@@ -421,9 +435,26 @@ final class PageInkView: UIView {
         lock.lock()
         let strokes = _strokes, o = _offset, hidden = _hidden
         lock.unlock()
-        guard !strokes.isEmpty else { return }
-        ctx.translateBy(x: o.x, y: o.y)
-        InkRenderer.draw(strokes, in: ctx, hidden: hidden, clip: rect.offsetBy(dx: -o.x, dy: -o.y))
+        if !strokes.isEmpty {
+            ctx.saveGState()
+            ctx.translateBy(x: o.x, y: o.y)
+            InkRenderer.draw(strokes, in: ctx, hidden: hidden, clip: rect.offsetBy(dx: -o.x, dy: -o.y))
+            ctx.restoreGState()
+        }
+        // 這一塊畫好了：等著的筆跡在這一塊的點都算畫出來了
+        lock.lock()
+        var done: [() -> Void] = []
+        for (id, item) in _awaiting {
+            let left = item.points.filter { !rect.contains($0) }
+            if left.isEmpty {
+                done.append(item.done)
+                _awaiting[id] = nil
+            } else if left.count != item.points.count {
+                _awaiting[id] = (left, item.done)
+            }
+        }
+        lock.unlock()
+        if !done.isEmpty { DispatchQueue.main.async { done.forEach { $0() } } }
     }
 }
 
@@ -516,8 +547,10 @@ extension NotebookViewController {
         guard pages.indices.contains(pi) else { liveInkView.clear(); return }
         let o = contentOrigin(pi)
         let stroke = InkGeometry.offset(InkStroke(colorHex: d.colorHex, points: d.points), by: CGPoint(x: -o.x, y: -o.y))
+        // 寫的時候的筆跡留到頁面那層畫好這一筆才拿掉
+        liveInkView.finish(id: stroke.id)
+        pageViews[pages[pi].id]?.inkView.whenDrawn(stroke) { [weak self] in self?.liveInkView.remove([stroke.id]) }
         updatePage(pi) { $0.ink.append(stroke) }
-        liveInkView.finish()
         DebugLog.add("custom ink end points=\(d.points.count) cancelled=\(cancelled) pkStrokes=\(canvas.drawing.strokes.count)")
     }
 
@@ -526,8 +559,7 @@ extension NotebookViewController {
         guard tool == .eraser, let i = pageIndex(containing: p), !pages[i].ink.isEmpty else { return }
         let o = contentOrigin(i)
         let local = CGPoint(x: p.x - o.x, y: p.y - o.y)
-        let radius = settings.pixelEraser ? settings.eraserWidth / 2 : 4
-        guard let result = InkGeometry.erase(pages[i].ink, at: local, radius: radius, partial: settings.pixelEraser) else { return }
+        guard let result = InkGeometry.erase(pages[i].ink, at: local, radius: eraserRadius, partial: settings.pixelEraser) else { return }
         let undoable = !inkEraseUndoRegistered.contains(pages[i].id)
         inkEraseUndoRegistered.insert(pages[i].id)
         updatePage(i, undoable: undoable) { $0.ink = result }
