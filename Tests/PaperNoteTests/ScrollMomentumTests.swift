@@ -28,11 +28,17 @@ final class ScrollMomentumTests: XCTestCase {
 
     private func spin(_ s: TimeInterval) { RunLoop.main.run(until: Date().addingTimeInterval(s)) }
 
-    func testPencilDownStopsCoasting() {
+    /// 開始動畫捲動，等到真的開始動就回來（量的時候動畫還在很前段，不受 CI 快慢影響）
+    private func startCoasting() -> CGFloat {
         scroll.setContentOffset(CGPoint(x: 0, y: 40_000), animated: true)
-        spin(0.1)
-        let atPencilDown = scroll.contentOffset.y
+        for _ in 0..<60 where scroll.contentOffset.y <= 0 { spin(1.0 / 120) }
+        return scroll.contentOffset.y
+    }
+
+    func testPencilDownStopsCoasting() {
+        let atPencilDown = startCoasting()
         XCTAssertGreaterThan(atPencilDown, 0, "測試前提：頁面在捲動")
+        XCTAssertLessThan(atPencilDown, 39_000, "測試前提：還沒捲到底")
         scroll.stopMomentum()
         spin(0.4)
         XCTAssertEqual(scroll.contentOffset.y, atPencilDown, accuracy: 0.5, "下筆後頁面要停住")
@@ -40,10 +46,8 @@ final class ScrollMomentumTests: XCTestCase {
 
     /// 確認這個測試真的量得到「還在動」：不停住的話頁面會繼續捲
     func testCoastingKeepsMovingWithoutStop() {
-        scroll.setContentOffset(CGPoint(x: 0, y: 40_000), animated: true)
-        spin(0.1)
-        let y = scroll.contentOffset.y
-        spin(0.2)
+        let y = startCoasting()
+        spin(0.05)
         XCTAssertGreaterThan(scroll.contentOffset.y - y, 50)
     }
 
