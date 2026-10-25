@@ -33,8 +33,15 @@ final class InkEngineTests: XCTestCase {
 
     /// 每寫一筆整頁的筆跡路徑都會重建：一整頁密密麻麻的字也要夠快
     func testPageInkRebuildIsFastForAFullPage() {
-        let strokes = (0..<1500).map { i in
-            stroke((0..<40).map { (CGFloat($0) * 0.5 + CGFloat(i % 30) * 20, CGFloat(i / 30) * 16 + sin(CGFloat($0) / 3) * 4) })
+        var strokes: [InkStroke] = []
+        for i in 0..<1500 {
+            let left = CGFloat(i % 30) * 20, top = CGFloat(i / 30) * 16
+            var pts: [(CGFloat, CGFloat)] = []
+            for k in 0..<40 {
+                let t = CGFloat(k)
+                pts.append((left + t * 0.5, top + sin(t / 3) * 4))
+            }
+            strokes.append(stroke(pts))
         }
         let v = PageInkView(frame: CGRect(x: 0, y: 0, width: 600, height: 850))
         let t = CACurrentMediaTime()
