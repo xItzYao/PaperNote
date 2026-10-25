@@ -128,6 +128,48 @@ final class InkEngineTests: XCTestCase {
         XCTAssertEqual(moved.id, s.id)
         XCTAssertEqual(moved.points.map(\.point), [CGPoint(x: 3, y: -2), CGPoint(x: 13, y: 3)])
     }
+    /// 回報的問題：細線寫的時候比較粗，放開後才變回原本的細度（寫的時候和頁面上畫法不同）
+    func testLiveStrokeLooksLikeTheCommittedStroke() {
+        let pts = (0...150).map { CGPoint(x: 10 + CGFloat($0), y: 50 + sin(CGFloat($0) / 9) * 20) }
+        let width: CGFloat = 0.6
+        let live = LiveInkView(frame: CGRect(x: 0, y: 0, width: 200, height: 100))
+        live.begin(pts[0], width: width, color: .black)
+        live.add(pts.dropFirst().map { ($0, width) })
+        let fmt = UIGraphicsImageRendererFormat()
+        fmt.scale = 2
+        fmt.opaque = false
+        let liveImg = UIGraphicsImageRenderer(size: live.bounds.size, format: fmt).image { _ in live.draw(live.bounds) }
+        let pageImg = UIGraphicsImageRenderer(size: live.bounds.size, format: fmt).image { rc in
+            InkRenderer.draw([InkStroke(colorHex: "#000000FF", points: pts.map { InkPoint($0, width: width) })], in: rc.cgContext)
+        }
+        let a = inkAmount(liveImg), b = inkAmount(pageImg)
+        XCTAssertGreaterThan(b, 0)
+        XCTAssertEqual(a / b, 1, accuracy: 0.1, "寫的時候的筆跡要和存進頁面後一樣粗")
+    }
+
+    /// 整張圖的墨水量（alpha 加總）
+    private func inkAmount(_ img: UIImage) -> Double {
+        guard let cg = img.cgImage else { return 0 }
+        let w = cg.width, h = cg.height
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return stride(from: 3, to: px.count, by: 4).reduce(0.0) { $0 + Double(px[$1]) }
+    }
+
+    /// 回報的問題：橡皮擦擦掉的範圍比圓圈大很多。擦一次最多只能少掉圓圈直徑那麼長的線
+    func testPixelEraserRemovesNoMoreThanTheCircle() {
+        // 寫得快：點和點之間 30pt
+        let line = stroke((0...10).map { (CGFloat($0) * 30, 0) }, width: 2)
+        let r: CGFloat = 8
+        let out = InkGeometry.erase([line], at: CGPoint(x: 150, y: 0), radius: r, partial: true)!
+        func length(_ s: InkStroke) -> CGFloat {
+            zip(s.points, s.points.dropFirst()).reduce(0) { $0 + hypot($1.1.point.x - $1.0.point.x, $1.1.point.y - $1.0.point.y) }
+        }
+        let removed = length(line) - out.reduce(0) { $0 + length($1) }
+        XCTAssertEqual(removed, r * 2, accuracy: 0.01)
+    }
 }
 
 /// 在真的筆記本裡用自製筆刷寫一筆：存進頁面、PencilKit 不受影響、可以復原、可以擦掉
@@ -279,4 +321,27 @@ final class InkEngineFlowTests: XCTestCase {
         ctx.draw(cg, in: CGRect(x: -x, y: y - cg.height + 1, width: cg.width, height: cg.height))
         XCTAssertLessThan(Int(min(px[0], px[1], px[2])), 200, "匯出／縮圖要畫出筆跡（白紙上應該不是白色）")
     }
+
+    /// 回報的問題：自製筆刷開著時手指不能捲動頁面（縮放可以）。手指的觸碰不能交給自製筆刷，否則捲動會一直等它
+    func testFingerTouchGoesToScrollNotInk() {
+        XCTAssertTrue(editor.customInkActive)
+        let finger = FakeTouch(type: .direct), pencil = FakeTouch(type: .pencil)
+        XCTAssertFalse(editor.gestureRecognizer(editor.inkRecognizer, shouldReceive: finger), "手指要拿來捲動")
+        XCTAssertTrue(editor.gestureRecognizer(editor.inkRecognizer, shouldReceive: pencil))
+        // 只有手指沒有交給自製筆刷時，捲動等它失敗這條規則才不會卡住
+        XCTAssertTrue(editor.gestureRecognizer(editor.inkRecognizer, shouldBeRequiredToFailBy: editor.canvas.panGestureRecognizer))
+    }
+}
+
+/// 測試用的觸碰（只用到種類、大小、位置）
+private final class FakeTouch: UITouch {
+    private let kind: UITouch.TouchType
+    init(type: UITouch.TouchType) {
+        kind = type
+        super.init()
+    }
+    override var type: UITouch.TouchType { kind }
+    override var majorRadius: CGFloat { 10 }
+    override func location(in view: UIView?) -> CGPoint { .zero }
+    override var view: UIView? { nil }
 }
