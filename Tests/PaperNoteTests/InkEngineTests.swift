@@ -293,6 +293,82 @@ final class InkEngineFlowTests: XCTestCase {
     }
 
     /// 回報的問題：寫完字後筆跡會稍微往右偏。放開前（寫的時候那層）和放開後（頁面那層）筆跡在螢幕上要在同一個位置
+    /// 診斷（暫時）：同一筆用不同方式畫在頁面上，和寫的時候、理論位置比較重心
+    func testDiagRenderingVariants() {
+        let saved = BrushStore.shared.current
+        var p = saved
+        p.style = .pen
+        p.width = 1
+        p.colorHex = "#000000FF"
+        BrushStore.shared.update(p)
+        defer { BrushStore.shared.update(saved) }
+        for zoom in [1.0, 1.37, 2.0, 3.0] {
+            editor.canvas.zoomScale = editor.fitZoom * CGFloat(zoom)
+            editor.setVisibleDocOrigin(docPoint(100, 200))
+            spin(0.3)
+            let a = docPoint(150, 250), b = docPoint(150, 330), c = docPoint(230, 330)
+            let docPts = (0...40).map { i -> CGPoint in
+                let t = CGFloat(i) / 40
+                return t <= 0.5 ? CGPoint(x: a.x, y: a.y + (b.y - a.y) * t * 2) : CGPoint(x: b.x + (c.x - b.x) * (t - 0.5) * 2, y: b.y)
+            }
+            let area = CGRect(x: a.x - 15, y: a.y - 15, width: c.x - a.x + 30, height: c.y - a.y + 30)
+            let region = editor.pagesContainer.convert(area, to: window)
+            let sc = Double(window.screen.scale)
+            func dev(_ q: CGPoint) -> (Double, Double) {
+                let w = editor.pagesContainer.convert(q, to: window)
+                return (Double(w.x - region.minX) * sc, Double(w.y - region.minY) * sc)
+            }
+            let m1 = dev(CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)), m2 = dev(CGPoint(x: (b.x + c.x) / 2, y: (b.y + c.y) / 2))
+            let expected = ((m1.0 + m2.0) / 2, (m1.1 + m2.1) / 2)
+
+            editor.inkBegan(.init(point: docPts[0], force: 0.5))
+            editor.inkMoved(docPts.dropFirst().map { .init(point: $0, force: 0.5) })
+            spin(0.1)
+            let live = inkOnScreen(area)
+            editor.inkEnded(cancelled: false)
+            spin(1.5)
+            let tiled = inkOnScreen(area)
+
+            // 換成其他畫法：先把頁面那層藏起來
+            editor.pageViews.values.forEach { $0.inkView.isHidden = true }
+            let shape = CAShapeLayer()
+            let path = UIBezierPath()
+            path.move(to: docPts[0])
+            docPts.dropFirst().forEach { path.addLine(to: $0) }
+            shape.path = path.cgPath
+            shape.lineWidth = 1
+            shape.strokeColor = UIColor.black.cgColor
+            shape.fillColor = nil
+            shape.lineCap = .round
+            shape.lineJoin = .round
+            shape.contentsScale = window.screen.scale
+            editor.pagesContainer.layer.addSublayer(shape)
+            spin(0.2)
+            let shaped = inkOnScreen(area)
+            shape.removeFromSuperlayer()
+
+            let exact = DiagExactView(frame: area)
+            exact.points = docPts.map { CGPoint(x: $0.x - area.minX, y: $0.y - area.minY) }
+            exact.contentScaleFactor = editor.canvas.zoomScale * window.screen.scale
+            editor.pagesContainer.addSubview(exact)
+            spin(0.2)
+            let plain = inkOnScreen(area)
+            exact.removeFromSuperview()
+            editor.pageViews.values.forEach { $0.inkView.isHidden = false }
+
+            func f(_ v: (amount: Double, x: Double, y: Double)) -> String {
+                String(format: "(%.2f, %.2f) dx=%.2f dy=%.2f amt=%.0f", v.x, v.y, v.x - expected.0, v.y - expected.1, v.amount)
+            }
+            print("INKDIAG zoom=\(String(format: "%.3f", editor.canvas.zoomScale)) expected=(\(String(format: "%.2f, %.2f", expected.0, expected.1)))")
+            print("INKDIAG   live  \(f(live))")
+            print("INKDIAG   tiled \(f(tiled))")
+            print("INKDIAG   shape \(f(shaped))")
+            print("INKDIAG   plain \(f(plain))")
+            editor.undoTapped()
+            spin(0.3)
+        }
+    }
+
     func testStrokeStaysInPlaceAfterLift() {
         for zoom in [1.0, 2.0, 1.37] {
             editor.canvas.zoomScale = editor.fitZoom * CGFloat(zoom)
@@ -462,4 +538,26 @@ private final class FakeTouch: UITouch {
     override var majorRadius: CGFloat { 10 }
     override func location(in view: UIView?) -> CGPoint { .zero }
     override var view: UIView? { nil }
+}
+
+/// 診斷用：用螢幕解析度直接畫一條線
+private final class DiagExactView: UIView {
+    var points: [CGPoint] = []
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isOpaque = false
+        backgroundColor = .clear
+        isUserInteractionEnabled = false
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func draw(_ rect: CGRect) {
+        guard let ctx = UIGraphicsGetCurrentContext(), let first = points.first else { return }
+        ctx.setLineCap(.round)
+        ctx.setLineJoin(.round)
+        ctx.setLineWidth(1)
+        ctx.setStrokeColor(UIColor.black.cgColor)
+        ctx.move(to: first)
+        points.dropFirst().forEach { ctx.addLine(to: $0) }
+        ctx.strokePath()
+    }
 }
