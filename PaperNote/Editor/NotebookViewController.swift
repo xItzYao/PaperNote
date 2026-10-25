@@ -215,6 +215,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     /// 停住變直線／圖形（見 HoldToShape.swift）
     lazy var holdToShape = HoldToShapeController(editor: self)
     var editMenu: UIEditMenuInteraction!
+    /// 工具列左邊的筆記本名稱
+    weak var notebookTitleLabel: UILabel?
     var pendingMenu: UIMenu?
 
     // 選取物件
@@ -345,6 +347,29 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     @objc private func appWillResignActive() {
         endTextEditing()
         saveNow()
+    }
+
+    @objc func titleLongPressed(_ g: UILongPressGestureRecognizer) {
+        guard g.state == .began else { return }
+        let alert = UIAlertController(title: "筆記本名稱", message: nil, preferredStyle: .alert)
+        alert.addTextField { [weak self] tf in
+            tf.text = self?.session.title
+            tf.clearButtonMode = .whileEditing
+        }
+        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        alert.addAction(UIAlertAction(title: "儲存", style: .default) { [weak self, weak alert] _ in
+            self?.renameNotebook(to: alert?.textFields?.first?.text ?? "")
+        })
+        present(alert, animated: true)
+    }
+
+    /// 改筆記本名稱（空白的名稱不改）
+    func renameNotebook(to name: String) {
+        let title = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty, title != session.title else { return }
+        LibraryStore.shared.renameNotebook(session.id, to: title)
+        notebookTitleLabel?.text = title
+        NotificationCenter.default.post(name: .notebookRenamed, object: session.id)
     }
 
     @objc func closeTapped() {
@@ -877,11 +902,24 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         }
     }
 
-    func exportPDF(from source: UIView) {
+    /// 匯出：畫面中間跳出小視窗選格式
+    func presentExportChoice(from source: UIView) {
+        let alert = UIAlertController(title: "匯出「\(session.title)」", message: "要匯出成哪一種格式？", preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "PDF（給別人看、列印）", style: .default) { [weak self] _ in
+            self?.export(paperNote: false, from: source)
+        })
+        alert.addAction(UIAlertAction(title: "PaperNote（可以繼續編輯筆跡）", style: .default) { [weak self] _ in
+            self?.export(paperNote: true, from: source)
+        })
+        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        present(alert, animated: true)
+    }
+
+    func export(paperNote: Bool, from source: UIView) {
         endTextEditing()
         saveNow()
         do {
-            let url = try NotebookExporter.exportPDF(session: session)
+            let url = paperNote ? try NotebookExporter.exportPaperNote(session: session) : try NotebookExporter.exportPDF(session: session)
             let vc = UIActivityViewController(activityItems: [url], applicationActivities: nil)
             vc.popoverPresentationController?.sourceView = source
             vc.popoverPresentationController?.sourceRect = source.bounds

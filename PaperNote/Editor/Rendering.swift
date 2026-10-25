@@ -278,6 +278,29 @@ enum ElementRenderer {
 }
 
 enum NotebookExporter {
+    /// 匯出成 PaperNote 筆記本檔（.papernote）：筆跡、PDF、圖片都在，匯入後可以繼續編輯
+    static func exportPaperNote(session: NotebookSession) throws -> URL {
+        session.save()
+        let meta = LibraryStore.shared.notebook(session.id)
+        var zip = ZipWriter()
+        let manifest = PaperNoteManifest(title: session.title, coverHex: meta?.coverHex ?? "#2654A0FF")
+        try zip.add("papernote.json", JSONEncoder.app.encode(manifest))
+        let base = session.directory.resolvingSymlinksInPath().path + "/"
+        let files = FileManager.default.enumerator(at: session.directory, includingPropertiesForKeys: [.isRegularFileKey])
+        while let url = files?.nextObject() as? URL {
+            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+            let rel = String(url.resolvingSymlinksInPath().path.dropFirst(base.count))
+            // 縮圖打開時會重畫，不用帶
+            guard !rel.hasPrefix("thumbs/") else { continue }
+            try zip.add("notebook/" + rel, Data(contentsOf: url, options: .alwaysMapped))
+        }
+        let safe = session.title.replacingOccurrences(of: "/", with: "-")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(safe).papernote")
+        try? FileManager.default.removeItem(at: url)
+        try zip.finish().write(to: url)
+        return url
+    }
+
     static func exportPDF(session: NotebookSession) throws -> URL {
         let safe = session.title.replacingOccurrences(of: "/", with: "-")
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(safe).pdf")

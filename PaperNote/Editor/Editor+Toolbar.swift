@@ -61,14 +61,17 @@ extension NotebookViewController {
             topFill.bottomAnchor.constraint(equalTo: topBar.topAnchor),
         ])
 
-        // 左：返回＋標題
-        let back = makeButton(symbol: "chevron.left", title: "資料庫", action: #selector(closeTapped))
+        // 左：標題（回資料庫用分頁列最左邊的「<」）；長按看完整名稱、改名
         let titleLabel = UILabel()
         titleLabel.text = session.title
         titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let left = UIStackView(arrangedSubviews: [back, titleLabel])
+        titleLabel.isUserInteractionEnabled = true
+        titleLabel.accessibilityHint = "長按可以看完整名稱、改名"
+        titleLabel.addGestureRecognizer(UILongPressGestureRecognizer(target: self, action: #selector(titleLongPressed(_:))))
+        notebookTitleLabel = titleLabel
+        let left = UIStackView(arrangedSubviews: [titleLabel])
         left.spacing = 6
         left.alignment = .center
 
@@ -804,9 +807,9 @@ extension NotebookViewController {
             UIAction(title: "管理常用筆刷…", image: UIImage(systemName: "swatchpalette")) { [weak self] _ in
                 self?.presentBrushManager()
             },
-            UIAction(title: "匯出 PDF…", image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
+            UIAction(title: "匯出…", image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
                 guard let self else { return }
-                self.exportPDF(from: self.settingsButton)
+                self.presentExportChoice(from: self.settingsButton)
             },
             UIAction(title: "清除畫面上所有貼圖", image: UIImage(systemName: "pin.slash"), attributes: .destructive) { [weak self] _ in
                 PinStore.shared.removeAll()

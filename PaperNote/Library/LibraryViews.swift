@@ -52,6 +52,9 @@ struct RootView: View {
                     open(meta.id, nil)
                 case "zip":
                     importSummary = try store.importZip(from: url, folder: path.last?.id).summary
+                case "papernote":
+                    let meta = try store.importPaperNote(from: url, folder: path.last?.id)
+                    open(meta.id, nil)
                 default:
                     break
                 }
@@ -122,6 +125,7 @@ struct FolderView: View {
     @State private var importSummary: String?
     @State private var importing = false
     @State private var showMigration = false
+    @State private var exportTarget: NotebookMeta?
     @State private var showFavorites = false
     @State private var exporting = false
     @State private var showAbout = false
@@ -214,7 +218,7 @@ struct FolderView: View {
                 }
                 Menu {
                     Button { showNewNotebook = true } label: { Label("新增筆記本", systemImage: "book.closed") }
-                    Button { showImporter = true } label: { Label("匯入 PDF 或 zip", systemImage: "doc.richtext") }
+                    Button { showImporter = true } label: { Label("匯入 PDF、zip 或 PaperNote 檔", systemImage: "doc.richtext") }
                     Button { showMigration = true } label: { Label("從 GoodNotes 搬家…", systemImage: "shippingbox") }
                     Button { newFolderName = ""; showNewFolder = true } label: { Label("新增資料夾", systemImage: "folder.badge.plus") }
                 } label: {
@@ -365,10 +369,10 @@ struct FolderView: View {
             var summaries: [String] = []
             for url in urls {
                 do {
-                    if url.pathExtension.lowercased() == "zip" {
-                        summaries.append(try store.importZip(from: url, folder: folderID).summary)
-                    } else {
-                        last = try store.importPDF(from: url, folder: folderID)
+                    switch url.pathExtension.lowercased() {
+                    case "zip": summaries.append(try store.importZip(from: url, folder: folderID).summary)
+                    case "papernote": last = try store.importPaperNote(from: url, folder: folderID)
+                    default: last = try store.importPDF(from: url, folder: folderID)
                     }
                 } catch {
                     errorMessage = error.localizedDescription
@@ -393,7 +397,7 @@ struct FolderView: View {
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
             }
         }
-        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.pdf, .zip], allowsMultipleSelection: true) { result in
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.pdf, .zip, .paperNote], allowsMultipleSelection: true) { result in
             switch result {
             case let .success(urls):
                 importFiles(urls)
@@ -411,6 +415,14 @@ struct FolderView: View {
             Button("好", role: .cancel) {}
         } message: {
             Text(importSummary ?? "")
+        }
+        .alert("匯出「\(exportTarget?.title ?? "")」", isPresented: Binding(get: { exportTarget != nil }, set: { if !$0 { exportTarget = nil } }),
+               presenting: exportTarget) { nb in
+            Button("PDF（給別人看、列印）") { export(nb.id, paperNote: false) }
+            Button("PaperNote（可以繼續編輯筆跡）") { export(nb.id, paperNote: true) }
+            Button("取消", role: .cancel) {}
+        } message: { _ in
+            Text("要匯出成哪一種格式？")
         }
         .sheet(isPresented: $showNewNotebook) {
             NewNotebookSheet { title, paper, landscape in
@@ -664,19 +676,20 @@ struct FolderView: View {
         } label: { Label("複製", systemImage: "plus.square.on.square") }
         Button { moveTarget = item } label: { Label("移動到…", systemImage: "folder") }
         if case let .notebook(n) = item {
-            Button { export(n.id) } label: { Label("匯出 PDF", systemImage: "square.and.arrow.up") }
+            Button { exportTarget = n } label: { Label("匯出…", systemImage: "square.and.arrow.up") }
         }
         Divider()
         Button(role: .destructive) { moveToTrash([item]) } label: { Label("刪除", systemImage: "trash") }
     }
 
-    private func export(_ id: UUID) {
+    private func export(_ id: UUID, paperNote: Bool) {
         exporting = true
         DispatchQueue.main.async {
             defer { exporting = false }
             do {
                 let session = try NotebookSession(id: id)
-                shareItem = ShareItem(url: try NotebookExporter.exportPDF(session: session))
+                let url = paperNote ? try NotebookExporter.exportPaperNote(session: session) : try NotebookExporter.exportPDF(session: session)
+                shareItem = ShareItem(url: url)
             } catch {
                 errorMessage = "匯出失敗：\(error.localizedDescription)"
             }

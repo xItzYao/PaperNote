@@ -2,16 +2,40 @@ import Foundation
 import PDFKit
 import UIKit
 
+import UniformTypeIdentifiers
+
 enum LibraryError: LocalizedError {
     case unreadablePDF
     case lockedPDF
+    case notPaperNote
+    case newerPaperNote
 
     var errorDescription: String? {
         switch self {
         case .unreadablePDF: return "無法讀取這個 PDF 檔。"
         case .lockedPDF: return "這個 PDF 有密碼保護，請先解除密碼再匯入。"
+        case .notPaperNote: return "這不是 PaperNote 筆記本檔，或檔案已經損壞。"
+        case .newerPaperNote: return "這個筆記本檔是用比較新的 PaperNote 匯出的，請先更新 App。"
         }
     }
+}
+
+extension UTType {
+    /// PaperNote 筆記本檔（.papernote）：可以繼續編輯的筆記本
+    static let paperNote = UTType(exportedAs: "com.papernote.notebook")
+}
+
+/// .papernote 檔裡的說明（papernote.json）；筆記本的內容放在 notebook/ 底下，和 App 裡存的一樣
+struct PaperNoteManifest: Codable {
+    static let currentFormat = 1
+    var format = PaperNoteManifest.currentFormat
+    var title: String
+    var coverHex: String
+}
+
+extension Notification.Name {
+    /// 筆記本改名了（object：筆記本的 UUID）
+    static let notebookRenamed = Notification.Name("PaperNote.notebookRenamed")
 }
 
 /// zip 匯入的結果
@@ -330,6 +354,45 @@ final class LibraryStore: ObservableObject {
         } catch {
             try? fm.removeItem(at: dir)
             throw error
+        }
+        index.notebooks.append(meta)
+        save()
+        return meta
+    }
+
+    /// 匯入 PaperNote 筆記本檔：變成一本新的筆記本，筆跡都可以繼續編輯
+    func importPaperNote(from url: URL, folder: UUID?) throws -> NotebookMeta {
+        let access = url.startAccessingSecurityScopedResource()
+        defer { if access { url.stopAccessingSecurityScopedResource() } }
+
+        let archive: ZipArchive
+        do { archive = try ZipArchive(url: url) } catch { throw LibraryError.notPaperNote }
+        guard let m = archive.entries.first(where: { $0.path == "papernote.json" }),
+              let manifest = try? JSONDecoder.app.decode(PaperNoteManifest.self, from: archive.contents(of: m))
+        else { throw LibraryError.notPaperNote }
+        guard manifest.format <= PaperNoteManifest.currentFormat else { throw LibraryError.newerPaperNote }
+
+        var meta = NotebookMeta(title: manifest.title, folderId: folder, coverHex: manifest.coverHex)
+        let dir = notebookURL(meta.id)
+        do {
+            for e in archive.entries where e.path.hasPrefix("notebook/") && !e.isDirectory {
+                // 只解到這本筆記本的資料夾裡（擋掉「..」這種會跑到外面的路徑）
+                let rel = String(e.path.dropFirst("notebook/".count))
+                let comps = rel.split(separator: "/", omittingEmptySubsequences: false)
+                guard !comps.isEmpty, !comps.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) else {
+                    throw LibraryError.notPaperNote
+                }
+                let dest = dir.appendingPathComponent(rel)
+                try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try archive.extract(e, to: dest)
+            }
+            let doc = try JSONDecoder.app.decode(NotebookDocument.self,
+                                                 from: Data(contentsOf: NotebookSession.documentURL(in: dir)))
+            meta.pageCount = doc.pages.count
+            meta.trashedPageCount = doc.trash?.count ?? 0
+        } catch {
+            try? fm.removeItem(at: dir)
+            throw (error as? LibraryError) ?? LibraryError.notPaperNote
         }
         index.notebooks.append(meta)
         save()

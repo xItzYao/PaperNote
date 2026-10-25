@@ -146,6 +146,61 @@ struct ZipArchive {
     }
 }
 
+/// 寫 zip 檔（不壓縮：筆記本裡大多是 PDF 和圖片，本來就壓縮過；檔名標 UTF-8）
+struct ZipWriter {
+    private var out = Data()
+    private var central = Data()
+    private var count = 0
+
+    /// path：zip 裡的路徑，用「/」分隔
+    mutating func add(_ path: String, _ data: Data) throws {
+        let name = Data(path.utf8)
+        guard data.count < 0xFFFF_FFFF, out.count < 0xFFFF_FFFF, name.count < 0xFFFF else { throw ZipError.unsupported(path) }
+        let crc = CRC32.checksum(data), size = UInt32(data.count), offset = UInt32(out.count)
+        // 檔案標頭：版本、旗標（UTF-8 檔名）、不壓縮、時間、日期、CRC、大小×2、檔名長度、額外欄位長度
+        Self.u32(0x0403_4b50, &out)
+        for v: UInt16 in [20, 0x800, 0, 0, 0x21] { Self.u16(v, &out) }
+        for v in [crc, size, size] { Self.u32(v, &out) }
+        Self.u16(UInt16(name.count), &out)
+        Self.u16(0, &out)
+        out.append(name)
+        out.append(data)
+        // 目錄：版本×2、旗標、不壓縮、時間、日期、CRC、大小×2、檔名／額外／註解長度、磁碟、內部屬性、外部屬性、位置
+        Self.u32(0x0201_4b50, &central)
+        for v: UInt16 in [20, 20, 0x800, 0, 0, 0x21] { Self.u16(v, &central) }
+        for v in [crc, size, size] { Self.u32(v, &central) }
+        for v: UInt16 in [UInt16(name.count), 0, 0, 0, 0] { Self.u16(v, &central) }
+        Self.u32(0, &central)
+        Self.u32(offset, &central)
+        central.append(name)
+        count += 1
+    }
+
+    /// 寫完的 zip
+    func finish() throws -> Data {
+        guard count < 0xFFFF, out.count < 0xFFFF_FFFF else { throw ZipError.unsupported("zip") }
+        var d = out
+        let cdOffset = UInt32(d.count)
+        d.append(central)
+        Self.u32(0x0605_4b50, &d)
+        for v: UInt16 in [0, 0, UInt16(count), UInt16(count)] { Self.u16(v, &d) }
+        Self.u32(UInt32(central.count), &d)
+        Self.u32(cdOffset, &d)
+        Self.u16(0, &d)
+        return d
+    }
+
+    private static func u16(_ v: UInt16, _ d: inout Data) {
+        d.append(UInt8(v & 0xFF))
+        d.append(UInt8(v >> 8))
+    }
+
+    private static func u32(_ v: UInt32, _ d: inout Data) {
+        u16(UInt16(v & 0xFFFF), &d)
+        u16(UInt16(v >> 16), &d)
+    }
+}
+
 enum CRC32 {
     private static let table: [UInt32] = (0..<256).map { n -> UInt32 in
         var c = UInt32(n)

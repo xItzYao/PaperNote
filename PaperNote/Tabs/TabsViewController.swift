@@ -29,7 +29,7 @@ final class TabsViewController: UIViewController {
         view.addSubview(container)
 
         let library = UIButton(type: .system)
-        library.setImage(UIImage(systemName: "square.grid.2x2", withConfiguration: UIImage.SymbolConfiguration(pointSize: 16)), for: .normal)
+        library.setImage(UIImage(systemName: "chevron.left", withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold)), for: .normal)
         library.tintColor = .label
         library.accessibilityLabel = "資料庫"
         library.translatesAutoresizingMaskIntoConstraints = false
@@ -82,6 +82,11 @@ final class TabsViewController: UIViewController {
             container.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             container.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
+
+        // 在編輯畫面改了筆記本名稱：分頁上的名稱跟著改
+        NotificationCenter.default.addObserver(forName: .notebookRenamed, object: nil, queue: .main) { [weak self] _ in
+            self?.rebuildTabs()
+        }
 
         store.prune(existing: Set(LibraryStore.shared.visibleNotebooks.map(\.id)))
         if let a = store.state.active {
