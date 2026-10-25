@@ -14,7 +14,10 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
         ("電源", [.voltageSource, .currentSource, .ground, .vdd]),
         ("電晶體", [.nmos, .pmos]),
         ("邏輯閘", [.andGate, .orGate, .notGate, .bufferGate, .nandGate, .norGate, .xorGate, .xnorGate]),
+        ("其他", [.dFlipFlop, .dLatch, .mux, .decoder, .encoder]),
     ]
+    /// 收起來的分類（記在本機）
+    private static let collapsedKey = "circuitLibrary.collapsedSections"
     private static let expandedWidth: CGFloat = 148
     private static let collapsedWidth: CGFloat = 40
 
@@ -83,15 +86,21 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
         // 選取、接線
         let modes = row([modeButton("cursorarrow", "選取", .select), modeButton("line.diagonal", "接線", .wire)])
         stack.addArrangedSubview(modes)
-        // 各分類的元件，兩欄
+        // 各分類：標題列可以點開、收起，元件兩欄
+        let collapsedNames = Set(UserDefaults.standard.stringArray(forKey: Self.collapsedKey) ?? [])
         for (name, parts) in Self.sections {
-            stack.addArrangedSubview(sectionLabel(name))
+            let body = UIStackView()
+            body.axis = .vertical
+            body.spacing = 4
             var i = 0
             while i < parts.count {
                 let pair = parts[i..<min(i + 2, parts.count)].map(partButton)
-                stack.addArrangedSubview(row(pair.count == 2 ? pair : pair + [UIView()]))
+                body.addArrangedSubview(row(pair.count == 2 ? pair : pair + [UIView()]))
                 i += 2
             }
+            body.isHidden = collapsedNames.contains(name)
+            stack.addArrangedSubview(sectionHeader(name, body: body))
+            stack.addArrangedSubview(body)
         }
         refreshHighlight()
     }
@@ -107,12 +116,36 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
         return r
     }
 
-    private func sectionLabel(_ text: String) -> UILabel {
-        let l = UILabel()
-        l.text = text
-        l.font = .systemFont(ofSize: 11, weight: .medium)
-        l.textColor = .tertiaryLabel
-        return l
+    /// 分類標題列：點一下展開或收起底下的元件
+    private func sectionHeader(_ name: String, body: UIView) -> UIButton {
+        var c = UIButton.Configuration.plain()
+        c.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 6, bottom: 6, trailing: 6)
+        c.baseForegroundColor = .label
+        c.background.backgroundColor = UIColor.secondarySystemBackground
+        c.background.cornerRadius = 6
+        let b = UIButton(configuration: c)
+        b.contentHorizontalAlignment = .leading
+        func refresh() {
+            var cfg = b.configuration ?? .plain()
+            var t = AttributedString(name)
+            t.font = .systemFont(ofSize: 12, weight: .semibold)
+            cfg.attributedTitle = t
+            cfg.image = UIImage(systemName: body.isHidden ? "chevron.right" : "chevron.down",
+                                withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold))
+            cfg.imagePlacement = .trailing
+            cfg.imagePadding = 6
+            b.configuration = cfg
+        }
+        refresh()
+        b.addAction(UIAction { [weak body] _ in
+            guard let body else { return }
+            UIView.animate(withDuration: 0.2) { body.isHidden.toggle() }
+            refresh()
+            var collapsed = Set(UserDefaults.standard.stringArray(forKey: Self.collapsedKey) ?? [])
+            if body.isHidden { collapsed.insert(name) } else { collapsed.remove(name) }
+            UserDefaults.standard.set(Array(collapsed), forKey: Self.collapsedKey)
+        }, for: .touchUpInside)
+        return b
     }
 
     private func tile(image: UIImage?, title: String) -> UIButton {

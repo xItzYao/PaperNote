@@ -158,5 +158,29 @@ check("wire through a pin is split in two", through.wires.count == 2)
 check("both halves follow the pin", through.wires.allSatisfy { $0.points.first == thPin || $0.points.last == thPin })
 check("far ends stay put", Set(through.wires.flatMap { [$0.points.first!, $0.points.last!] }.map(PointKey.init)).isSuperset(of: [PointKey(P(130, 50)), PointKey(P(130, 150))]))
 
+// 16. 方塊元件：接腳數量、名字、都在格點上、都在外框裡
+func onGrid(_ p: CGPoint) -> Bool { p.x.truncatingRemainder(dividingBy: 10) == 0 && p.y.truncatingRemainder(dividingBy: 10) == 0 }
+let mux4 = CircuitComponent(part: .mux, position: P(200, 200), inputs: 4)
+check("4-input MUX has 4 inputs + 2 selects + 1 output", CircuitGeometry.pins(mux4).count == 7)
+check("MUX pin names", CircuitGeometry.pinNames(mux4) == ["I0", "I1", "I2", "I3", "S0", "S1", "Y"])
+let dec3 = CircuitComponent(part: .decoder, position: P(0, 0), inputs: 3)
+check("3-bit decoder has 3 inputs and 8 outputs", CircuitGeometry.pins(dec3).count == 11)
+let enc2 = CircuitComponent(part: .encoder, position: P(0, 0), inputs: 2)
+check("2-bit encoder has 4 inputs and 2 outputs", CircuitGeometry.pinNames(enc2) == ["I0", "I1", "I2", "I3", "Y0", "Y1"])
+let dff = CircuitComponent(part: .dFlipFlop, position: P(0, 0))
+check("D flip-flop pins", CircuitGeometry.pinNames(dff) == ["D", "CLK", "Q", "~Q"])
+var allBlocksOK = true
+for part in [CircuitPart.dFlipFlop, .dLatch, .mux, .decoder, .encoder] {
+    for n in part.sizeRange {
+        for rot in [0, 90, 180, 270] {
+            let c = CircuitComponent(part: part, position: P(100, 100), rotation: rot, inputs: n)
+            let b = CircuitGeometry.bounds(c).insetBy(dx: -0.5, dy: -0.5)
+            for p in CircuitGeometry.pins(c) where !onGrid(p) || !b.contains(p) { allBlocksOK = false }
+        }
+    }
+}
+check("block pins on grid and inside bounds for every size and rotation", allBlocksOK)
+check("gate pin names keep I/Y", CircuitGeometry.pinNames(CircuitComponent(part: .andGate, position: .zero, inputs: 3)) == ["I0", "I1", "I2", "Y"])
+
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

@@ -230,7 +230,7 @@ extension NotebookViewController {
 
     func placeComponent(_ part: CircuitPart, at p: CGPoint) {
         var comp = CircuitComponent(part: part, position: .zero)
-        comp.inputs = circuitGateInputs[part] ?? 2
+        comp.inputs = circuitGateInputs[part] ?? part.defaultSize
         // 沿用這種元件上次的方向與翻轉
         if let style = circuitPartStyle[part] {
             comp.rotation = style.rotation
@@ -532,9 +532,16 @@ extension NotebookViewController {
         if oldPins.count == newPins.count {
             data.reattach(from: oldPins, to: newPins)
         } else {
-            // 輸入數量改變：對應相同編號的輸入與輸出接腳
-            let n = min(oldPins.count, newPins.count) - 1
-            data.reattach(from: Array(oldPins.prefix(n)) + [oldPins.last!], to: Array(newPins.prefix(n)) + [newPins.last!])
+            // 輸入數量改變：同名的接腳（I0、Y…）對應起來，接在上面的導線跟著走
+            let oldNames = CircuitGeometry.pinNames(old), newNames = CircuitGeometry.pinNames(new)
+            var from: [CGPoint] = [], to: [CGPoint] = []
+            for (i, name) in oldNames.enumerated() {
+                if let j = newNames.firstIndex(of: name) {
+                    from.append(oldPins[i])
+                    to.append(newPins[j])
+                }
+            }
+            data.reattach(from: from, to: to)
         }
         updateCircuit(ref, data: data)
     }
@@ -623,17 +630,18 @@ extension NotebookViewController {
                 self?.modifySelectedComponent { $0.flipV.toggle() }
             })
             if c.part.hasVariableInputs {
-                views.append(action("minus.circle", "減少輸入") { [weak self] in
-                    self?.modifySelectedComponent { $0.inputs = max(2, $0.inputs - 1) }
+                let range = c.part.sizeRange
+                views.append(action("minus.circle", "減少") { [weak self] in
+                    self?.modifySelectedComponent { $0.inputs = max(range.lowerBound, $0.inputs - 1) }
                     if let n = self?.selectedCircuitComponent?.inputs { self?.circuitGateInputs[c.part] = n }
                     self?.rebuildSubBar()
                 })
                 let label = UILabel()
-                label.text = "\(c.inputs) 輸入"
+                label.text = c.part.sizeLabel(c.inputs)
                 label.font = .monospacedDigitSystemFont(ofSize: 14, weight: .medium)
                 views.append(label)
-                views.append(action("plus.circle", "增加輸入") { [weak self] in
-                    self?.modifySelectedComponent { $0.inputs = min(8, $0.inputs + 1) }
+                views.append(action("plus.circle", "增加") { [weak self] in
+                    self?.modifySelectedComponent { $0.inputs = min(range.upperBound, $0.inputs + 1) }
                     if let n = self?.selectedCircuitComponent?.inputs { self?.circuitGateInputs[c.part] = n }
                     self?.rebuildSubBar()
                 })

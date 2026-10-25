@@ -6,6 +6,7 @@ enum CircuitPart: String, Codable, CaseIterable, Identifiable {
     case resistor, capacitor, inductor, voltageSource, currentSource, ground, vdd
     case nmos, pmos
     case andGate, orGate, nandGate, norGate, xorGate, xnorGate, notGate, bufferGate
+    case dFlipFlop, dLatch, mux, decoder, encoder
 
     var id: String { rawValue }
 
@@ -28,6 +29,45 @@ enum CircuitPart: String, Codable, CaseIterable, Identifiable {
         case .xnorGate: return "XNOR"
         case .notGate: return "NOT"
         case .bufferGate: return "Buffer"
+        case .dFlipFlop: return "D 正反器"
+        case .dLatch: return "D 閂鎖"
+        case .mux: return "多工器"
+        case .decoder: return "解碼器"
+        case .encoder: return "編碼器"
+        }
+    }
+
+    /// 方塊元件（正反器、閂鎖、多工器、解碼器、編碼器）
+    var isBlock: Bool {
+        switch self {
+        case .dFlipFlop, .dLatch, .mux, .decoder, .encoder: return true
+        default: return false
+        }
+    }
+
+    /// 大小（輸入數或位元數）可以調的範圍；1...1 代表不能調
+    var sizeRange: ClosedRange<Int> {
+        if hasVariableInputs && isGate { return 2...8 }
+        switch self {
+        case .mux: return 2...16
+        case .decoder, .encoder: return 1...4
+        default: return 1...1
+        }
+    }
+
+    var defaultSize: Int {
+        switch self {
+        case .mux: return 4
+        default: return 2
+        }
+    }
+
+    /// 工具列上顯示的大小
+    func sizeLabel(_ n: Int) -> String {
+        switch self {
+        case .decoder: return "\(n) → \(1 << n)"
+        case .encoder: return "\(1 << n) → \(n)"
+        default: return "\(n) 輸入"
         }
     }
 
@@ -38,8 +78,10 @@ enum CircuitPart: String, Codable, CaseIterable, Identifiable {
         }
     }
 
-    /// 可以調整輸入數量的邏輯閘
-    var hasVariableInputs: Bool { isGate && self != .notGate && self != .bufferGate }
+    /// 可以調整輸入數量（或位元數）的元件
+    var hasVariableInputs: Bool {
+        (isGate && self != .notGate && self != .bufferGate) || self == .mux || self == .decoder || self == .encoder
+    }
 
     /// 輸出端有反相圓圈
     var hasOutputBubble: Bool { self == .nandGate || self == .norGate || self == .xnorGate || self == .notGate }
@@ -54,7 +96,7 @@ struct CircuitComponent: Codable, Equatable, Identifiable {
     var rotation: Int = 0
     var flipH = false
     var flipV = false
-    /// 邏輯閘輸入數量
+    /// 邏輯閘、多工器的輸入數量；解碼器、編碼器的位元數
     var inputs = 2
 }
 
@@ -81,10 +123,71 @@ struct CircuitData: Codable, Equatable {
 
 // MARK: - 元件幾何（元件自己的座標系：中心為原點、預設朝右）
 
+/// 方塊元件的接腳：左邊輸入、下方（多工器的選擇線）、右邊輸出。名字前面加 ~ 代表反相（畫上橫線）
+struct CircuitBlockLayout: Equatable {
+    var title: String
+    var left: [String]
+    var bottom: [String]
+    var right: [String]
+    /// 左邊第幾支腳是時脈（畫三角形）
+    var clock: Int?
+
+    /// 本體高度（左右兩邊較多的那邊，每支腳 20）
+    var height: CGFloat { CGFloat(max(left.count, right.count, 2)) * 20 + 20 }
+    static let halfWidth: CGFloat = 40
+    static let pinX: CGFloat = 60
+}
+
 enum CircuitGeometry {
+    static func blockLayout(_ c: CircuitComponent) -> CircuitBlockLayout? {
+        switch c.part {
+        case .dFlipFlop:
+            return CircuitBlockLayout(title: "D FF", left: ["D", "CLK"], bottom: [], right: ["Q", "~Q"], clock: 1)
+        case .dLatch:
+            return CircuitBlockLayout(title: "D Latch", left: ["D", "EN"], bottom: [], right: ["Q", "~Q"], clock: nil)
+        case .mux:
+            let n = min(max(c.inputs, 2), 16)
+            var k = 0
+            while (1 << k) < n { k += 1 }
+            return CircuitBlockLayout(title: "MUX", left: (0..<n).map { "I\($0)" }, bottom: (0..<k).map { "S\($0)" },
+                                      right: ["Y"], clock: nil)
+        case .decoder:
+            let n = min(max(c.inputs, 1), 4)
+            return CircuitBlockLayout(title: "DEC", left: (0..<n).map { "A\($0)" }, bottom: [],
+                                      right: (0..<(1 << n)).map { "Y\($0)" }, clock: nil)
+        case .encoder:
+            let n = min(max(c.inputs, 1), 4)
+            return CircuitBlockLayout(title: "ENC", left: (0..<(1 << n)).map { "I\($0)" }, bottom: [],
+                                      right: (0..<n).map { "Y\($0)" }, clock: nil)
+        default:
+            return nil
+        }
+    }
+
+    /// 一排接腳的位置：以 0 為中心、間隔 20（都落在格點上）
+    static func spread(_ n: Int) -> [CGFloat] {
+        (0..<n).map { (CGFloat($0) - CGFloat(n - 1) / 2) * 20 }
+    }
+
+    /// 方塊元件的接腳（順序：左、下、右）
+    static func blockPins(_ b: CircuitBlockLayout) -> [CGPoint] {
+        let x = CircuitBlockLayout.pinX
+        return spread(b.left.count).map { CGPoint(x: -x, y: $0) }
+            + spread(b.bottom.count).map { CGPoint(x: $0, y: b.height / 2 + 20) }
+            + spread(b.right.count).map { CGPoint(x: x, y: $0) }
+    }
+
+    /// 每支接腳的名字（改大小時，接在同名接腳上的導線跟著走）
+    static func pinNames(_ c: CircuitComponent) -> [String] {
+        if let b = blockLayout(c) { return b.left + b.bottom + b.right }
+        let pins = localPins(c)
+        if c.part.isGate { return (0..<(pins.count - 1)).map { "I\($0)" } + ["Y"] }
+        return (0..<pins.count).map { "P\($0)" }
+    }
+
     /// 邏輯閘本體高度
     static func gateHeight(_ c: CircuitComponent) -> CGFloat {
-        let n = c.part.hasVariableInputs ? max(2, c.inputs) : 1
+        let n = c.part.hasVariableInputs && c.part.isGate ? max(2, c.inputs) : 1
         return max(40, CGFloat(n) * 20)
     }
 
@@ -98,6 +201,7 @@ enum CircuitGeometry {
 
     /// 接腳位置（元件座標）
     static func localPins(_ c: CircuitComponent) -> [CGPoint] {
+        if let b = blockLayout(c) { return blockPins(b) }
         switch c.part {
         case .resistor, .capacitor, .inductor, .voltageSource, .currentSource:
             return [CGPoint(x: -30, y: 0), CGPoint(x: 30, y: 0)]
@@ -119,6 +223,12 @@ enum CircuitGeometry {
 
     /// 元件本體的外框（元件座標，含引腳）
     static func localBounds(_ c: CircuitComponent) -> CGRect {
+        if let b = blockLayout(c) {
+            // 上方留給標題，下方留給選擇線
+            let top = -b.height / 2 - 14
+            let bottom = b.height / 2 + (b.bottom.isEmpty ? 0 : 20)
+            return CGRect(x: -CircuitBlockLayout.pinX, y: top, width: CircuitBlockLayout.pinX * 2, height: bottom - top)
+        }
         switch c.part {
         case .resistor, .capacitor, .inductor: return CGRect(x: -30, y: -14, width: 60, height: 28)
         case .voltageSource, .currentSource: return CGRect(x: -30, y: -18, width: 60, height: 36)

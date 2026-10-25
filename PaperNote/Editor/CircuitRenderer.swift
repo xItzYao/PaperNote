@@ -20,7 +20,7 @@ enum CircuitRenderer {
         ctx.restoreGState()
     }
 
-    static func drawComponent(_ c: CircuitComponent, color: UIColor, lineWidth: CGFloat) {
+    static func drawComponent(_ c: CircuitComponent, color: UIColor, lineWidth: CGFloat, labels: Bool = true) {
         guard let ctx = UIGraphicsGetCurrentContext() else { return }
         ctx.saveGState()
         ctx.concatenate(CircuitGeometry.transform(c))
@@ -33,6 +33,40 @@ enum CircuitRenderer {
         stroke.stroke()
         fill.fill()
         ctx.restoreGState()
+        if labels, let b = CircuitGeometry.blockLayout(c) { drawBlockLabels(c, b, color: color) }
+    }
+
+    /// 方塊元件的文字：標題與每支接腳的名字。位置跟著旋轉、翻轉，但字永遠是正的
+    private static func drawBlockLabels(_ c: CircuitComponent, _ b: CircuitBlockLayout, color: UIColor) {
+        let t = CircuitGeometry.transform(c)
+        let inner = CircuitBlockLayout.halfWidth - 11
+        func text(_ name: String, at p: CGPoint, size: CGFloat, bold: Bool = false) {
+            let inverted = name.hasPrefix("~")
+            let label = inverted ? String(name.dropFirst()) : name
+            let attrs: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: size, weight: bold ? .semibold : .regular),
+                                                         .foregroundColor: color]
+            let str = NSAttributedString(string: label, attributes: attrs)
+            let sz = str.size()
+            let q = p.applying(t)
+            let origin = CGPoint(x: q.x - sz.width / 2, y: q.y - sz.height / 2)
+            str.draw(at: origin)
+            if inverted {
+                // 反相：字上面畫一條橫線
+                let bar = UIBezierPath()
+                bar.move(to: CGPoint(x: origin.x, y: origin.y + 1.5))
+                bar.addLine(to: CGPoint(x: origin.x + sz.width, y: origin.y + 1.5))
+                bar.lineWidth = 0.8
+                color.setStroke()
+                bar.stroke()
+            }
+        }
+        let ys = CircuitGeometry.spread
+        for (name, y) in zip(b.left, ys(b.left.count)) where b.clock.map({ b.left[$0] != name }) ?? true {
+            text(name, at: CGPoint(x: -inner, y: y), size: 8)
+        }
+        for (name, y) in zip(b.right, ys(b.right.count)) { text(name, at: CGPoint(x: inner, y: y), size: 8) }
+        for (name, x) in zip(b.bottom, ys(b.bottom.count)) { text(name, at: CGPoint(x: x, y: b.height / 2 - 7), size: 8) }
+        text(b.title, at: CGPoint(x: 0, y: -b.height / 2 - 7), size: 9, bold: true)
     }
 
     /// 導線：水平段遇到沒有接在一起的交叉點，畫半圓跨過去
@@ -151,10 +185,27 @@ enum CircuitRenderer {
             } else {
                 line(s, pt(15, 0), pt(30, 0))
             }
+        case .dFlipFlop, .dLatch, .mux, .decoder, .encoder:
+            if let b = CircuitGeometry.blockLayout(c) { blockSymbol(b, s) }
         default:
             gateSymbol(c, s)
         }
         return (s, f)
+    }
+
+    /// 方塊元件：長方形本體、每支接腳的引線；時脈腳畫三角形
+    private static func blockSymbol(_ b: CircuitBlockLayout, _ s: UIBezierPath) {
+        let w = CircuitBlockLayout.halfWidth, h = b.height / 2, x = CircuitBlockLayout.pinX
+        s.append(UIBezierPath(rect: CGRect(x: -w, y: -h, width: w * 2, height: h * 2)))
+        for y in CircuitGeometry.spread(b.left.count) { line(s, pt(-x, y), pt(-w, y)) }
+        for y in CircuitGeometry.spread(b.right.count) { line(s, pt(w, y), pt(x, y)) }
+        for px in CircuitGeometry.spread(b.bottom.count) { line(s, pt(px, h), pt(px, h + 20)) }
+        if let k = b.clock {
+            let y = CircuitGeometry.spread(b.left.count)[k]
+            s.move(to: pt(-w, y - 6))
+            s.addLine(to: pt(-w + 9, y))
+            s.addLine(to: pt(-w, y + 6))
+        }
     }
 
     /// 多輸入邏輯閘
@@ -208,7 +259,7 @@ enum CircuitRenderer {
             ctx.translateBy(x: size / 2, y: size / 2)
             ctx.scaleBy(x: scale, y: scale)
             ctx.translateBy(x: -b.midX, y: -b.midY)
-            drawComponent(c, color: .label, lineWidth: 1.6 / scale)
+            drawComponent(c, color: .label, lineWidth: 1.6 / scale, labels: false)
         }.withRenderingMode(.alwaysTemplate)
     }
 }
