@@ -327,11 +327,11 @@ extension NotebookViewController {
 
 extension NotebookViewController {
     var ownGestureRecognizers: [UIGestureRecognizer] {
-        [toolPan, tapGesture, doubleTapGesture, longPressGesture, holdRecognizer, textLongPress, eraserTracker, pencilPointTracker, palmBlocker].compactMap { $0 }
+        [toolPan, tapGesture, doubleTapGesture, longPressGesture, holdRecognizer, textLongPress, eraserTracker, pencilPointTracker, palmBlocker, inkRecognizer].compactMap { $0 }
     }
 
     func configurePencilKitGestures() {
-        let drawingTool = tool.isDrawing
+        let drawingTool = pencilKitDraws
         var all: [UIGestureRecognizer] = []
         func collect(_ v: UIView) {
             if v is UITextView || v === pagesContainer { return }

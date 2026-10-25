@@ -118,11 +118,21 @@ enum PageRenderer {
         ctx.saveGState()
         ctx.translateBy(x: page.insets.left, y: page.insets.top)
         drawElements(page.elements, session: session, in: ctx)
+        InkRenderer.draw(page.ink, in: ctx)
         if let drawing = session.drawings[page.id], !drawing.strokes.isEmpty {
             let rect = CGRect(x: -page.insets.left, y: -page.insets.top, width: snap.fullSize.width, height: snap.fullSize.height)
             let img = inkImage(drawing, rect: rect, scale: inkScale)
             img.draw(in: rect)
         }
+        ctx.restoreGState()
+    }
+
+    /// 自製筆刷的筆跡，整頁座標（截圖時 PencilKit 筆跡另外從畫布取得，這些要另外畫）
+    static func drawCustomInk(_ page: Page, in ctx: CGContext) {
+        guard !page.ink.isEmpty else { return }
+        ctx.saveGState()
+        ctx.translateBy(x: page.insets.left, y: page.insets.top)
+        InkRenderer.draw(page.ink, in: ctx)
         ctx.restoreGState()
     }
 

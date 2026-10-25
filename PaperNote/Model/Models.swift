@@ -76,12 +76,37 @@ struct PageElement: Codable, Equatable, Identifiable {
     }
 }
 
+/// 自製筆刷的一個取樣點（頁面內容座標）；w 是這一點的線寬
+struct InkPoint: Codable, Equatable {
+    var x: Float
+    var y: Float
+    var w: Float
+
+    init(_ p: CGPoint, width: CGFloat) {
+        x = Float(p.x)
+        y = Float(p.y)
+        w = Float(width)
+    }
+
+    var point: CGPoint { CGPoint(x: CGFloat(x), y: CGFloat(y)) }
+    var width: CGFloat { CGFloat(w) }
+}
+
+/// 自製筆刷的一筆：照 Pencil 的原始取樣點畫，不做圓滑處理
+struct InkStroke: Codable, Equatable, Identifiable {
+    var id = UUID()
+    var colorHex: String
+    var points: [InkPoint]
+}
+
 struct Page: Codable, Equatable, Identifiable {
     var id = UUID()
     var background: PageBackground
     var insets = PageInsets()
     var elements: [PageElement] = []
     var highlights: [TextHighlight] = []
+    /// 自製筆刷的筆跡（PencilKit 的筆跡另外存在 drawings）
+    var ink: [InkStroke] = []
     var favorite = false
     var note = ""
 
@@ -90,7 +115,7 @@ struct Page: Codable, Equatable, Identifiable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, background, insets, elements, highlights, favorite, note
+        case id, background, insets, elements, highlights, ink, favorite, note
     }
 
     init(from decoder: Decoder) throws {
@@ -100,6 +125,7 @@ struct Page: Codable, Equatable, Identifiable {
         insets = try c.decodeIfPresent(PageInsets.self, forKey: .insets) ?? PageInsets()
         elements = try c.decodeIfPresent([PageElement].self, forKey: .elements) ?? []
         highlights = try c.decodeIfPresent([TextHighlight].self, forKey: .highlights) ?? []
+        ink = try c.decodeIfPresent([InkStroke].self, forKey: .ink) ?? []
         favorite = try c.decodeIfPresent(Bool.self, forKey: .favorite) ?? false
         note = try c.decodeIfPresent(String.self, forKey: .note) ?? ""
     }

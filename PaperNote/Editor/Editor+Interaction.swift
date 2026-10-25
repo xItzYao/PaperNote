@@ -34,7 +34,11 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         eraserTracker = TouchTracker(target: nil, action: nil)
         eraserTracker.coordinateView = pagesContainer
         eraserTracker.delegate = self
-        eraserTracker.onPoint = { [weak self] p in self?.eraseHighlights(at: p) }
+        eraserTracker.onPoint = { [weak self] p in
+            self?.eraseHighlights(at: p)
+            self?.eraseInk(at: p)
+        }
+        eraserTracker.onBegan = { [weak self] _ in self?.inkEraseUndoRegistered = [] }
         canvas.addGestureRecognizer(eraserTracker)
 
         // 記住筆尖最後的位置（調色盤小圖示出現在這附近）
@@ -53,9 +57,9 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             let since = self.pkUsingSince.map { String(format: "%.1fs", CACurrentMediaTime() - $0) } ?? "nil"
             DebugLog.add("pencil down tool=\(self.tool) drawGR enabled=\(g.isEnabled) state=\(g.state.rawValue) pkUsing=\(since) presented=\(self.presentedViewController.map { String(describing: type(of: $0)) } ?? "nil")")
             // 保險：書寫工具下 PencilKit 的書寫手勢一定要開著
-            if self.tool.isDrawing, !g.isEnabled { g.isEnabled = true }
+            if self.pencilKitDraws, !g.isEnabled { g.isEnabled = true }
             // 上一筆一直沒收到「結束」：PencilKit 卡在書寫中，之後的筆和橡皮擦都會被忽略 → 重設書寫手勢
-            if self.tool.isDrawing, let s = self.pkUsingSince, CACurrentMediaTime() - s > 0.8 {
+            if self.pencilKitDraws, let s = self.pkUsingSince, CACurrentMediaTime() - s > 0.8 {
                 DebugLog.add("pencilkit stuck in a stroke, resetting drawing gesture")
                 self.pkUsingSince = nil
                 g.isEnabled = false
@@ -82,6 +86,8 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         palmBlocker.isPalm = { [weak self] t in self?.isPalmTouch(t) ?? false }
         canvas.addGestureRecognizer(palmBlocker)
 
+        setupInkCapture()
+
     }
 
     func updateGestureAvailability() {
@@ -90,7 +96,9 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         tapGesture.isEnabled = true
         doubleTapGesture.isEnabled = tool == .select
         pencilPointTracker.isEnabled = true
-        holdRecognizer.isEnabled = tool.isInking && settings.shapeSnap
+        holdRecognizer.isEnabled = tool.isInking && settings.shapeSnap && !customInkActive
+        inkRecognizer.isEnabled = customInkActive
+        inkRecognizer.allowFinger = settings.fingerDrawing
         holdRecognizer.allowFinger = settings.fingerDrawing
         eraserTracker.isEnabled = tool == .eraser
         eraserTracker.allowFinger = settings.fingerDrawing
@@ -145,7 +153,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             return !(o === canvas.panGestureRecognizer || o === canvas.pinchGestureRecognizer)
         }
         // 被動追蹤筆尖的辨識器要和 PencilKit 同時運作
-        let passive: [UIGestureRecognizer?] = [holdRecognizer, eraserTracker, pencilPointTracker]
+        let passive: [UIGestureRecognizer?] = [holdRecognizer, eraserTracker, pencilPointTracker, inkRecognizer]
         return passive.contains { $0 === g || $0 === other }
     }
 
@@ -1010,6 +1018,7 @@ extension NotebookViewController {
                 ctx.saveGState()
                 ctx.translateBy(x: f.minX, y: f.minY)
                 PageRenderer.drawPageWithoutInk(pages[i], session: session, in: ctx)
+                PageRenderer.drawCustomInk(pages[i], in: ctx)
                 ctx.restoreGState()
             }
             ink.draw(in: rect)

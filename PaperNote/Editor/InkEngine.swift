@@ -1,0 +1,464 @@
+import UIKit
+
+// 自製筆刷（實驗）：照 Pencil 的原始取樣點畫，不像 PencilKit 那樣重新算成圓滑的曲線。
+// 設定裡打開「實驗：自製筆刷」後，「筆」工具改用這裡；螢光筆、橡皮擦的 PencilKit 筆跡照舊。
+
+// MARK: - 畫筆跡
+
+enum InkRenderer {
+    /// 在 ctx 裡畫筆跡（座標同筆跡的座標）；hidden 的筆跡不畫（套索移動中）
+    static func draw(_ strokes: [InkStroke], in ctx: CGContext, hidden: Set<UUID> = [], clip: CGRect? = nil) {
+        ctx.saveGState()
+        ctx.setLineCap(.round)
+        ctx.setLineJoin(.round)
+        for s in strokes where !hidden.contains(s.id) {
+            if let clip, !InkGeometry.bounds(of: s).intersects(clip) { continue }
+            draw(s, in: ctx)
+        }
+        ctx.restoreGState()
+    }
+
+    static func draw(_ s: InkStroke, in ctx: CGContext) {
+        let color = UIColor(hex: s.colorHex).cgColor
+        ctx.setStrokeColor(color)
+        ctx.setFillColor(color)
+        guard let first = s.points.first else { return }
+        if s.points.count == 1 {
+            let r = first.width / 2
+            ctx.fillEllipse(in: CGRect(x: first.point.x - r, y: first.point.y - r, width: r * 2, height: r * 2))
+            return
+        }
+        // 粗細都一樣：一條路徑畫完；粗細會變：一段一段畫
+        if s.points.allSatisfy({ $0.w == first.w }) {
+            ctx.setLineWidth(first.width)
+            ctx.move(to: first.point)
+            for p in s.points.dropFirst() { ctx.addLine(to: p.point) }
+            ctx.strokePath()
+            return
+        }
+        for (a, b) in zip(s.points, s.points.dropFirst()) {
+            ctx.setLineWidth((a.width + b.width) / 2)
+            ctx.move(to: a.point)
+            ctx.addLine(to: b.point)
+            ctx.strokePath()
+        }
+    }
+}
+
+// MARK: - 幾何（不碰畫面，可以單獨測試）
+
+enum InkGeometry {
+    static func bounds(of s: InkStroke) -> CGRect {
+        guard let first = s.points.first else { return .null }
+        var minX = first.x, maxX = first.x, minY = first.y, maxY = first.y, maxW = first.w
+        for p in s.points {
+            minX = min(minX, p.x); maxX = max(maxX, p.x)
+            minY = min(minY, p.y); maxY = max(maxY, p.y)
+            maxW = max(maxW, p.w)
+        }
+        let pad = CGFloat(maxW) / 2 + 1
+        return CGRect(x: CGFloat(minX), y: CGFloat(minY), width: CGFloat(maxX - minX), height: CGFloat(maxY - minY))
+            .insetBy(dx: -pad, dy: -pad)
+    }
+
+    static func offset(_ s: InkStroke, by d: CGPoint) -> InkStroke {
+        var out = s
+        out.points = s.points.map { InkPoint(CGPoint(x: $0.point.x + d.x, y: $0.point.y + d.y), width: $0.width) }
+        return out
+    }
+
+    /// 兩組筆跡之間有變化的範圍；比較不出來（例如順序改變）回傳 nil
+    static func changedBounds(_ old: [InkStroke], _ new: [InkStroke]) -> CGRect? {
+        var before: [UUID: InkStroke] = [:]
+        for s in old { before[s.id] = s }
+        var r = CGRect.null
+        var seen = Set<UUID>()
+        for s in new {
+            seen.insert(s.id)
+            if let o = before[s.id] {
+                if o != s { r = r.union(bounds(of: o)).union(bounds(of: s)) }
+            } else {
+                r = r.union(bounds(of: s))
+            }
+        }
+        for s in old where !seen.contains(s.id) { r = r.union(bounds(of: s)) }
+        return r.isNull ? nil : r
+    }
+
+    /// 點到線段的距離
+    static func distance(_ p: CGPoint, _ a: CGPoint, _ b: CGPoint) -> CGFloat {
+        let dx = b.x - a.x, dy = b.y - a.y
+        let len2 = dx * dx + dy * dy
+        guard len2 > 0 else { return hypot(p.x - a.x, p.y - a.y) }
+        let t = min(max(((p.x - a.x) * dx + (p.y - a.y) * dy) / len2, 0), 1)
+        return hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
+    }
+
+    /// 橡皮擦碰到這一筆（半徑 radius 加上線寬一半）
+    static func hits(_ s: InkStroke, at p: CGPoint, radius: CGFloat) -> Bool {
+        guard bounds(of: s).insetBy(dx: -radius, dy: -radius).contains(p) else { return false }
+        if s.points.count == 1 { return hypot(p.x - s.points[0].point.x, p.y - s.points[0].point.y) <= radius + s.points[0].width / 2 }
+        for (a, b) in zip(s.points, s.points.dropFirst()) where distance(p, a.point, b.point) <= radius + max(a.width, b.width) / 2 {
+            return true
+        }
+        return false
+    }
+
+    /// 橡皮擦擦過 p：整筆擦除時拿掉碰到的筆跡；局部擦除時把碰到的點去掉、剩下的切成好幾筆。沒有變化回傳 nil
+    static func erase(_ strokes: [InkStroke], at p: CGPoint, radius: CGFloat, partial: Bool) -> [InkStroke]? {
+        var changed = false
+        var out: [InkStroke] = []
+        for s in strokes {
+            guard hits(s, at: p, radius: radius) else {
+                out.append(s)
+                continue
+            }
+            changed = true
+            guard partial else { continue }
+            var run: [InkPoint] = []
+            func flush() {
+                if run.count >= 2 { out.append(InkStroke(colorHex: s.colorHex, points: run)) }
+                run = []
+            }
+            for q in s.points {
+                if hypot(q.point.x - p.x, q.point.y - p.y) <= radius + q.width / 2 { flush() } else { run.append(q) }
+            }
+            flush()
+        }
+        return changed ? out : nil
+    }
+
+    /// 套索：筆跡有任何一點在範圍內就算圈到
+    static func circled(_ s: InkStroke, offset o: CGPoint, path: UIBezierPath) -> Bool {
+        s.points.contains { path.contains(CGPoint(x: $0.point.x + o.x, y: $0.point.y + o.y)) }
+    }
+}
+
+// MARK: - 接收 Pencil 的取樣點
+
+/// 「筆」工具改用自製筆刷時的手勢：每個取樣點（含系統合併的點與預測點）都交出來
+final class InkCaptureRecognizer: UIGestureRecognizer {
+    struct Sample {
+        var point: CGPoint
+        /// 0...1 的筆壓（手指沒有筆壓，當成 0.5）
+        var force: CGFloat
+    }
+
+    var allowFinger = false
+    weak var coordinateView: UIView?
+    var onBegin: ((Sample) -> Void)?
+    /// 新的取樣點、目前的預測點
+    var onMove: (([Sample], [Sample]) -> Void)?
+    var onEnd: ((_ cancelled: Bool) -> Void)?
+    private var tracked: UITouch?
+
+    override init(target: Any?, action: Selector?) {
+        super.init(target: target, action: action)
+        cancelsTouchesInView = false
+        delaysTouchesBegan = false
+        delaysTouchesEnded = false
+    }
+
+    private func sample(_ t: UITouch) -> Sample {
+        let f: CGFloat = t.type == .pencil && t.maximumPossibleForce > 0 ? min(t.force / t.maximumPossibleForce, 1) : 0.5
+        return Sample(point: t.preciseLocation(in: coordinateView), force: f)
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        for t in touches where t !== tracked {
+            guard tracked == nil, t.type == .pencil || (allowFinger && t.type == .direct) else {
+                ignore(t, for: event)
+                continue
+            }
+            tracked = t
+            state = .began
+            onBegin?(sample(t))
+        }
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let t = tracked, touches.contains(t) else { return }
+        let coalesced = (event.coalescedTouches(for: t) ?? [t]).map(sample)
+        let predicted = (event.predictedTouches(for: t) ?? []).map(sample)
+        onMove?(coalesced, predicted)
+        state = .changed
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let t = tracked, touches.contains(t) else { return }
+        tracked = nil
+        onEnd?(false)
+        state = .ended
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let t = tracked, touches.contains(t) else { return }
+        tracked = nil
+        onEnd?(true)
+        state = .cancelled
+    }
+
+    override func reset() {
+        super.reset()
+        if tracked != nil { onEnd?(true) }
+        tracked = nil
+    }
+}
+
+// MARK: - 寫的時候的筆跡（螢幕座標、原生解析度）
+
+/// 寫的時候直接畫在螢幕上；放開後先留著一下，等頁面那層（CATiledLayer，非同步）畫好才拿掉，避免閃一下
+final class LiveInkView: UIView {
+    typealias Run = (points: [(CGPoint, CGFloat)], color: UIColor)
+    /// 螢幕座標的點與線寬
+    private(set) var points: [(CGPoint, CGFloat)] = []
+    private var predicted: [(CGPoint, CGFloat)] = []
+    private var color: UIColor = .black
+    private var lastPredictedRect = CGRect.null
+    /// 已經存進頁面、等頁面畫好的筆跡
+    private var finished: [Run] = []
+    private var clearFinishedWork: DispatchWorkItem?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isOpaque = false
+        backgroundColor = .clear
+        isUserInteractionEnabled = false
+        contentMode = .redraw
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func rect<S: Sequence>(_ pts: S) -> CGRect where S.Element == (CGPoint, CGFloat) {
+        var r = CGRect.null
+        for (p, w) in pts { r = r.union(CGRect(x: p.x - w, y: p.y - w, width: w * 2, height: w * 2)) }
+        return r.isNull ? r : r.insetBy(dx: -2, dy: -2)
+    }
+
+    func begin(_ p: CGPoint, width: CGFloat, color: UIColor) {
+        self.color = color
+        points = [(p, width)]
+        predicted = []
+        lastPredictedRect = .null
+        setNeedsDisplay(rect(points))
+    }
+
+    func add(_ new: [(CGPoint, CGFloat)], predicted pred: [(CGPoint, CGFloat)]) {
+        let from = max(0, points.count - 1)
+        points += new
+        predicted = pred
+        let predRect = pred.isEmpty || points.isEmpty ? CGRect.null : rect([points[points.count - 1]] + pred)
+        let dirty = rect(points[from...]).union(lastPredictedRect).union(predRect)
+        lastPredictedRect = predRect
+        if !dirty.isNull { setNeedsDisplay(dirty) }
+    }
+
+    /// 這一筆已經存進頁面：先留在畫面上，過一下再拿掉
+    func finish() {
+        if !lastPredictedRect.isNull { setNeedsDisplay(lastPredictedRect) }
+        if !points.isEmpty { finished.append((points, color)) }
+        points = []
+        predicted = []
+        lastPredictedRect = .null
+        clearFinishedWork?.cancel()
+        let w = DispatchWorkItem { [weak self] in self?.clearFinished() }
+        clearFinishedWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: w)
+    }
+
+    /// 拿掉已經存進頁面的筆跡（捲動、縮放時馬上拿掉，否則會和頁面錯開）
+    func clearFinished() {
+        guard !finished.isEmpty else { return }
+        let dirty = finished.reduce(CGRect.null) { $0.union(rect($1.points)) }
+        finished = []
+        setNeedsDisplay(dirty)
+    }
+
+    func clear() {
+        points = []
+        predicted = []
+        finished = []
+        lastPredictedRect = .null
+        setNeedsDisplay()
+    }
+
+    override func draw(_ rect: CGRect) {
+        guard let ctx = UIGraphicsGetCurrentContext() else { return }
+        ctx.setLineCap(.round)
+        ctx.setLineJoin(.round)
+        for run in finished { draw(run.points, run.color, in: ctx, rect: rect) }
+        if !points.isEmpty { draw(points + predicted, color, in: ctx, rect: rect) }
+    }
+
+    private func draw(_ all: [(CGPoint, CGFloat)], _ color: UIColor, in ctx: CGContext, rect: CGRect) {
+        guard let first = all.first else { return }
+        color.setStroke()
+        color.setFill()
+        if all.count == 1 {
+            ctx.fillEllipse(in: CGRect(x: first.0.x - first.1 / 2, y: first.0.y - first.1 / 2, width: first.1, height: first.1))
+            return
+        }
+        for (a, b) in zip(all, all.dropFirst()) {
+            let w = (a.1 + b.1) / 2
+            let seg = CGRect(x: min(a.0.x, b.0.x) - w, y: min(a.0.y, b.0.y) - w,
+                             width: abs(a.0.x - b.0.x) + w * 2, height: abs(a.0.y - b.0.y) + w * 2)
+            guard seg.intersects(rect) else { continue }
+            ctx.setLineWidth(w)
+            ctx.move(to: a.0)
+            ctx.addLine(to: b.0)
+            ctx.strokePath()
+        }
+    }
+}
+
+// MARK: - 頁面上的筆跡（CATiledLayer：放大也清晰）
+
+final class PageInkView: UIView {
+    override class var layerClass: AnyClass { FastTiledLayer.self }
+
+    private let lock = NSLock()
+    private var _strokes: [InkStroke] = []
+    private var _offset: CGPoint = .zero
+    private var _hidden: Set<UUID> = []
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        let tiled = layer as! CATiledLayer
+        tiled.tileSize = CGSize(width: 512, height: 512)
+        tiled.levelsOfDetail = 6
+        tiled.levelsOfDetailBias = 3
+        isOpaque = false
+        backgroundColor = .clear
+        isUserInteractionEnabled = false
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// offset：頁面內容原點在這個 view 裡的位置（擴展頁面的留白）
+    func set(strokes: [InkStroke], offset: CGPoint) {
+        lock.lock()
+        let old = _strokes, oldOffset = _offset
+        _strokes = strokes
+        _offset = offset
+        lock.unlock()
+        guard strokes != old || offset != oldOffset else { return }
+        // 只重畫有變的筆跡範圍（寫一筆不用整頁重畫）
+        guard offset == oldOffset, let dirty = InkGeometry.changedBounds(old, strokes) else {
+            setNeedsDisplay()
+            return
+        }
+        setNeedsDisplay(dirty.offsetBy(dx: offset.x, dy: offset.y))
+    }
+
+    /// 套索移動中先藏起來的筆跡
+    func setHidden(_ ids: Set<UUID>) {
+        lock.lock()
+        let changed = ids != _hidden
+        _hidden = ids
+        lock.unlock()
+        if changed { setNeedsDisplay() }
+    }
+
+    override func draw(_ rect: CGRect) {
+        guard let ctx = UIGraphicsGetCurrentContext() else { return }
+        lock.lock()
+        let strokes = _strokes, o = _offset, hidden = _hidden
+        lock.unlock()
+        guard !strokes.isEmpty else { return }
+        ctx.translateBy(x: o.x, y: o.y)
+        InkRenderer.draw(strokes, in: ctx, hidden: hidden, clip: rect.offsetBy(dx: -o.x, dy: -o.y))
+    }
+}
+
+// MARK: - 編輯器：寫、存、擦
+
+/// 寫到一半的一筆（文件座標）
+struct InkDraft {
+    var points: [InkPoint]
+    var colorHex: String
+    var baseWidth: CGFloat
+    var pressure: Bool
+}
+
+extension NotebookViewController {
+    /// 「筆」工具目前用自製筆刷
+    var customInkActive: Bool { tool == .pen && settings.customInk }
+    /// PencilKit 負責書寫的時候（自製筆刷時關掉 PencilKit 的書寫手勢；只在換工具、換設定時切換）
+    var pencilKitDraws: Bool { tool.isDrawing && !customInkActive }
+
+    func setupInkCapture() {
+        inkRecognizer.coordinateView = pagesContainer
+        inkRecognizer.delegate = self
+        inkRecognizer.onBegin = { [weak self] s in self?.inkBegan(s) }
+        inkRecognizer.onMove = { [weak self] new, pred in self?.inkMoved(new, predicted: pred) }
+        inkRecognizer.onEnd = { [weak self] cancelled in self?.inkEnded(cancelled: cancelled) }
+        canvas.addGestureRecognizer(inkRecognizer)
+        liveInkView.translatesAutoresizingMaskIntoConstraints = false
+        view.insertSubview(liveInkView, aboveSubview: canvas)
+        NSLayoutConstraint.activate([
+            liveInkView.topAnchor.constraint(equalTo: canvas.topAnchor),
+            liveInkView.bottomAnchor.constraint(equalTo: canvas.bottomAnchor),
+            liveInkView.leadingAnchor.constraint(equalTo: canvas.leadingAnchor),
+            liveInkView.trailingAnchor.constraint(equalTo: canvas.trailingAnchor),
+        ])
+    }
+
+    /// 筆壓對應的線寬：鋼筆、毛筆隨筆壓變化，其他筆型粗細固定
+    private func inkWidth(_ draft: InkDraft, force: CGFloat) -> CGFloat {
+        draft.pressure ? draft.baseWidth * (0.5 + 0.9 * force) : draft.baseWidth
+    }
+
+    private func screen(_ p: CGPoint) -> CGPoint { pagesContainer.convert(p, to: liveInkView) }
+
+    func inkBegan(_ s: InkCaptureRecognizer.Sample) {
+        dismissToolPopover()
+        if let p = paletteOverlay, p.mode == .launcher { dismissPalette() }
+        let preset = BrushStore.shared.current
+        var d = InkDraft(points: [], colorHex: preset.colorHex, baseWidth: max(preset.width, 0.1),
+                         pressure: preset.style == .pen || preset.style == .fountainPen)
+        let w = inkWidth(d, force: s.force)
+        d.points = [InkPoint(s.point, width: w)]
+        inkDraft = d
+        liveInkView.begin(screen(s.point), width: w * canvas.zoomScale, color: preset.color)
+    }
+
+    func inkMoved(_ new: [InkCaptureRecognizer.Sample], predicted: [InkCaptureRecognizer.Sample]) {
+        guard var d = inkDraft else { return }
+        let z = canvas.zoomScale
+        var added: [(CGPoint, CGFloat)] = []
+        for s in new {
+            // 跟上一點幾乎重疊的不記（不是圓滑，只是去掉重複點）
+            if let last = d.points.last, hypot(last.point.x - s.point.x, last.point.y - s.point.y) < 0.25 { continue }
+            let w = inkWidth(d, force: s.force)
+            d.points.append(InkPoint(s.point, width: w))
+            added.append((screen(s.point), w * z))
+        }
+        inkDraft = d
+        liveInkView.add(added, predicted: predicted.map { (screen($0.point), inkWidth(d, force: $0.force) * z) })
+    }
+
+    func inkEnded(cancelled: Bool) {
+        guard let d = inkDraft else { return }
+        inkDraft = nil
+        guard let first = d.points.first else { liveInkView.clear(); return }
+        // 整筆放在起點所在的那一頁（頁面內容座標）
+        let pi = pageIndex(containing: first.point) ?? nearestPageIndex(to: first.point)
+        guard pages.indices.contains(pi) else { liveInkView.clear(); return }
+        let o = contentOrigin(pi)
+        let stroke = InkGeometry.offset(InkStroke(colorHex: d.colorHex, points: d.points), by: CGPoint(x: -o.x, y: -o.y))
+        updatePage(pi) { $0.ink.append(stroke) }
+        liveInkView.finish()
+    }
+
+    /// 橡皮擦擦自製筆刷的筆跡；同一次擦除只登記一次上一步
+    func eraseInk(at p: CGPoint) {
+        guard tool == .eraser, let i = pageIndex(containing: p), !pages[i].ink.isEmpty else { return }
+        let o = contentOrigin(i)
+        let local = CGPoint(x: p.x - o.x, y: p.y - o.y)
+        let radius = settings.pixelEraser ? settings.eraserWidth / 2 : 4
+        guard let result = InkGeometry.erase(pages[i].ink, at: local, radius: radius, partial: settings.pixelEraser) else { return }
+        let undoable = !inkEraseUndoRegistered.contains(pages[i].id)
+        inkEraseUndoRegistered.insert(pages[i].id)
+        updatePage(i, undoable: undoable) { $0.ink = result }
+    }
+}

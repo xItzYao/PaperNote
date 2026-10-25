@@ -99,6 +99,11 @@ final class EditorSettings {
         get { bool("captureFreeform", false) }
         set { d.set(newValue, forKey: "captureFreeform") }
     }
+    /// 實驗：「筆」改用自製筆刷（照原始取樣點畫，不圓滑；見 InkEngine.swift）
+    var customInk: Bool {
+        get { bool("customInk", false) }
+        set { d.set(newValue, forKey: "customInk") }
+    }
 }
 
 /// 筆記本編輯畫面。整本筆記本是一張長畫布（一個 PKCanvasView），頁面背景與物件放在筆跡底下。
@@ -167,6 +172,15 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var circuitModeBeforeWire: CircuitMode = .select
     /// 每種元件上次的方向與翻轉，連續擺放時沿用
     var circuitPartStyle: [CircuitPart: (rotation: Int, flipH: Bool, flipV: Bool)] = [:]
+
+    // 自製筆刷（見 InkEngine.swift）
+    let inkRecognizer = InkCaptureRecognizer(target: nil, action: nil)
+    let liveInkView = LiveInkView()
+    var inkDraft: InkDraft?
+    /// 這次擦除已經登記過上一步的頁面（下筆時清空）
+    var inkEraseUndoRegistered: Set<UUID> = []
+    /// 畫布捲動手勢原本接受的觸碰種類（自製筆刷時改成只接受手指）
+    var panTouchTypesDefault: [NSNumber]?
 
     // 自訂套索
     var lassoPoints: [CGPoint] = []
@@ -507,11 +521,13 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     // MARK: - Scroll / zoom
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        liveInkView.clearFinished()
         updateVisiblePages()
         updatePageIndicator()
     }
 
     func scrollViewDidZoom(_ scrollView: UIScrollView) {
+        liveInkView.clearFinished()
         updateZoomLayout()
     }
 
@@ -629,6 +645,13 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     struct PageContentSnapshot {
         var elements: [PageElement]
         var highlights: [TextHighlight]
+        var ink: [InkStroke]
+
+        init(_ page: Page) {
+            elements = page.elements
+            highlights = page.highlights
+            ink = page.ink
+        }
     }
 
     func updatePage(_ i: Int, undoable: Bool = true, _ change: (inout Page) -> Void) {
@@ -638,7 +661,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         let new = pages[i]
         guard old != new else { return }
         if undoable {
-            registerUndo(pageID: old.id, restore: PageContentSnapshot(elements: old.elements, highlights: old.highlights))
+            registerUndo(pageID: old.id, restore: PageContentSnapshot(old))
         }
         refreshPage(i)
         scheduleSave()
@@ -648,9 +671,10 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         canvas.undoManager?.registerUndo(withTarget: self) { vc in
             guard let i = vc.pageIndex(of: pageID) else { return }
             let current = vc.pages[i]
-            vc.registerUndo(pageID: pageID, restore: PageContentSnapshot(elements: current.elements, highlights: current.highlights))
+            vc.registerUndo(pageID: pageID, restore: PageContentSnapshot(current))
             vc.session.document.pages[i].elements = restore.elements
             vc.session.document.pages[i].highlights = restore.highlights
+            vc.session.document.pages[i].ink = restore.ink
             if let sel = vc.selected, vc.locate(sel) == nil { vc.select(nil) }
             vc.refreshPage(i)
             vc.scheduleSave()

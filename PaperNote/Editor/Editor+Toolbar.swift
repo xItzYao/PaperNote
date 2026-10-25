@@ -228,7 +228,7 @@ extension NotebookViewController {
     }
 
     func applyTool() {
-        canvas.drawingGestureRecognizer.isEnabled = tool.isDrawing
+        canvas.drawingGestureRecognizer.isEnabled = pencilKitDraws
         circuitLibrary.isHidden = tool != .circuit
         if tool.isInking { BrushStore.shared.activeCategory = tool == .highlighter ? .highlighter : .pen }
         switch tool {
@@ -243,8 +243,12 @@ extension NotebookViewController {
         }
         canvas.drawingPolicy = settings.fingerDrawing ? .anyInput : .pencilOnly
         // 只有開啟「用手指書寫」時，手指才用來截圖、選字、畫表格線、圈選；否則單指捲動
-        let fingerUsedByTool = settings.fingerDrawing && tool.drawsWithPan
+        let fingerUsedByTool = settings.fingerDrawing && (tool.drawsWithPan || customInkActive)
         canvas.panGestureRecognizer.minimumNumberOfTouches = fingerUsedByTool ? 2 : 1
+        // 自製筆刷時 PencilKit 不接 Pencil，捲動手勢也不能接，否則 Pencil 一畫頁面就跟著捲
+        if panTouchTypesDefault == nil { panTouchTypesDefault = canvas.panGestureRecognizer.allowedTouchTypes }
+        canvas.panGestureRecognizer.allowedTouchTypes = customInkActive
+            ? [NSNumber(value: UITouch.TouchType.direct.rawValue)] : (panTouchTypesDefault ?? [])
         updateGestureAvailability()
         configurePencilKitGestures()
 
@@ -766,6 +770,11 @@ extension NotebookViewController {
             UIAction(title: "畫線停住變直線／圖形", image: UIImage(systemName: "line.diagonal"), state: s.shapeSnap ? .on : .off) { [weak self] _ in
                 s.shapeSnap.toggle()
                 self?.updateGestureAvailability()
+            },
+            UIAction(title: "實驗：自製筆刷（不圓滑）", image: UIImage(systemName: "scribble"), state: s.customInk ? .on : .off) { [weak self] _ in
+                s.customInk.toggle()
+                self?.applyTool()
+                self?.showToast(s.customInk ? "「筆」改用自製筆刷：照筆尖原始軌跡畫，不做圓滑" : "「筆」改回 PencilKit")
             },
             UIAction(title: "拷貝除錯紀錄", image: UIImage(systemName: "ladybug")) { [weak self] _ in
                 UIPasteboard.general.string = DebugLog.text

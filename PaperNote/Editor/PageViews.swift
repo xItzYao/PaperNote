@@ -65,6 +65,8 @@ final class PageContainerView: UIView {
     let pageID: UUID
     let background = PageBackgroundView()
     let elementsLayer = UIView()
+    /// 自製筆刷的筆跡（畫在物件上面、PencilKit 筆跡底下）
+    let inkView = PageInkView()
     private var elementViews: [UUID: UIView] = [:]
     private var lastPage: Page?
 
@@ -80,6 +82,7 @@ final class PageContainerView: UIView {
         addSubview(background)
         addSubview(elementsLayer)
         elementsLayer.clipsToBounds = false
+        addSubview(inkView)
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -95,6 +98,8 @@ final class PageContainerView: UIView {
             layer.shadowPath = UIBezierPath(rect: CGRect(origin: .zero, size: size)).cgPath
         }
         elementsLayer.frame = CGRect(x: page.insets.left, y: page.insets.top, width: base.width, height: base.height)
+        if inkView.frame.size != size { inkView.frame = CGRect(origin: .zero, size: size) }
+        inkView.set(strokes: page.ink, offset: CGPoint(x: page.insets.left, y: page.insets.top))
 
         if lastPage == nil || lastPage!.elements != page.elements {
             var reuse = elementViews
