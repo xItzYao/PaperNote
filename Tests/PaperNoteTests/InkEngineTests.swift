@@ -266,12 +266,22 @@ final class InkEngineFlowTests: XCTestCase {
         let writing = darkness(ofDocRect: area)
         editor.inkEnded(cancelled: false)
         var afterLift: [Double] = []
-        for _ in 0..<12 {
+        for i in 0..<12 {
             spin(0.04)
-            afterLift.append(darkness(ofDocRect: area))
+            let composite = darkness(ofDocRect: area)
+            afterLift.append(composite)
+            // 診斷：分別量寫的時候那層、頁面那層
+            editor.liveInkView.isHidden = true
+            let pageOnly = darkness(ofDocRect: area)
+            editor.liveInkView.isHidden = false
+            editor.pageViews.values.forEach { $0.inkView.isHidden = true }
+            let liveOnly = darkness(ofDocRect: area)
+            editor.pageViews.values.forEach { $0.inkView.isHidden = false }
+            print("INKDIAG t=\((i + 1) * 40)ms composite=\(Int(composite)) page=\(Int(pageOnly)) live=\(Int(liveOnly))")
         }
         spin(1.5)
         let settled = darkness(ofDocRect: area)
+        print("INKDIAG writing=\(Int(writing)) settled=\(Int(settled)) zoom=\(editor.canvas.zoomScale) scale=\(window.screen.scale)")
         XCTAssertGreaterThan(settled, 0, "筆跡要畫在頁面上")
         XCTAssertEqual(writing / settled, 1, accuracy: 0.12, "寫的時候和放開後要一樣粗")
         for (i, d) in afterLift.enumerated() {
