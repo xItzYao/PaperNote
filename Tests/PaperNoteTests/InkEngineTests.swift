@@ -229,7 +229,8 @@ final class InkEngineFlowTests: XCTestCase {
     }
 
     /// 螢幕上這塊區域（文件座標）的墨水量：白紙上每個像素有多深
-    private func darkness(ofDocRect r: CGRect) -> Double {
+    /// 螢幕上這塊區域（文件座標）的墨水：白紙上每個像素有多深的總和，以及墨水的重心（螢幕像素）
+    private func inkOnScreen(_ r: CGRect) -> (amount: Double, x: Double, y: Double) {
         let region = editor.pagesContainer.convert(r, to: window)
         let fmt = UIGraphicsImageRendererFormat()
         fmt.scale = window.screen.scale
@@ -239,14 +240,24 @@ final class InkEngineFlowTests: XCTestCase {
             window.drawHierarchy(in: CGRect(origin: CGPoint(x: -region.minX, y: -region.minY), size: window.bounds.size),
                                  afterScreenUpdates: true)
         }
-        guard let cg = img.cgImage else { return 0 }
+        guard let cg = img.cgImage else { return (0, 0, 0) }
         let w = cg.width, h = cg.height
         var px = [UInt8](repeating: 0, count: w * h * 4)
         let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
                             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
         ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
-        return stride(from: 0, to: px.count, by: 4).reduce(0.0) { $0 + Double(255 - min(px[$1], px[$1 + 1], px[$1 + 2])) }
+        var sum = 0.0, sx = 0.0, sy = 0.0
+        for i in 0..<(w * h) {
+            let d = Double(255 - min(px[i * 4], px[i * 4 + 1], px[i * 4 + 2]))
+            guard d > 0 else { continue }
+            sum += d
+            sx += d * Double(i % w)
+            sy += d * Double(i / w)
+        }
+        return sum > 0 ? (sum, sx / sum, sy / sum) : (0, 0, 0)
     }
+
+    private func darkness(ofDocRect r: CGRect) -> Double { inkOnScreen(r).amount }
 
     /// 回報的問題：細線寫的時候正常，筆離開後突然變粗，過一下才變回來（寫的時候的筆跡和頁面上的筆跡疊在一起）
     func testThinStrokeKeepsItsLookAfterLift() {
@@ -278,6 +289,33 @@ final class InkEngineFlowTests: XCTestCase {
         XCTAssertEqual(writing / settled, 1, accuracy: 0.12, "寫的時候和放開後要一樣粗")
         for (i, d) in afterLift.enumerated() {
             XCTAssertEqual(d / settled, 1, accuracy: 0.12, "放開後 \((i + 1) * 40)ms 粗細變了（變粗＝兩層疊在一起，變淡＝閃一下）")
+        }
+    }
+
+    /// 回報的問題：寫完字後筆跡會稍微往右偏。放開前（寫的時候那層）和放開後（頁面那層）筆跡在螢幕上要在同一個位置
+    func testStrokeStaysInPlaceAfterLift() {
+        for zoom in [1.0, 2.0, 1.37] {
+            editor.canvas.zoomScale = editor.fitZoom * CGFloat(zoom)
+            spin(0.2)
+            let a = docPoint(150, 250), b = docPoint(150, 330), c = docPoint(230, 330)
+            editor.inkBegan(.init(point: a, force: 0.5))
+            let pts = (1...40).map { i -> CGPoint in
+                let t = CGFloat(i) / 40
+                return t <= 0.5 ? CGPoint(x: a.x, y: a.y + (b.y - a.y) * t * 2) : CGPoint(x: b.x + (c.x - b.x) * (t - 0.5) * 2, y: b.y)
+            }
+            editor.inkMoved(pts.map { .init(point: $0, force: 0.5) })
+            spin(0.1)
+            let area = CGRect(x: a.x - 15, y: a.y - 15, width: c.x - a.x + 30, height: c.y - a.y + 30)
+            let writing = inkOnScreen(area)
+            editor.inkEnded(cancelled: false)
+            spin(1.5)
+            let settled = inkOnScreen(area)
+            print("INKDIAG zoom=\(editor.canvas.zoomScale) writing=(\(writing.x), \(writing.y)) settled=(\(settled.x), \(settled.y)) amount \(Int(writing.amount))/\(Int(settled.amount))")
+            XCTAssertGreaterThan(settled.amount, 0)
+            XCTAssertEqual(settled.x, writing.x, accuracy: 0.3, "放大 \(zoom) 倍：放開後筆跡左右移動了")
+            XCTAssertEqual(settled.y, writing.y, accuracy: 0.3, "放大 \(zoom) 倍：放開後筆跡上下移動了")
+            editor.undoTapped()
+            spin(0.3)
         }
     }
 
