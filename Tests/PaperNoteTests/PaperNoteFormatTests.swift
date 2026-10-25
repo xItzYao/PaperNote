@@ -57,7 +57,13 @@ final class PaperNoteFormatTests: XCTestCase {
         let copy = try NotebookSession(id: meta.id)
         XCTAssertEqual(copy.document.pages, original.document.pages, "頁面、自製筆刷筆跡、物件、螢光標示都一樣")
         let p0 = original.document.pages[0].id
-        XCTAssertEqual(copy.drawings[p0]?.dataRepresentation(), original.drawings[p0]?.dataRepresentation(), "PencilKit 筆跡可以繼續編輯")
+        // 存在檔案裡的筆跡原封不動帶過去，讀出來是同樣的筆畫（可以繼續擦、移動）
+        let file0 = "drawings/\(p0.uuidString).drawing"
+        XCTAssertEqual(try Data(contentsOf: copy.directory.appendingPathComponent(file0)),
+                       try Data(contentsOf: original.directory.appendingPathComponent(file0)))
+        let a = try XCTUnwrap(original.drawings[p0]), b = try XCTUnwrap(copy.drawings[p0])
+        XCTAssertEqual(b.strokes.count, a.strokes.count)
+        XCTAssertEqual(b.strokes.first?.path.map(\.location), a.strokes.first?.path.map(\.location), "PencilKit 筆跡可以繼續編輯")
         XCTAssertNotNil(copy.pdfPage(for: copy.document.pages[0]), "PDF 背景也帶過去")
         if case let .image(d) = copy.document.pages[1].elements.first?.content {
             XCTAssertNotNil(copy.image(named: d.file), "圖片也帶過去")

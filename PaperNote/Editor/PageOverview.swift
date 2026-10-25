@@ -223,7 +223,8 @@ final class PageOverviewController: UIViewController, UICollectionViewDataSource
     private func requestThumbnail(_ id: UUID) {
         waiting.removeAll { $0 == id }
         waiting.append(id)
-        drawNextThumbnail()
+        // 等這一格真的出現在畫面上再看要不要畫（willDisplay 時還不算在畫面上）
+        DispatchQueue.main.async { [weak self] in self?.drawNextThumbnail() }
     }
 
     private func visibleCell(_ id: UUID) -> PageThumbCell? {
