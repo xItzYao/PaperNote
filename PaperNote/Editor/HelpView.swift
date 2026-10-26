@@ -19,7 +19,7 @@ struct HelpView: View {
         Item(symbol: "eraser", title: "橡皮擦",
              detail: "整筆擦除／局部擦除；也能擦掉 PDF 上的螢光標示。表格、圖片、文字框不會被擦掉。Apple Pencil 筆身點兩下可以切換橡皮擦。"),
         Item(symbol: "lasso", title: "套索",
-             detail: "用 Pencil 圈選筆跡、表格、圖片、文字框、螢光標示，拖曳可以一起移動；選單有拷貝、剪下、複製一份、刪除。圈到一部分就會選到。表格（右上角）與圖片（左上角）的鎖頭可以鎖定位置，鎖定後不會被圈到。"),
+             detail: "用 Pencil 圈選筆跡、表格、圖片、文字框、螢光標示，拖曳可以一起移動；點一下選取範圍打開選單：改顏色、拷貝、剪下、複製一份、刪除。圈到一部分就會選到。表格（右上角）與圖片（左上角）的鎖頭可以鎖定位置，鎖定後不會被圈到。"),
         Item(symbol: "camera.viewfinder", title: "截圖",
              detail: "用 Pencil 框選範圍（開啟「用手指書寫」時手指也可以），可以釘選在畫面上、拷貝、翻譯圖中文字、存到照片。釘選的圖片換頁、換筆記本都會留著，拖右下角可以調整大小。"),
         Item(symbol: "hand.point.up.left", title: "選取",

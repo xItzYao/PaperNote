@@ -156,7 +156,12 @@ extension NotebookViewController {
         guard !sel.isEmpty else { return }
         lassoSel = sel
         overlay.showLassoSelection(sel.bounds)
-        presentLassoMenu()
+        // 不馬上跳選單（會蓋住圈到的東西、沒辦法拖）：點一下選取範圍才打開
+        let hintKey = "lasso.tapForMenuHintShown"
+        if !UserDefaults.standard.bool(forKey: hintKey) {
+            UserDefaults.standard.set(true, forKey: hintKey)
+            showToast("拖曳可以移動；點一下選取範圍打開選單")
+        }
     }
 
     // MARK: 移動
@@ -238,7 +243,6 @@ extension NotebookViewController {
         lassoSel = LassoSelection(strokeIndices: Array(base..<(base + sel.strokeIndices.count)), elements: sel.elements,
                                   highlights: sel.highlights, bounds: sel.bounds.offsetBy(dx: d.x, dy: d.y), ink: movedInk)
         overlay.showLassoSelection(lassoSel?.bounds)
-        presentLassoMenu()
     }
 
     private func cancelLassoMove() {
@@ -544,7 +548,6 @@ extension NotebookViewController {
         lassoSel = LassoSelection(strokeIndices: Array(base..<(base + clip.strokes.count)), elements: newElements,
                                   highlights: newHighlights, bounds: clip.bounds.offsetBy(dx: d.x, dy: d.y), ink: newInk)
         overlay.showLassoSelection(lassoSel?.bounds)
-        presentLassoMenu()
     }
 
     // MARK: - 鎖頭
