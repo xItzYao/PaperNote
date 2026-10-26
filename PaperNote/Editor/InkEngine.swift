@@ -366,40 +366,82 @@ final class PageInkView: UIView {
         layer.sublayers?.forEach { $0.contentsScale = scale }
     }
 
-    /// 同顏色、同粗細、連續寫的筆跡合成一條路徑（一個 CAShapeLayer）；顏色換了就開新的一層，前後疊放順序不變
-    private func rebuild() {
-        struct Run { var color: String; var width: CGFloat; var path = CGMutablePath() }
-        var runs: [Run] = []
-        func path(_ color: String, _ width: CGFloat) -> CGMutablePath {
-            if let last = runs.last, last.color == color, last.width == width { return last.path }
-            runs.append(Run(color: color, width: width))
-            return runs[runs.count - 1].path
+    /// 一層（一個 CAShapeLayer）最多畫幾筆。整頁合成一層的話，每寫一筆整頁都要重畫，筆跡多時寫字會卡一下
+    static let strokesPerLayer = 64
+
+    /// 一層要畫的筆跡：同顏色、同粗細、連續寫的幾筆
+    private struct Chunk: Equatable {
+        var color: String
+        var width: CGFloat
+        /// 粗細會變的筆（毛筆）：這一層只畫線寬是 width 的那幾段
+        var variable: Bool
+        var strokes: [InkStroke]
+    }
+
+    private var chunks: [Chunk] = []
+    private var builtOffset: CGPoint?
+
+    /// 毛筆一段的線寬（取到 0.05pt，同樣粗細的段才能畫在同一層）
+    private static func segmentWidth(_ a: InkPoint, _ b: InkPoint) -> CGFloat {
+        (((a.width + b.width) / 2) * 20).rounded() / 20
+    }
+
+    private func makeChunks() -> [Chunk] {
+        var out: [Chunk] = []
+        func add(_ s: InkStroke, width: CGFloat, variable: Bool) {
+            if let last = out.last, last.color == s.colorHex, last.width == width, last.variable == variable,
+               last.strokes.count < Self.strokesPerLayer {
+                out[out.count - 1].strokes.append(s)
+            } else {
+                out.append(Chunk(color: s.colorHex, width: width, variable: variable, strokes: [s]))
+            }
         }
-        let o = offset
-        func pt(_ p: InkPoint) -> CGPoint { CGPoint(x: p.point.x + o.x, y: p.point.y + o.y) }
         for s in strokes where !hiddenIDs.contains(s.id) {
             guard let first = s.points.first else { continue }
             if s.points.allSatisfy({ $0.w == first.w }) {
-                let p = path(s.colorHex, first.width)
+                add(s, width: first.width, variable: false)
+            } else {
+                var widths: [CGFloat] = []
+                for (a, b) in zip(s.points, s.points.dropFirst()) {
+                    let w = Self.segmentWidth(a, b)
+                    if !widths.contains(w) { widths.append(w) }
+                }
+                for w in widths { add(s, width: w, variable: true) }
+            }
+        }
+        return out
+    }
+
+    private func path(_ c: Chunk) -> CGPath {
+        let p = CGMutablePath()
+        let o = offset
+        func pt(_ q: InkPoint) -> CGPoint { CGPoint(x: q.point.x + o.x, y: q.point.y + o.y) }
+        for s in c.strokes {
+            guard let first = s.points.first else { continue }
+            if c.variable {
+                for (a, b) in zip(s.points, s.points.dropFirst()) where Self.segmentWidth(a, b) == c.width {
+                    p.move(to: pt(a))
+                    p.addLine(to: pt(b))
+                }
+            } else {
                 p.move(to: pt(first))
                 // 只有一點：長度 0 的線段加圓頭＝一個點
                 if s.points.count == 1 { p.addLine(to: pt(first)) }
                 for q in s.points.dropFirst() { p.addLine(to: pt(q)) }
-            } else {
-                // 粗細會變（毛筆）：一段一段，線寬取到 0.05pt
-                for (a, b) in zip(s.points, s.points.dropFirst()) {
-                    let p = path(s.colorHex, (((a.width + b.width) / 2) * 20).rounded() / 20)
-                    p.move(to: pt(a))
-                    p.addLine(to: pt(b))
-                }
             }
         }
+        return p
+    }
 
+    /// 前後疊放順序不變；只重畫內容有變的那幾層（寫一筆通常只動到最後一層）
+    private func rebuild() {
+        let new = makeChunks()
+        let all = builtOffset != offset
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         var layers = (layer.sublayers ?? []).compactMap { $0 as? CAShapeLayer }
         let scale = window?.screen.scale ?? UIScreen.main.scale
-        while layers.count < runs.count {
+        while layers.count < new.count {
             let l = CAShapeLayer()
             l.fillColor = nil
             l.lineCap = .round
@@ -409,13 +451,16 @@ final class PageInkView: UIView {
             layer.addSublayer(l)
             layers.append(l)
         }
-        for (l, run) in zip(layers, runs) {
-            l.path = run.path
-            l.lineWidth = run.width
-            l.strokeColor = UIColor(hex: run.color).cgColor
+        for (i, c) in new.enumerated() where all || i >= chunks.count || chunks[i] != c {
+            let l = layers[i]
+            l.path = path(c)
+            l.lineWidth = c.width
+            l.strokeColor = UIColor(hex: c.color).cgColor
         }
-        for l in layers.dropFirst(runs.count) { l.removeFromSuperlayer() }
+        for l in layers.dropFirst(new.count) { l.removeFromSuperlayer() }
         CATransaction.commit()
+        chunks = new
+        builtOffset = offset
     }
 }
 

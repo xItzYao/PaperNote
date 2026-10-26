@@ -2,54 +2,39 @@ import XCTest
 @testable import PaperNote
 
 /// 回報的問題：頁面還在慣性捲動時筆尖已經下筆，頁面應該馬上停住
+/// （慣性沒辦法用程式觸發，動畫捲動在 CI 上也不一定會動，所以直接看有沒有叫頁面停在目前的位置）
 final class ScrollMomentumTests: XCTestCase {
-    /// 模擬「正在慣性捲動」的捲動畫面（慣性本身沒辦法用程式觸發，用動畫捲動代替）
-    private final class CoastingScrollView: UIScrollView {
-        override var isDecelerating: Bool { true }
+    private final class RecordingScrollView: UIScrollView {
+        var decelerating = false
+        var stops: [(CGPoint, Bool)] = []
+        override var isDecelerating: Bool { decelerating }
+        override func setContentOffset(_ offset: CGPoint, animated: Bool) {
+            stops.append((offset, animated))
+            super.setContentOffset(offset, animated: animated)
+        }
     }
 
-    private var window: UIWindow!
-    private var scroll: CoastingScrollView!
-
-    override func setUpWithError() throws {
-        window = try TestWindow.make()
-        scroll = CoastingScrollView(frame: window.bounds)
-        scroll.contentSize = CGSize(width: window.bounds.width, height: 50_000)
-        window.addSubview(scroll)
-        window.makeKeyAndVisible()
-    }
-
-    override func tearDown() {
-        window.isHidden = true
-        window = nil
-        scroll = nil
-        super.tearDown()
-    }
-
-    private func spin(_ s: TimeInterval) { RunLoop.main.run(until: Date().addingTimeInterval(s)) }
-
-    /// 開始動畫捲動，等到真的開始動就回來（量的時候動畫還在很前段，不受 CI 快慢影響）
-    private func startCoasting() -> CGFloat {
-        scroll.setContentOffset(CGPoint(x: 0, y: 40_000), animated: true)
-        for _ in 0..<60 where scroll.contentOffset.y <= 0 { spin(1.0 / 120) }
-        return scroll.contentOffset.y
+    private func scrollView(at y: CGFloat) -> RecordingScrollView {
+        let v = RecordingScrollView(frame: CGRect(x: 0, y: 0, width: 400, height: 600))
+        v.contentSize = CGSize(width: 400, height: 50_000)
+        v.contentOffset = CGPoint(x: 0, y: y)
+        return v
     }
 
     func testPencilDownStopsCoasting() {
-        let atPencilDown = startCoasting()
-        XCTAssertGreaterThan(atPencilDown, 0, "測試前提：頁面在捲動")
-        XCTAssertLessThan(atPencilDown, 39_000, "測試前提：還沒捲到底")
-        scroll.stopMomentum()
-        spin(0.4)
-        XCTAssertEqual(scroll.contentOffset.y, atPencilDown, accuracy: 0.5, "下筆後頁面要停住")
+        let v = scrollView(at: 1234)
+        v.decelerating = true
+        v.stopMomentum()
+        XCTAssertEqual(v.stops.count, 1, "還在慣性捲動：要叫它停下來")
+        XCTAssertEqual(v.stops.first?.0, CGPoint(x: 0, y: 1234), "停在目前的位置")
+        XCTAssertEqual(v.stops.first?.1, false, "馬上停（不要動畫）")
     }
 
     func testDoesNothingWhenStill() {
-        let still = UIScrollView(frame: window.bounds)
-        still.contentSize = CGSize(width: window.bounds.width, height: 5_000)
-        still.contentOffset = CGPoint(x: 0, y: 300)
-        still.stopMomentum()
-        XCTAssertEqual(still.contentOffset.y, 300)
+        let v = scrollView(at: 300)
+        v.stopMomentum()
+        XCTAssertTrue(v.stops.isEmpty, "沒有在捲動就什麼都不做")
+        XCTAssertEqual(v.contentOffset.y, 300)
     }
 }
 

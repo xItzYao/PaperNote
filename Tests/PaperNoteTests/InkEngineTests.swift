@@ -47,7 +47,23 @@ final class InkEngineTests: XCTestCase {
         let t = CACurrentMediaTime()
         v.set(strokes: strokes, offset: .zero)
         XCTAssertLessThan(CACurrentMediaTime() - t, 0.25)
-        XCTAssertEqual(v.layer.sublayers?.count, 1, "同顏色同粗細的筆跡合成一層")
+        XCTAssertLessThanOrEqual(v.layer.sublayers?.count ?? 0, 1500 / PageInkView.strokesPerLayer + 1, "連續寫的筆跡合成幾塊，不是一筆一層")
+    }
+
+    /// 回報的問題：筆跡很多的頁面寫字會卡一下，剛寫的那筆才突然跳出來（每寫一筆整頁的筆跡都重畫）。
+    /// 寫一筆只能重畫最後一小塊，前面的不動
+    func testAddingAStrokeOnlyRedrawsTheLastChunk() {
+        let many = (0..<300).map { i in stroke([(CGFloat(i % 20) * 25, CGFloat(i / 20) * 20), (CGFloat(i % 20) * 25 + 10, CGFloat(i / 20) * 20 + 8)]) }
+        let v = PageInkView(frame: CGRect(x: 0, y: 0, width: 600, height: 850))
+        v.set(strokes: many, offset: .zero)
+        let before = (v.layer.sublayers ?? []).compactMap { ($0 as? CAShapeLayer)?.path }
+        XCTAssertGreaterThan(before.count, 1, "很多筆要分成好幾塊")
+        v.set(strokes: many + [stroke([(5, 800), (60, 820)])], offset: .zero)
+        let after = (v.layer.sublayers ?? []).compactMap { ($0 as? CAShapeLayer)?.path }
+        XCTAssertGreaterThanOrEqual(after.count, before.count)
+        for (i, (old, new)) in zip(before.dropLast(), after).enumerated() {
+            XCTAssertTrue(old === new, "第 \(i + 1) 塊沒有變，不能重畫")
+        }
     }
 
     func testSinglePointDrawsADot() {
