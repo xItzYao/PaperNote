@@ -5,9 +5,9 @@ import XCTest
 /// （慣性沒辦法用程式觸發，動畫捲動在 CI 上也不一定會動，所以直接看有沒有叫頁面停在目前的位置）
 final class ScrollMomentumTests: XCTestCase {
     private final class RecordingScrollView: UIScrollView {
-        var decelerating = false
+        var coasting = false
         var stops: [(CGPoint, Bool)] = []
-        override var isDecelerating: Bool { decelerating }
+        override var isDecelerating: Bool { coasting }
         override func setContentOffset(_ offset: CGPoint, animated: Bool) {
             stops.append((offset, animated))
             super.setContentOffset(offset, animated: animated)
@@ -23,7 +23,7 @@ final class ScrollMomentumTests: XCTestCase {
 
     func testPencilDownStopsCoasting() {
         let v = scrollView(at: 1234)
-        v.decelerating = true
+        v.coasting = true
         v.stopMomentum()
         XCTAssertEqual(v.stops.count, 1, "還在慣性捲動：要叫它停下來")
         XCTAssertEqual(v.stops.first?.0, CGPoint(x: 0, y: 1234), "停在目前的位置")
