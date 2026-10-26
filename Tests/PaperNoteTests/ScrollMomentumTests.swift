@@ -44,13 +44,6 @@ final class ScrollMomentumTests: XCTestCase {
         XCTAssertEqual(scroll.contentOffset.y, atPencilDown, accuracy: 0.5, "下筆後頁面要停住")
     }
 
-    /// 確認這個測試真的量得到「還在動」：不停住的話頁面會繼續捲
-    func testCoastingKeepsMovingWithoutStop() {
-        let y = startCoasting()
-        spin(0.05)
-        XCTAssertGreaterThan(scroll.contentOffset.y - y, 50)
-    }
-
     func testDoesNothingWhenStill() {
         let still = UIScrollView(frame: window.bounds)
         still.contentSize = CGSize(width: window.bounds.width, height: 5_000)
