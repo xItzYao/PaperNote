@@ -53,7 +53,11 @@ final class InkEngineTests: XCTestCase {
     /// 回報的問題：筆跡很多的頁面寫字會卡一下，剛寫的那筆才突然跳出來（每寫一筆整頁的筆跡都重畫）。
     /// 寫一筆只能重畫最後一小塊，前面的不動
     func testAddingAStrokeOnlyRedrawsTheLastChunk() {
-        let many = (0..<300).map { i in stroke([(CGFloat(i % 20) * 25, CGFloat(i / 20) * 20), (CGFloat(i % 20) * 25 + 10, CGFloat(i / 20) * 20 + 8)]) }
+        var many: [InkStroke] = []
+        for i in 0..<300 {
+            let x = CGFloat(i % 20) * 25, y = CGFloat(i / 20) * 20
+            many.append(stroke([(x, y), (x + 10, y + 8)]))
+        }
         let v = PageInkView(frame: CGRect(x: 0, y: 0, width: 600, height: 850))
         v.set(strokes: many, offset: .zero)
         let before = (v.layer.sublayers ?? []).compactMap { ($0 as? CAShapeLayer)?.path }
