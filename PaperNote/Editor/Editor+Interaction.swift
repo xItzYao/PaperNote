@@ -98,7 +98,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
                 let since = String(format: "%.2f", CACurrentMediaTime() - self.lastPencilTime)
                 let p = t.location(in: self.view)
                 let rel = self.lastPencilPoint.map { String(format: "(%.0f, %.0f)", p.x - $0.x, p.y - $0.y) } ?? "nil"
-                let busy = self.busyGestures()
+                let busy = self.busyGestures() + self.recoverScrollAfterMenu()
                 DebugLog.add("finger down r=\(String(format: "%.1f", t.majorRadius)) palm=\(palm) pencilDown=\(self.pencilDown) sincePencil=\(since)s fromPencil=\(rel) holdingPalm=\(self.palmBlocker.holdingPalm) busy=\(busy)")
                 if let dump = self.uiTestDump {
                     dump.accessibilityLabel = "down: " + busy
@@ -236,6 +236,27 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         return true
     }
 
+    /// 選單開著時滑頁面：系統用視窗上的手勢（_UIPassthroughScrollGestureRecognizer）幫頁面捲動，選單關掉後這個手勢還在，
+    /// 頁面也還以為正在被拖。手指按下時（這時頁面不可能還在被拖）把它們恢復。回傳做了什麼（除錯用）
+    func recoverScrollAfterMenu() -> String {
+        var done: [String] = []
+        if let window = view.window {
+            for g in window.gestureRecognizers ?? [] where String(describing: type(of: g)).contains("PassthroughScroll") {
+                window.removeGestureRecognizer(g)
+                done.append("removed passthrough")
+            }
+        }
+        let pan = canvas.panGestureRecognizer
+        if (canvas.isDragging || canvas.isTracking) && pan.state == .possible {
+            pan.isEnabled = false
+            pan.isEnabled = true
+            done.append("reset pan")
+        }
+        guard !done.isEmpty else { return "" }
+        DebugLog.add("recover scroll after menu: " + done.joined(separator: ", "))
+        return " fix=" + done.joined(separator: "+")
+    }
+
     /// 除錯：手指剛按下時，畫布上不在待命狀態（或被關掉）的手勢。頁面捲不動時看是誰卡住
     func busyGestures() -> String {
         var out: [String] = []
@@ -259,7 +280,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         }
         let pan = canvas.panGestureRecognizer
         let draw = canvas.drawingGestureRecognizer
-        out.append("pan=\(pan.state.rawValue)\(pan.isEnabled ? "" : ",off") draw=\(draw.state.rawValue)\(draw.isEnabled ? "" : ",off") touches=\(PalmBlocker.lastTouchCount)")
+        out.append("pan=\(pan.state.rawValue)\(pan.isEnabled ? "" : ",off") draw=\(draw.state.rawValue)\(draw.isEnabled ? "" : ",off") touches=\(PalmBlocker.lastTouchCount) dragging=\(canvas.isDragging) tracking=\(canvas.isTracking) decel=\(canvas.isDecelerating)")
         // 所有手勢（含待命的）：和平常比較看哪裡不一樣
         var all: [String] = []
         func every(_ v: UIView) {
