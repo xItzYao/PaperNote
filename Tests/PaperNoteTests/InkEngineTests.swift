@@ -32,7 +32,19 @@ final class InkEngineTests: XCTestCase {
     }
 
     /// 每寫一筆整頁的筆跡路徑都會重建：一整頁密密麻麻的字也要夠快
-    func testPageInkRebuildIsFastForAFullPage() {
+    private func waitUntilBuilt(_ v: PageInkView) {
+        let deadline = Date().addingTimeInterval(3)
+        while v.isBuilding && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
+    }
+
+    /// 頁面上 (x, y)（點）的墨水
+    private func inkAlpha(_ v: PageInkView, _ x: CGFloat, _ y: CGFloat) -> UInt8 {
+        guard let contents = v.layer.contents else { return 0 }
+        let cg = contents as! CGImage
+        return alpha(UIImage(cgImage: cg), Int(x * v.renderScale), Int(y * v.renderScale))
+    }
+
+    private func fullPage() -> [InkStroke] {
         var strokes: [InkStroke] = []
         for i in 0..<1500 {
             let left = CGFloat(i % 30) * 20, top = CGFloat(i / 30) * 16
@@ -43,31 +55,64 @@ final class InkEngineTests: XCTestCase {
             }
             strokes.append(stroke(pts))
         }
-        let v = PageInkView(frame: CGRect(x: 0, y: 0, width: 600, height: 850))
-        let t = CACurrentMediaTime()
-        v.set(strokes: strokes, offset: .zero)
-        XCTAssertLessThan(CACurrentMediaTime() - t, 0.25)
-        XCTAssertLessThanOrEqual(v.layer.sublayers?.count ?? 0, 1500 / PageInkView.strokesPerLayer + 1, "連續寫的筆跡合成幾塊，不是一筆一層")
+        return strokes
     }
 
-    /// 回報的問題：筆跡很多的頁面寫字會卡一下，剛寫的那筆才突然跳出來（每寫一筆整頁的筆跡都重畫）。
-    /// 寫一筆只能重畫最後一小塊，前面的不動
-    func testAddingAStrokeOnlyRedrawsTheLastChunk() {
-        var many: [InkStroke] = []
-        for i in 0..<300 {
-            let x = CGFloat(i % 20) * 25, y = CGFloat(i / 20) * 20
-            many.append(stroke([(x, y), (x + 10, y + 8)]))
-        }
+    /// 回報的問題：筆跡很多的頁面快速捲動會掉幀（每頁幾十層向量，捲動時一直重畫）。
+    /// 整頁畫成一張圖、在背景畫，不佔主執行緒
+    func testFullPageBecomesOneImageDrawnInTheBackground() {
         let v = PageInkView(frame: CGRect(x: 0, y: 0, width: 600, height: 850))
+        let t = CACurrentMediaTime()
+        v.set(strokes: fullPage(), offset: .zero)
+        XCTAssertLessThan(CACurrentMediaTime() - t, 0.02, "整頁的筆跡要在背景畫")
+        XCTAssertTrue(v.isBuilding)
+        waitUntilBuilt(v)
+        XCTAssertLessThan(CACurrentMediaTime() - t, 0.5)
+        XCTAssertTrue(v.showsBitmap, "整頁是一張圖")
+        XCTAssertEqual(v.layer.sublayers?.count ?? 0, 0, "不能是一堆向量層")
+        XCTAssertGreaterThan(inkAlpha(v, 20, 16), 0, "筆跡要畫在圖上")
+    }
+
+    /// 回報的問題：筆跡很多的頁面寫字會卡一下，剛寫的那筆才突然跳出來。寫一筆不能整頁重畫，而且馬上看得到
+    func testAddingAStrokeDrawsItRightAwayWithoutRedrawingThePage() {
+        let v = PageInkView(frame: CGRect(x: 0, y: 0, width: 600, height: 850))
+        let many = fullPage()
         v.set(strokes: many, offset: .zero)
-        let before = (v.layer.sublayers ?? []).compactMap { ($0 as? CAShapeLayer)?.path }
-        XCTAssertGreaterThan(before.count, 1, "很多筆要分成好幾塊")
-        v.set(strokes: many + [stroke([(5, 800), (60, 820)])], offset: .zero)
-        let after = (v.layer.sublayers ?? []).compactMap { ($0 as? CAShapeLayer)?.path }
-        XCTAssertGreaterThanOrEqual(after.count, before.count)
-        for (i, (old, new)) in zip(before.dropLast(), after).enumerated() {
-            XCTAssertTrue(old === new, "第 \(i + 1) 塊沒有變，不能重畫")
-        }
+        waitUntilBuilt(v)
+        let renders = v.fullRenders
+        XCTAssertEqual(inkAlpha(v, 30, 830), 0)
+        v.set(strokes: many + [stroke([(5, 830), (60, 830)], width: 3)], offset: .zero)
+        XCTAssertFalse(v.isBuilding)
+        XCTAssertEqual(v.fullRenders, renders, "寫一筆不能整頁重畫")
+        XCTAssertGreaterThan(inkAlpha(v, 30, 830), 200, "新的那筆要馬上畫上去")
+    }
+
+    /// 擦掉一筆：只清掉那一塊，旁邊的筆跡還在
+    func testRemovingAStrokeOnlyClearsItsArea() {
+        let v = PageInkView(frame: CGRect(x: 0, y: 0, width: 600, height: 850))
+        let a = stroke([(100, 100), (200, 100)], width: 4), b = stroke([(100, 110), (200, 110)], width: 4)
+        v.set(strokes: [a, b], offset: .zero)
+        waitUntilBuilt(v)
+        let renders = v.fullRenders
+        v.set(strokes: [b], offset: .zero)
+        XCTAssertEqual(v.fullRenders, renders, "擦一筆不能整頁重畫")
+        XCTAssertEqual(inkAlpha(v, 150, 100), 0, "擦掉的那筆要不見")
+        XCTAssertGreaterThan(inkAlpha(v, 150, 110), 200, "旁邊那筆要留著")
+        v.setHidden([b.id])
+        XCTAssertEqual(inkAlpha(v, 150, 110), 0, "套索移動中藏起來的筆跡不畫")
+    }
+
+    /// 放大很多時點陣圖會太大：改用向量，放大也清楚
+    func testZoomedFarInUsesVector() {
+        let v = PageInkView(frame: CGRect(x: 0, y: 0, width: 600, height: 850))
+        v.set(strokes: fullPage(), offset: .zero)
+        v.setRenderScale(12, immediately: true)
+        XCTAssertFalse(v.showsBitmap)
+        XCTAssertGreaterThan(v.layer.sublayers?.count ?? 0, 0)
+        XCTAssertLessThanOrEqual(v.layer.sublayers?.count ?? 0, 1500 / PageInkView.strokesPerLayer + 1, "連續寫的筆跡合成幾塊，不是一筆一層")
+        v.setRenderScale(2, immediately: true)
+        waitUntilBuilt(v)
+        XCTAssertTrue(v.showsBitmap, "縮回來要換回點陣圖")
     }
 
     func testSinglePointDrawsADot() {

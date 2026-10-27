@@ -113,6 +113,9 @@ final class NoteScrollTests: XCTestCase {
         XCTAssertTrue(page.inkView.isBuilding, "畫面外的頁面不該在捲動那一格建筆跡")
         spin(0.5)
         XCTAssertFalse(page.inkView.isBuilding)
-        XCTAssertEqual(page.inkView.layer.sublayers?.count, 1600 / PageInkView.strokesPerLayer, "背景建好之後筆跡要畫上去")
+        XCTAssertTrue(page.inkView.showsBitmap, "背景畫好之後整頁是一張圖")
+        for v in editor.pageViews.values {
+            XCTAssertTrue(v.inkView.showsBitmap, "捲動時每一頁的筆跡都是一張圖，不是一堆向量層")
+        }
     }
 }

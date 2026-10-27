@@ -520,8 +520,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             if pageViews[page.id] == nil {
                 let v = PageContainerView(pageID: page.id)
                 v.frame = pageFrames[i]
-                v.configure(page: page, session: session, contentScale: elementContentScale,
-                            inkInBackground: !pageFrames[i].intersects(visible))
+                v.configure(page: page, session: session, contentScale: elementContentScale)
                 pagesContainer.insertSubview(v, belowSubview: overlay)
                 pageViews[page.id] = v
             }
@@ -560,6 +559,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     func scrollViewDidZoom(_ scrollView: UIScrollView) {
         updateZoomLayout()
+        let s = elementContentScale
+        for v in pageViews.values { v.inkView.setRenderScale(s) }
     }
 
     func scrollViewWillBeginZooming(_ scrollView: UIScrollView, with view: UIView?) {
