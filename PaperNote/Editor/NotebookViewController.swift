@@ -4,7 +4,7 @@ import PDFKit
 import SwiftUI
 
 enum EditorTool: Equatable {
-    case pen, highlighter, eraser, lasso, capture, select, textSelect, pageResize, tableDraw, circuit
+    case pen, highlighter, eraser, lasso, capture, select, image, textSelect, pageResize, tableDraw, circuit
 
     /// 筆或螢光筆
     var isInking: Bool { self == .pen || self == .highlighter }
@@ -156,7 +156,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var tool: EditorTool = .pen
     /// 切到橡皮擦之前的工具（Pencil 點兩下、擦完自動切回時用）
     var toolBeforeEraser: EditorTool = .pen
-    /// 自動切到選取物件、選 PDF 文字之前的工具（這兩個工具不在工具列上，用完切回去）
+    /// 自動切到選 PDF 文字之前的工具（選字不在工具列上，用完切回去）
     var toolBeforeTemporary: EditorTool?
 
     // 手勢
@@ -182,6 +182,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var circuitGateInputs: [CircuitPart: Int] = [:]
     /// 電路元件庫（浮在頁面左邊，見 CircuitLibrary.swift）
     let circuitLibrary = CircuitLibraryView()
+    /// 插入圖片工具：下方一排最近的照片
+    let photoStrip = PhotoStripView()
     /// PencilKit 開始書寫的時間（收尾後清掉）；下筆時還沒清掉就代表上一筆卡住了
     var pkUsingSince: CFTimeInterval?
     /// 筆身點兩下切到接線前的模式（再點兩下切回來）
@@ -242,9 +244,9 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     // PDF 文字選取
     var textSelection: TextSelectionState?
     var textPanStart: CGPoint?
-    /// 正在拖的控制點：另一端固定的字元
+    /// 正在拖的控制點：另一端固定的位置（字和字之間的縫，0 是第一個字前面）
     var textHandleFixed: Int?
-    /// 按下的位置到控制點那一端字元的距離（手指按在圓點上，選的是線旁邊的字）
+    /// 按下的位置到控制點直線中間的距離（手指按在圓點上，拖的是直線那一點）
     var textHandleGrab: CGPoint = .zero
 
     // 截圖

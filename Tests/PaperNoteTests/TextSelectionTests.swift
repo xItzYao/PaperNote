@@ -3,7 +3,7 @@ import XCTest
 
 /// 回報的問題：
 /// 1. 選單蓋在選到的東西中間（套索、PDF 文字）
-/// 2. 「選取」「PDF文字」工具作用不大，筆就可以選字
+/// 2. 「PDF文字」工具作用不大，筆就可以選字（「選取」後來加回工具列）
 /// 3. 選字範圍不對時每次都要重選，希望像 Android 一樣拖兩端的控制點調整
 final class TextSelectionTests: XCTestCase {
     private final class FakePan: UIPanGestureRecognizer {
@@ -72,6 +72,20 @@ final class TextSelectionTests: XCTestCase {
         return try XCTUnwrap(editor.textSelection, "要選到字")
     }
 
+    /// 第 i 個字在畫面上的範圍（文件座標）
+    private func charRect(_ i: Int) throws -> CGRect {
+        let pdf = try XCTUnwrap(editor.session.pdfPage(for: editor.pages[0]))
+        let o = editor.contentOrigin(0)
+        return pdf.characterBounds(at: i).applying(NotebookSession.displayTransform(for: pdf)).offsetBy(dx: o.x, dy: o.y)
+    }
+
+    /// 把控制點的直線拖到 x（手指按在圓點上，往右移 x - 直線的位置）
+    private func dragHandle(_ h: TextHandle, toX x: CGFloat) throws {
+        let ts = try XCTUnwrap(editor.textSelection)
+        let bar = try XCTUnwrap(editor.textHandles(ts).first { $0.handle == h }).bar.0.x
+        try dragHandle(h, by: x - bar)
+    }
+
     private func dragHandle(_ h: TextHandle, by dx: CGFloat) throws {
         let ts = try XCTUnwrap(editor.textSelection)
         let knob = try XCTUnwrap(editor.textHandles(ts).first { $0.handle == h }).knob
@@ -93,16 +107,37 @@ final class TextSelectionTests: XCTestCase {
         XCTAssertEqual(target.height, expected.height, accuracy: 0.5)
     }
 
-    func testToolbarHasNoSelectOrTextTools() {
-        XCTAssertNil(editor.toolButtons[.select], "工具列不放「選取」")
+    func testToolbarHasSelectButNoTextTool() {
+        XCTAssertNotNil(editor.toolButtons[.select], "「選取」加回工具列")
         XCTAssertNil(editor.toolButtons[.textSelect], "工具列不放「PDF文字」")
         XCTAssertNotNil(editor.toolButtons[.pen])
     }
 
-    func testTappingEmptySpaceReturnsToThePen() {
+    func testSelectToolStaysAfterTappingEmptySpace() {
         editor.setTool(.select)
         editor.handleTap(FakeTap(doc(300, 600)))
-        XCTAssertEqual(editor.tool, .pen, "選取物件是自動切過去的：點空白處要切回筆")
+        XCTAssertEqual(editor.tool, .select, "從工具列選的「選取」不會自己切走")
+    }
+
+    /// 回報的問題：拖控制點時，選取的頭尾比手指的位置偏右。頭尾要停在手指旁邊最近的字縫
+    func testEndHandleStopsAtTheGapNearestTheFinger() throws {
+        _ = try selectWord(at: doc(60, 61))
+        // "Hello world"：第 7 個字是 "o"。手指在 "o" 的左邊 1/4：結尾停在 "o" 前面
+        let o = try charRect(7)
+        try dragHandle(.end, toX: o.minX + o.width / 4)
+        let ts = try XCTUnwrap(editor.textSelection)
+        XCTAssertEqual(ts.text, "Hello w", "手指在字的左半邊，那個字不選")
+        XCTAssertEqual(try XCTUnwrap(ts.docRects.last).maxX, o.minX, accuracy: 1.5, "結尾的控制點要在手指的位置")
+    }
+
+    func testStartHandleStopsAtTheGapNearestTheFinger() throws {
+        _ = try selectWord(at: doc(60, 61))
+        // 手指在 "e" 的右邊 3/4：開頭停在 "e" 後面
+        let e = try charRect(1)
+        try dragHandle(.start, toX: e.minX + e.width * 3 / 4)
+        let ts = try XCTUnwrap(editor.textSelection)
+        XCTAssertEqual(ts.text, "llo", "手指在字的右半邊，那個字不選")
+        XCTAssertEqual(try XCTUnwrap(ts.docRects.first).minX, e.maxX, accuracy: 1.5, "開頭的控制點要在手指的位置")
     }
 
     func testSelectedWordHasHandlesAtBothEnds() throws {

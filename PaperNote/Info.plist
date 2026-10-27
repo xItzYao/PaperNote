@@ -42,6 +42,8 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<false/>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>插入圖片工具會列出最近的照片，點一下就能放到筆記裡。</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>把截圖儲存到照片圖庫。</string>
 	<key>CFBundleDocumentTypes</key>

@@ -292,7 +292,6 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
                 }
             } else {
                 select(nil)
-                returnFromTemporaryTool()
             }
         case .textSelect:
             // 點在選到的字上：再打開選單；點別的地方：結束選字，回到原本的工具
@@ -308,7 +307,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
                 resizePageIndex = i
                 updatePageResizeChrome()
             }
-        case .tableDraw:
+        case .tableDraw, .image:
             break
         case .circuit:
             handleCircuitTap(at: p)
@@ -803,8 +802,10 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         let e = PageElement(frame: CGRect(x: c.x - size.width / 2, y: c.y - size.height / 2, width: size.width, height: size.height),
                             content: content)
         updatePage(pi) { $0.elements.append(e) }
-        if tool != .select { setTool(.select) }
         let ref = ElementRef(pageID: page.id, elementID: e.id)
+        // 圖片工具：留在工具裡，可以接著加下一張
+        if tool == .image { return ref }
+        if tool != .select { setTool(.select) }
         select(ref)
         return ref
     }
@@ -844,6 +845,24 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         let s = min(1, base.width * 0.7 / max(size.width, 1), base.height * 0.6 / max(size.height, 1))
         size = CGSize(width: (size.width * s).rounded(), height: (size.height * s).rounded())
         _ = insertElement(.image(ImageData(file: file)), size: size, at: p)
+    }
+
+    /// 從下方照片列點的照片：放在畫面中央（同一頁連續加的話往右下錯開，不會疊在一起）
+    func insertPhotoFromStrip(_ image: UIImage) {
+        guard !pages.isEmpty else { return }
+        let r = visibleDocRect()
+        let pi = currentPageIndex
+        let o = contentOrigin(pi)
+        var c = CGPoint(x: r.midX, y: r.midY)
+        let centers = pages[pi].elements.filter { if case .image = $0.content { return true }; return false }
+            .map { CGPoint(x: $0.frame.midX + o.x, y: $0.frame.midY + o.y) }
+        var k = 0
+        while k < 12, centers.contains(where: { $0.distance(to: c) < 4 }) {
+            c = CGPoint(x: c.x + 24, y: c.y + 24)
+            k += 1
+        }
+        insertImage(image, jpeg: true, at: c)
+        showToast("已加到第 \(pageIndex(containing: c).map { $0 + 1 } ?? pi + 1) 頁")
     }
 
     func pasteFromClipboard(at p: CGPoint?) {
@@ -1215,9 +1234,9 @@ extension NotebookViewController {
             guard let ts = textSelection, let r = ts.charRange, let h = textHandle(at: down),
                   let end = textHandles(ts).first(where: { $0.handle == h }) else { return }
             editMenu.dismissMenu()
-            textHandleFixed = h == .start ? r.location + r.length - 1 : r.location
-            // 選的是直線中間旁邊的字：開頭往右一點、結尾往左一點
-            let mid = CGPoint(x: end.bar.0.x + (h == .start ? 1 : -1) / canvas.zoomScale, y: (end.bar.0.y + end.bar.1.y) / 2)
+            // 另一端不動：拖開頭就固定結尾後面的縫，拖結尾就固定開頭前面的縫
+            textHandleFixed = h == .start ? r.location + r.length : r.location
+            let mid = CGPoint(x: end.bar.0.x, y: (end.bar.0.y + end.bar.1.y) / 2)
             textHandleGrab = CGPoint(x: mid.x - down.x, y: mid.y - down.y)
             moveTextHandle(to: p)
         case .changed:
@@ -1237,11 +1256,21 @@ extension NotebookViewController {
               let pdf = session.pdfPage(for: pages[ts.pageIndex]) else { return }
         let i = ts.pageIndex
         let q = CGPoint(x: p.x + textHandleGrab.x, y: p.y + textHandleGrab.y)
-        guard let moving = nearestCharIndex(pdf, pageID: pages[i].id, pdfPoint(q, pageIndex: i, pdfPage: pdf)) else { return }
-        let range = NSRange(location: min(fixed, moving), length: abs(moving - fixed) + 1)
+        guard let moving = textCaret(pdf, pageID: pages[i].id, pdfPoint(q, pageIndex: i, pdfPage: pdf)) else { return }
+        // 兩個縫之間的字；縫重疊時至少留一個字
+        let lo = min(fixed, moving), hi = max(fixed, moving)
+        let range = hi > lo ? NSRange(location: lo, length: hi - lo)
+            : NSRange(location: min(lo, max(0, pdf.numberOfCharacters - 1)), length: 1)
         guard let sel = pdf.selection(for: range), var new = pdfTextSelection(sel, pageIndex: i, pdfPage: pdf) else { return }
         new.charRange = range
         showTextSelection(new)
+    }
+
+    /// 離 p（PDF 頁面座標）最近的字和字之間的縫：在字的左半邊是這個字前面，右半邊是後面。
+    /// 控制點才會停在手指的位置，不會跳到字的另一邊
+    func textCaret(_ pdf: PDFPage, pageID: UUID, _ p: CGPoint) -> Int? {
+        guard let i = nearestCharIndex(pdf, pageID: pageID, p) else { return nil }
+        return p.x > pdf.characterBounds(at: i).midX ? i + 1 : i
     }
 
     /// 結束選字（拷貝、螢光標示之後，或點了別的地方），回到原本的工具
@@ -1250,9 +1279,9 @@ extension NotebookViewController {
         returnFromTemporaryTool()
     }
 
-    /// 選取物件、選 PDF 文字是自動切過去的工具：用完切回原本的工具
+    /// 選 PDF 文字是自動切過去的：用完切回原本的工具
     func returnFromTemporaryTool() {
-        guard tool == .select || tool == .textSelect, let t = toolBeforeTemporary else { return }
+        guard tool == .textSelect, let t = toolBeforeTemporary else { return }
         setTool(t)
     }
 

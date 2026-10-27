@@ -47,6 +47,20 @@ extension NotebookViewController {
             circuitLibrary.bottomAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -10),
         ])
         circuitLibrary.onSelectMode = { [weak self] mode in self?.selectCircuitMode(mode) }
+
+        // 插入圖片：一排照片浮在畫布下方，只在圖片工具顯示
+        photoStrip.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(photoStrip)
+        photoStrip.isHidden = true
+        NSLayoutConstraint.activate([
+            photoStrip.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
+            photoStrip.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
+            photoStrip.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -10),
+            photoStrip.heightAnchor.constraint(equalToConstant: PhotoStripView.height),
+        ])
+        photoStrip.presenter = self
+        photoStrip.onPick = { [weak self] img in self?.insertPhotoFromStrip(img) }
+        photoStrip.onBrowse = { [weak self] in self?.presentPhotoPicker() }
         circuitLibrary.onDrop = { [weak self] part, p in self?.dropCircuitPart(part, at: p) }
 
         // 安全區頂端也塗上底色
@@ -82,6 +96,8 @@ extension NotebookViewController {
             (.eraser, "eraser", "橡皮擦"),
             (.lasso, "lasso", "套索"),
             (.capture, "camera.viewfinder", "截圖"),
+            (.select, "hand.point.up.left", "選取"),
+            (.image, "photo", "圖片"),
             (.pageResize, "arrow.up.left.and.arrow.down.right", "擴展"),
             (.circuit, "bolt", "電路"),
         ]
@@ -220,11 +236,10 @@ extension NotebookViewController {
         }
         if t == .pageResize, resizePageIndex == nil || t != tool { resizePageIndex = currentPageIndex }
         if t == .eraser, tool.isInking || tool == .lasso { toolBeforeEraser = tool }
-        // 選取物件、選 PDF 文字不在工具列上：記住從哪個工具切過來，用完切回去
-        let temporary: (EditorTool) -> Bool = { $0 == .select || $0 == .textSelect }
-        if !temporary(t) {
+        // 選 PDF 文字不在工具列上：記住從哪個工具切過來，用完切回去
+        if t != .textSelect {
             toolBeforeTemporary = nil
-        } else if !temporary(tool) {
+        } else if tool != .textSelect {
             toolBeforeTemporary = tool
         }
         tool = t
@@ -238,6 +253,8 @@ extension NotebookViewController {
     func applyTool() {
         canvas.drawingGestureRecognizer.isEnabled = tool.isDrawing
         circuitLibrary.isHidden = tool != .circuit
+        photoStrip.isHidden = tool != .image
+        if tool == .image { photoStrip.reload() }
         if tool.isInking { BrushStore.shared.activeCategory = tool == .highlighter ? .highlighter : .pen }
         switch tool {
         case .pen, .highlighter:
@@ -385,6 +402,13 @@ extension NotebookViewController {
 
         case .textSelect:
             break
+
+        case .image:
+            let hint = UILabel()
+            hint.text = "點下面的照片，放到目前這一頁；捲到別頁可以接著加"
+            hint.font = .systemFont(ofSize: 13)
+            hint.textColor = .secondaryLabel
+            subBarStack.addArrangedSubview(hint)
 
         case .pageResize:
             let reset = makeButton(symbol: "arrow.counterclockwise", title: "重設", action: nil)
@@ -730,7 +754,6 @@ extension NotebookViewController {
             UIAction(title: "手繪新表格", image: UIImage(systemName: "pencil.and.outline")) { [weak self] _ in self?.setTool(.tableDraw) },
             UIAction(title: "文字框", image: UIImage(systemName: "character.textbox")) { [weak self] _ in self?.insertTextBox(at: nil) },
             UIAction(title: "照片…", image: UIImage(systemName: "photo")) { [weak self] _ in self?.presentPhotoPicker() },
-            UIAction(title: "貼上", image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in self?.pasteFromClipboard(at: nil) },
         ])
     }
 
