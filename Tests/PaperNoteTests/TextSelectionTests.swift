@@ -1,0 +1,139 @@
+import XCTest
+@testable import PaperNote
+
+/// 回報的問題：
+/// 1. 選單蓋在選到的東西中間（套索、PDF 文字）
+/// 2. 「選取」「PDF文字」工具作用不大，筆就可以選字
+/// 3. 選字範圍不對時每次都要重選，希望像 Android 一樣拖兩端的控制點調整
+final class TextSelectionTests: XCTestCase {
+    private final class FakePan: UIPanGestureRecognizer {
+        var fake: UIGestureRecognizer.State = .possible
+        var point: CGPoint = .zero
+        override var state: UIGestureRecognizer.State {
+            get { fake }
+            set { fake = newValue }
+        }
+        override func location(in view: UIView?) -> CGPoint { point }
+        override func translation(in view: UIView?) -> CGPoint { .zero }
+    }
+
+    private final class FakeTap: UITapGestureRecognizer {
+        let point: CGPoint
+        init(_ p: CGPoint) {
+            point = p
+            super.init(target: nil, action: nil)
+        }
+        override func location(in view: UIView?) -> CGPoint { point }
+    }
+
+    private var window: UIWindow!
+    private var editor: NotebookViewController!
+    private var notebookID: UUID!
+    private var work: URL!
+
+    override func setUpWithError() throws {
+        work = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        let pdfURL = work.appendingPathComponent("講義.pdf")
+        try UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 595, height: 842)).pdfData { ctx in
+            ctx.beginPage()
+            ("Hello world this is a test sentence" as NSString)
+                .draw(at: CGPoint(x: 50, y: 50), withAttributes: [.font: UIFont.systemFont(ofSize: 18)])
+        }.write(to: pdfURL)
+        let meta = try LibraryStore.shared.importPDF(from: pdfURL, folder: nil)
+        notebookID = meta.id
+        editor = NotebookViewController(session: try NotebookSession(id: meta.id), initialPageID: nil, onClose: {})
+        window = try TestWindow.make()
+        window.rootViewController = editor
+        window.makeKeyAndVisible()
+        editor.view.layoutIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        editor.setTool(.pen)
+    }
+
+    override func tearDown() {
+        window.isHidden = true
+        window = nil
+        editor = nil
+        LibraryStore.shared.deleteNotebook(notebookID)
+        try? FileManager.default.removeItem(at: work)
+        super.tearDown()
+    }
+
+    private func doc(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+        let o = editor.contentOrigin(0)
+        return CGPoint(x: o.x + x, y: o.y + y)
+    }
+
+    /// 長按選字（筆模式下手指長按 PDF 文字）
+    private func selectWord(at p: CGPoint) throws -> TextSelectionState {
+        editor.setTool(.textSelect)
+        editor.tapText(at: p)
+        return try XCTUnwrap(editor.textSelection, "要選到字")
+    }
+
+    private func dragHandle(_ h: TextHandle, by dx: CGFloat) throws {
+        let ts = try XCTUnwrap(editor.textSelection)
+        let knob = try XCTUnwrap(editor.textHandles(ts).first { $0.handle == h }).knob
+        XCTAssertEqual(editor.textHandle(at: knob), h, "按在圓點上要抓到這一端")
+        let g = FakePan(target: nil, action: nil)
+        for (i, x) in [0, dx / 2, dx].enumerated() {
+            g.point = CGPoint(x: knob.x + x, y: knob.y)
+            g.fake = i == 0 ? .began : (i == 2 ? .ended : .changed)
+            editor.handleTextHandlePan(g)
+        }
+    }
+
+    func testMenuSitsAboveOrBelowTheSelection() throws {
+        let ts = try selectWord(at: doc(60, 61))
+        let bounds = ts.docRects.reduce(CGRect.null) { $0.union($1) }
+        let target = editor.editMenuInteraction(editor.editMenu, targetRectFor: UIEditMenuConfiguration(identifier: nil, sourcePoint: .zero))
+        let expected = editor.pagesContainer.convert(bounds, to: editor.canvas)
+        XCTAssertEqual(target.minY, expected.minY, accuracy: 0.5, "選單要避開整個選取範圍，擺在上面或下面")
+        XCTAssertEqual(target.height, expected.height, accuracy: 0.5)
+    }
+
+    func testToolbarHasNoSelectOrTextTools() {
+        XCTAssertNil(editor.toolButtons[.select], "工具列不放「選取」")
+        XCTAssertNil(editor.toolButtons[.textSelect], "工具列不放「PDF文字」")
+        XCTAssertNotNil(editor.toolButtons[.pen])
+    }
+
+    func testTappingEmptySpaceReturnsToThePen() {
+        editor.setTool(.select)
+        editor.handleTap(FakeTap(doc(300, 600)))
+        XCTAssertEqual(editor.tool, .pen, "選取物件是自動切過去的：點空白處要切回筆")
+    }
+
+    func testSelectedWordHasHandlesAtBothEnds() throws {
+        let ts = try selectWord(at: doc(60, 61))
+        XCTAssertEqual(ts.text.trimmingCharacters(in: .whitespaces), "Hello")
+        XCTAssertNotNil(ts.charRange)
+        XCTAssertEqual(editor.textHandles(ts).map(\.handle), [.start, .end])
+    }
+
+    func testDraggingTheEndHandleExtendsTheSelection() throws {
+        _ = try selectWord(at: doc(60, 61))
+        try dragHandle(.end, by: 80)
+        let text = try XCTUnwrap(editor.textSelection?.text)
+        XCTAssertTrue(text.hasPrefix("Hello world"), "拖結尾的控制點要選到後面的字，選到：\(text)")
+        XCTAssertNotNil(editor.pendingMenu, "放開後選單再出現")
+    }
+
+    func testDraggingTheStartHandleShrinksTheSelection() throws {
+        _ = try selectWord(at: doc(60, 61))
+        try dragHandle(.end, by: 80)
+        let before = try XCTUnwrap(editor.textSelection?.text)
+        try dragHandle(.start, by: 55)
+        let after = try XCTUnwrap(editor.textSelection?.text)
+        XCTAssertFalse(after.hasPrefix("Hello"), "拖開頭的控制點往右，前面的字要不見：\(after)")
+        XCTAssertLessThan(after.count, before.count)
+    }
+
+    func testTappingElsewhereEndsTextSelectionAndReturnsToThePen() throws {
+        _ = try selectWord(at: doc(60, 61))
+        editor.handleTap(FakeTap(doc(300, 600)))
+        XCTAssertNil(editor.textSelection)
+        XCTAssertEqual(editor.tool, .pen, "選字結束要切回原本的筆")
+    }
+}

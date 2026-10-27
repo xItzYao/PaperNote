@@ -95,4 +95,13 @@ final class LassoMenuTests: XCTestCase {
         editor.handleTap(FakeTap(doc(150, 300)))
         XCTAssertNotNil(editor.pendingMenu, "點一下選取範圍要打開選單")
     }
+
+    /// 回報的問題：選單出現在選取範圍的正中間。選單要擺在範圍的上面或下面
+    func testMenuDoesNotCoverTheSelection() throws {
+        circleTheStroke()
+        editor.presentLassoMenu()
+        let sel = try XCTUnwrap(editor.lassoSel)
+        let target = editor.editMenuInteraction(editor.editMenu, targetRectFor: UIEditMenuConfiguration(identifier: nil, sourcePoint: .zero))
+        XCTAssertEqual(target, editor.pagesContainer.convert(sel.bounds, to: editor.canvas))
+    }
 }

@@ -368,7 +368,7 @@ extension NotebookViewController {
                 self?.editCircuit(circuit)
             }, at: 0)
         }
-        presentMenu(UIMenu(children: children), atDocPoint: CGPoint(x: sel.bounds.midX, y: sel.bounds.minY))
+        presentMenu(UIMenu(children: children), atDocPoint: CGPoint(x: sel.bounds.midX, y: sel.bounds.minY), avoiding: sel.bounds)
     }
 
     // MARK: 改顏色

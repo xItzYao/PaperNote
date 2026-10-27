@@ -12,6 +12,11 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         toolPan.delegate = self
         canvas.addGestureRecognizer(toolPan)
 
+        textHandlePan = UIPanGestureRecognizer(target: self, action: #selector(handleTextHandlePan(_:)))
+        textHandlePan.maximumNumberOfTouches = 1
+        textHandlePan.delegate = self
+        canvas.addGestureRecognizer(textHandlePan)
+
         doubleTapGesture = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
         doubleTapGesture.numberOfTapsRequired = 2
         doubleTapGesture.delegate = self
@@ -180,6 +185,8 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         if g === inkRecognizer {
             return customInkActive && (other === canvas.drawingGestureRecognizer || other === canvas.panGestureRecognizer)
         }
+        // 按在文字選取的控制點上：拖控制點，不捲動、不重新選
+        if g === textHandlePan { return other === canvas.panGestureRecognizer || other === toolPan }
         return g === toolPan && other === canvas.panGestureRecognizer && tool.panYieldsToScroll
     }
 
@@ -190,7 +197,11 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         if let tv = editingTextView, touch.view?.isDescendant(of: tv) == true { return false }
         // 自製筆刷只收 Pencil（開了「用手指書寫」才收手指）；沒收到觸碰就不會擋住頁面捲動
         if g === inkRecognizer { return touch.type == .pencil || settings.fingerDrawing }
+        // 控制點：手指、Pencil 都可以拖；沒按在控制點上就不收，不會擋住捲動
+        if g === textHandlePan { return textHandle(at: touch.location(in: pagesContainer)) != nil }
         if g === textLongPress {
+            // 按住控制點準備拖：不要重新選字
+            if textHandle(at: touch.location(in: pagesContainer)) != nil { return false }
             // 手指長按：剪貼簿有東西就能貼上；PDF 頁面上也可以選字（選取工具有自己的長按選單）
             // 套索、截圖工具 Pencil 長按也可以貼上（套索長按圈選範圍內則打開套索選單）
             guard tool != .select, !(settings.fingerDrawing && tool.isDrawing) else { return false }
@@ -281,9 +292,15 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
                 }
             } else {
                 select(nil)
+                returnFromTemporaryTool()
             }
         case .textSelect:
-            tapText(at: p)
+            // 點在選到的字上：再打開選單；點別的地方：結束選字，回到原本的工具
+            if let ts = textSelection, textSelectionHit(p, ts) || textHandle(at: p) != nil {
+                presentTextMenu(ts)
+            } else {
+                endTextSelection()
+            }
         case .capture:
             clearCapture()
         case .pageResize:
@@ -373,8 +390,10 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         }
     }
 
-    func presentMenu(_ menu: UIMenu, atDocPoint p: CGPoint) {
+    /// avoiding：選到的範圍（文件座標），選單放在它的上面或下面
+    func presentMenu(_ menu: UIMenu, atDocPoint p: CGPoint, avoiding docRect: CGRect? = nil) {
         pendingMenu = menu
+        pendingMenuAvoid = docRect.map { pagesContainer.convert($0, to: canvas) }
         let pt = pagesContainer.convert(p, to: canvas)
         editMenu.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: pt))
     }
@@ -386,6 +405,12 @@ extension NotebookViewController: UIEditMenuInteractionDelegate {
     func editMenuInteraction(_ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration,
                              suggestedActions: [UIMenuElement]) -> UIMenu? {
         pendingMenu
+    }
+
+    func editMenuInteraction(_ interaction: UIEditMenuInteraction, targetRectFor configuration: UIEditMenuConfiguration) -> CGRect {
+        // 選單擺在這個範圍的上方（放不下就下方），不會蓋在中間
+        if let r = pendingMenuAvoid { return r }
+        return CGRect(origin: configuration.sourcePoint, size: .zero)
     }
 
     func editMenuInteraction(_ interaction: UIEditMenuInteraction, willDismissMenuFor configuration: UIEditMenuConfiguration,
@@ -1090,11 +1115,9 @@ extension NotebookViewController {
             }
             let a = pdfPoint(s, pageIndex: i, pdfPage: pdf)
             let b = pdfPoint(p, pageIndex: i, pdfPage: pdf)
-            if let sel = robustSelection(pdf, pageID: pages[i].id, from: a, to: b), let text = sel.string,
-               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                let rects = docRects(for: sel, pageIndex: i, pdfPage: pdf)
-                textSelection = TextSelectionState(pageIndex: i, text: text, docRects: rects)
-                overlay.showTextRects(rects)
+            if let sel = robustSelection(pdf, pageID: pages[i].id, from: a, to: b),
+               let ts = pdfTextSelection(sel, pageIndex: i, pdfPage: pdf) {
+                showTextSelection(ts)
             }
             if g.state == .ended {
                 textPanStart = nil
@@ -1123,16 +1146,114 @@ extension NotebookViewController {
             return
         }
         guard let sel = robustWordSelection(pdf, pageID: pages[i].id, at: pdfPoint(p, pageIndex: i, pdfPage: pdf)),
-              let text = sel.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+              let ts = pdfTextSelection(sel, pageIndex: i, pdfPage: pdf) else {
             // PDF 選字失敗 → 改用文字辨識
             selectRecognizedText(pageIndex: i, docRect: CGRect(x: p.x - 2, y: p.y - 2, width: 4, height: 4))
             return
         }
-        let rects = docRects(for: sel, pageIndex: i, pdfPage: pdf)
-        let ts = TextSelectionState(pageIndex: i, text: text, docRects: rects)
-        textSelection = ts
-        overlay.showTextRects(rects)
+        showTextSelection(ts)
         presentTextMenu(ts, removableHighlight: underHighlight)
+    }
+
+    /// PDF 文字層選到的字 → 選取狀態（含字元範圍，拖控制點用）
+    func pdfTextSelection(_ sel: PDFSelection, pageIndex i: Int, pdfPage: PDFPage) -> TextSelectionState? {
+        guard let text = sel.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        var lo = Int.max, hi = -1
+        for k in 0..<sel.numberOfTextRanges(on: pdfPage) {
+            let r = sel.range(at: k, on: pdfPage)
+            guard r.location != NSNotFound, r.length > 0 else { continue }
+            lo = min(lo, r.location)
+            hi = max(hi, r.location + r.length)
+        }
+        return TextSelectionState(pageIndex: i, text: text, docRects: docRects(for: sel, pageIndex: i, pdfPage: pdfPage),
+                                  charRange: hi > lo ? NSRange(location: lo, length: hi - lo) : nil)
+    }
+
+    func showTextSelection(_ ts: TextSelectionState) {
+        textSelection = ts
+        overlay.showTextRects(ts.docRects, handles: textHandles(ts).map { (bar: $0.bar, knob: $0.knob, radius: $0.radius) },
+                              lineWidth: 2 / canvas.zoomScale)
+    }
+
+    // MARK: 控制點
+
+    /// 兩端的控制點（文件座標）：開頭在第一行左邊、圓點在上；結尾在最後一行右邊、圓點在下。只有 PDF 文字層選到的才有
+    func textHandles(_ ts: TextSelectionState) -> [(handle: TextHandle, bar: (CGPoint, CGPoint), knob: CGPoint, radius: CGFloat)] {
+        guard ts.charRange != nil, let first = ts.docRects.first, let last = ts.docRects.last else { return [] }
+        let r = 6 / canvas.zoomScale
+        return [
+            (.start, (CGPoint(x: first.minX, y: first.minY), CGPoint(x: first.minX, y: first.maxY)), CGPoint(x: first.minX, y: first.minY - r), r),
+            (.end, (CGPoint(x: last.maxX, y: last.minY), CGPoint(x: last.maxX, y: last.maxY)), CGPoint(x: last.maxX, y: last.maxY + r), r),
+        ]
+    }
+
+    /// p 按在哪一端的控制點上（圓點或直線附近，手指也按得到）
+    func textHandle(at p: CGPoint) -> TextHandle? {
+        guard tool == .textSelect, let ts = textSelection else { return nil }
+        let tol = 22 / canvas.zoomScale
+        var best: (TextHandle, CGFloat)?
+        for h in textHandles(ts) {
+            let top = min(h.bar.0.y, h.knob.y), bottom = max(h.bar.1.y, h.knob.y)
+            let dy = p.y < top ? top - p.y : (p.y > bottom ? p.y - bottom : 0)
+            let d = hypot(p.x - h.bar.0.x, dy)
+            if d <= tol, d < (best?.1 ?? .greatestFiniteMagnitude) { best = (h.handle, d) }
+        }
+        return best?.0
+    }
+
+    /// p 在選到的字上（含一點邊界）
+    func textSelectionHit(_ p: CGPoint, _ ts: TextSelectionState) -> Bool {
+        let m = 8 / canvas.zoomScale
+        return ts.docRects.contains { $0.insetBy(dx: -m, dy: -m).contains(p) }
+    }
+
+    @objc func handleTextHandlePan(_ g: UIPanGestureRecognizer) {
+        let p = g.location(in: pagesContainer)
+        switch g.state {
+        case .began:
+            let down = panTouchDownPoint(g)
+            guard let ts = textSelection, let r = ts.charRange, let h = textHandle(at: down),
+                  let end = textHandles(ts).first(where: { $0.handle == h }) else { return }
+            editMenu.dismissMenu()
+            textHandleFixed = h == .start ? r.location + r.length - 1 : r.location
+            // 選的是直線中間旁邊的字：開頭往右一點、結尾往左一點
+            let mid = CGPoint(x: end.bar.0.x + (h == .start ? 1 : -1) / canvas.zoomScale, y: (end.bar.0.y + end.bar.1.y) / 2)
+            textHandleGrab = CGPoint(x: mid.x - down.x, y: mid.y - down.y)
+            moveTextHandle(to: p)
+        case .changed:
+            moveTextHandle(to: p)
+        case .ended:
+            moveTextHandle(to: p)
+            textHandleFixed = nil
+            if let ts = textSelection { presentTextMenu(ts) }
+        default:
+            textHandleFixed = nil
+        }
+    }
+
+    /// 拖著的那一端移到 p（另一端不動），重新選字
+    func moveTextHandle(to p: CGPoint) {
+        guard let fixed = textHandleFixed, let ts = textSelection, pages.indices.contains(ts.pageIndex),
+              let pdf = session.pdfPage(for: pages[ts.pageIndex]) else { return }
+        let i = ts.pageIndex
+        let q = CGPoint(x: p.x + textHandleGrab.x, y: p.y + textHandleGrab.y)
+        guard let moving = nearestCharIndex(pdf, pageID: pages[i].id, pdfPoint(q, pageIndex: i, pdfPage: pdf)) else { return }
+        let range = NSRange(location: min(fixed, moving), length: abs(moving - fixed) + 1)
+        guard let sel = pdf.selection(for: range), var new = pdfTextSelection(sel, pageIndex: i, pdfPage: pdf) else { return }
+        new.charRange = range
+        showTextSelection(new)
+    }
+
+    /// 結束選字（拷貝、螢光標示之後，或點了別的地方），回到原本的工具
+    func endTextSelection() {
+        clearTextSelection()
+        returnFromTemporaryTool()
+    }
+
+    /// 選取物件、選 PDF 文字是自動切過去的工具：用完切回原本的工具
+    func returnFromTemporaryTool() {
+        guard tool == .select || tool == .textSelect, let t = toolBeforeTemporary else { return }
+        setTool(t)
     }
 
     func highlight(at p: CGPoint) -> (Int, UUID)? {
@@ -1169,7 +1290,7 @@ extension NotebookViewController {
             },
             UIAction(title: "拷貝", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
                 UIPasteboard.general.string = text
-                self?.clearTextSelection()
+                self?.endTextSelection()
             },
             UIAction(title: "查詢", image: UIImage(systemName: "character.book.closed")) { [weak self] _ in
                 guard let self else { return }
@@ -1177,14 +1298,14 @@ extension NotebookViewController {
             },
             UIMenu(title: "螢光標示", image: UIImage(systemName: "highlighter"), children: colors),
         ] + removeHighlightActions(removableHighlight))
-        presentMenu(menu, atDocPoint: CGPoint(x: bounds.midX, y: bounds.minY))
+        presentMenu(menu, atDocPoint: CGPoint(x: bounds.midX, y: bounds.minY), avoiding: bounds)
     }
 
     private func removeHighlightActions(_ h: (Int, UUID)?) -> [UIMenuElement] {
         guard case let (pi, hid)? = h else { return [] }
         return [UIAction(title: "移除螢光標示", image: UIImage(systemName: "eraser"), attributes: .destructive) { [weak self] _ in
             self?.updatePage(pi) { $0.highlights.removeAll { $0.id == hid } }
-            self?.clearTextSelection()
+            self?.endTextSelection()
         }]
     }
 
@@ -1192,7 +1313,7 @@ extension NotebookViewController {
         let o = contentOrigin(ts.pageIndex)
         let rects = ts.docRects.map { $0.offsetBy(dx: -o.x, dy: -o.y) }
         updatePage(ts.pageIndex) { $0.highlights.append(TextHighlight(rects: rects, colorHex: colorHex)) }
-        clearTextSelection()
+        endTextSelection()
     }
 
     /// 螢光筆畫在 PDF 文字上時，改成對齊文字、放在文字底下的螢光標示

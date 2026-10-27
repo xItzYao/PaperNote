@@ -47,6 +47,13 @@ struct TextSelectionState {
     var pageIndex: Int
     var text: String
     var docRects: [CGRect]
+    /// PDF 文字層的字元範圍（拖曳兩端的控制點調整範圍用）；文字辨識選到的沒有
+    var charRange: NSRange? = nil
+}
+
+/// 拖曳文字選取的哪一端
+enum TextHandle {
+    case start, end
 }
 
 final class EditorSettings {
@@ -149,6 +156,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var tool: EditorTool = .pen
     /// 切到橡皮擦之前的工具（Pencil 點兩下、擦完自動切回時用）
     var toolBeforeEraser: EditorTool = .pen
+    /// 自動切到選取物件、選 PDF 文字之前的工具（這兩個工具不在工具列上，用完切回去）
+    var toolBeforeTemporary: EditorTool?
 
     // 手勢
     var toolPan: UIPanGestureRecognizer!
@@ -156,6 +165,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var doubleTapGesture: UITapGestureRecognizer!
     var longPressGesture: UILongPressGestureRecognizer!
     var textLongPress: UILongPressGestureRecognizer!
+    /// 拖曳文字選取兩端的控制點（手指或 Pencil）
+    var textHandlePan: UIPanGestureRecognizer!
     var pencilPointTracker: TouchTracker!
     var holdRecognizer: PencilHoldRecognizer!
     var lastPencilPoint: CGPoint?
@@ -218,6 +229,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     /// 工具列左邊的筆記本名稱
     weak var notebookTitleLabel: UILabel?
     var pendingMenu: UIMenu?
+    /// 選單要避開的範圍（畫布座標）：選單放在它的上面或下面，不蓋住選到的東西
+    var pendingMenuAvoid: CGRect?
 
     // 選取物件
     var selected: ElementRef?
@@ -229,6 +242,10 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     // PDF 文字選取
     var textSelection: TextSelectionState?
     var textPanStart: CGPoint?
+    /// 正在拖的控制點：另一端固定的字元
+    var textHandleFixed: Int?
+    /// 按下的位置到控制點那一端字元的距離（手指按在圓點上，選的是線旁邊的字）
+    var textHandleGrab: CGPoint = .zero
 
     // 截圖
     var capturePoints: [CGPoint] = []

@@ -162,6 +162,8 @@ final class OverlayView: UIView {
     let selectionLayer = CAShapeLayer()
     let handleLayer = CAShapeLayer()
     let textLayer = CAShapeLayer()
+    /// 文字選取兩端的控制點
+    let textHandleLayer = CAShapeLayer()
     let captureLayer = CAShapeLayer()
     let tablePlusCircles = CAShapeLayer()
     let tablePlusMarks = CAShapeLayer()
@@ -273,6 +275,9 @@ final class OverlayView: UIView {
 
         textLayer.fillColor = UIColor.systemBlue.withAlphaComponent(0.25).cgColor
         layer.addSublayer(textLayer)
+        textHandleLayer.fillColor = UIColor.systemBlue.cgColor
+        textHandleLayer.strokeColor = UIColor.systemBlue.cgColor
+        layer.addSublayer(textHandleLayer)
 
         cellSelLayer.fillColor = UIColor.systemBlue.withAlphaComponent(0.15).cgColor
         cellSelLayer.strokeColor = UIColor.systemBlue.cgColor
@@ -622,12 +627,22 @@ final class OverlayView: UIView {
         CATransaction.commit()
     }
 
-    func showTextRects(_ rects: [CGRect]) {
+    /// handles：兩端控制點（直線＋圓點，文件座標）；lineWidth 是直線的粗細
+    func showTextRects(_ rects: [CGRect], handles: [(bar: (CGPoint, CGPoint), knob: CGPoint, radius: CGFloat)] = [],
+                       lineWidth: CGFloat = 2) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         let path = UIBezierPath()
         for r in rects { path.append(UIBezierPath(rect: r)) }
         textLayer.path = rects.isEmpty ? nil : path.cgPath
+        let h = UIBezierPath()
+        for x in handles {
+            h.move(to: x.bar.0)
+            h.addLine(to: x.bar.1)
+            h.append(UIBezierPath(ovalIn: CGRect(x: x.knob.x - x.radius, y: x.knob.y - x.radius, width: x.radius * 2, height: x.radius * 2)))
+        }
+        textHandleLayer.lineWidth = lineWidth
+        textHandleLayer.path = handles.isEmpty ? nil : h.cgPath
         CATransaction.commit()
     }
 

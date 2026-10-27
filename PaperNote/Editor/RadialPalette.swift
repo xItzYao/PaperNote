@@ -34,7 +34,6 @@ final class PaletteOverlay: UIView {
 
     // 都放在左側，右手拿筆時不會被手擋住
     private let mainItems = [
-        MainItem(tool: .textSelect, symbol: "character.cursor.ibeam", title: "文字", angle: -130),
         MainItem(tool: .pen, symbol: "pencil.tip", title: "筆", angle: 180),
         MainItem(tool: .highlighter, symbol: "highlighter", title: "螢光筆", angle: 130),
     ]

@@ -82,8 +82,6 @@ extension NotebookViewController {
             (.eraser, "eraser", "橡皮擦"),
             (.lasso, "lasso", "套索"),
             (.capture, "camera.viewfinder", "截圖"),
-            (.select, "hand.point.up.left", "選取"),
-            (.textSelect, "character.cursor.ibeam", "PDF文字"),
             (.pageResize, "arrow.up.left.and.arrow.down.right", "擴展"),
             (.circuit, "bolt", "電路"),
         ]
@@ -222,6 +220,13 @@ extension NotebookViewController {
         }
         if t == .pageResize, resizePageIndex == nil || t != tool { resizePageIndex = currentPageIndex }
         if t == .eraser, tool.isInking || tool == .lasso { toolBeforeEraser = tool }
+        // 選取物件、選 PDF 文字不在工具列上：記住從哪個工具切過來，用完切回去
+        let temporary: (EditorTool) -> Bool = { $0 == .select || $0 == .textSelect }
+        if !temporary(t) {
+            toolBeforeTemporary = nil
+        } else if !temporary(tool) {
+            toolBeforeTemporary = tool
+        }
         tool = t
         applyTool()
         updateSelectionChrome()
