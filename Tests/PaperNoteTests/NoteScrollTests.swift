@@ -58,17 +58,24 @@ final class NoteScrollTests: XCTestCase {
         var worst = 0.0, total = 0.0, steps = 0
         var y: CGFloat = 0
         let maxY = canvas.contentSize.height - canvas.bounds.height
+        var worstAt = ""
         while y < maxY {
             y = min(y + 120, maxY)
             let t = CACurrentMediaTime()
             canvas.contentOffset.y = y
+            let t1 = CACurrentMediaTime()
             canvas.layoutIfNeeded()
+            let t2 = CACurrentMediaTime()
             spin(frame)
             let cost = max(0, CACurrentMediaTime() - t - frame)
+            if cost > worst {
+                worstAt = "step=\(steps) y=\(Int(y)) scroll=\(Int((t1 - t) * 1000))ms layout=\(Int((t2 - t1) * 1000))ms runloop=\(Int((CACurrentMediaTime() - t2) * 1000))ms"
+            }
             worst = max(worst, cost)
             total += cost
             steps += 1
         }
+        print("SCROLLDIAG worst \(worstAt)")
         return (worst, total / Double(max(steps, 1)))
     }
 
