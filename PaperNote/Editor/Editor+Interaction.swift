@@ -229,6 +229,24 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         return true
     }
 
+    /// 工具列的選單開著時直接滑頁面：系統的手勢（_UISecondaryClickDriverGestureRecognizer）會停在「失敗」沒有重設，
+    /// 之後頁面就捲不動（切換工具會重新開關手勢才好）。選單關掉後把這種卡住的手勢重設
+    func resetStuckCanvasGestures() {
+        var reset: [String] = []
+        func walk(_ v: UIView) {
+            for g in v.gestureRecognizers ?? [] where g.isEnabled && g.state != .possible {
+                // 正在捲動、縮放的不動
+                if (g === canvas.panGestureRecognizer || g === canvas.pinchGestureRecognizer) && (g.state == .began || g.state == .changed) { continue }
+                reset.append("\(type(of: g))(\(g.state.rawValue))")
+                g.isEnabled = false
+                g.isEnabled = true
+            }
+            v.subviews.forEach(walk)
+        }
+        walk(canvas)
+        if !reset.isEmpty { DebugLog.add("menu closed, reset \(reset.joined(separator: " "))") }
+    }
+
     /// 除錯：手指剛按下時，畫布上不在待命狀態（或被關掉）的手勢。頁面捲不動時看是誰卡住
     func busyGestures() -> String {
         var out: [String] = []

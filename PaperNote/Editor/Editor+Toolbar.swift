@@ -207,7 +207,8 @@ extension NotebookViewController {
             a.font = UIFont.systemFont(ofSize: 15, weight: .regular)
             return a
         }
-        let b = UIButton(configuration: config)
+        let b = MenuButton(configuration: config)
+        b.onMenuClosed = { [weak self] in self?.resetStuckCanvasGestures() }
         if let action { b.addTarget(self, action: action, for: .touchUpInside) }
         b.setContentHuggingPriority(.required, for: .horizontal)
         b.setContentCompressionResistancePriority(.required, for: .horizontal)
