@@ -41,13 +41,16 @@ final class ScrollAfterMenuUITests: XCTestCase {
         for round in 1...2 {
             app.buttons["插入"].tap()
             XCTAssertTrue(app.descendants(matching: .any)["文字框"].waitForExistence(timeout: 5), "＋的選單要打開")
+            let opened = indicator.label
             swipe(up: round == 1)
             sleep(1)
+            let menuItem = app.descendants(matching: .any)["文字框"]
+            let afterFirst = "第一下後：頁面 \(opened)→\(indicator.label)、選單\(menuItem.exists ? "還開著" : "已關")"
 
             let before = indicator.label
             for _ in 0..<3 { swipe(up: round != 1) }
             XCTAssertTrue(waitForPageChange(from: before),
-                          "第 \(round) 次：選單關掉之後頁面要還能捲動（\(before)）。手指按下時的手勢：\(gestureDump)｜平常：\(normal)")
+                          "第 \(round) 次：\(afterFirst)；之後頁面要還能捲動（\(before)），選單\(menuItem.exists ? "還開著" : "已關")。手指按下時的手勢：\(gestureDump)｜平常：\(normal)")
         }
     }
 }
