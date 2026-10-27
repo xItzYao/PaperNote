@@ -236,7 +236,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         return true
     }
 
-    /// 工具列的選單開著時滑頁面：頁面跟著捲、選單也看不見了，但系統沒有真的把選單關完（選單的容器還在視窗裡），
+    /// 工具列的選單開著時滑頁面：頁面跟著捲、選單也看不見了，但系統沒有真的把選單關完（選單的容器還留在視窗裡），
     /// 之後系統一直當作選單還開著：幫選單捲動頁面的手勢（_UIPassthroughScrollGestureRecognizer）每次都先開始，頁面自己的捲動就開始不了。
     /// 手指碰到頁面時，請工具列上有選單的按鈕把選單關完（碰到頁面本來就該關掉選單）；
     /// 選單的容器還留在視窗裡（系統沒收掉）就拿掉。回傳留下來的容器（除錯用）
@@ -252,7 +252,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         // 最外層的選單容器（裡面的不用再找）
         func find(_ v: UIView) {
             if String(describing: type(of: v)).contains("ContextMenu") {
-                left.append("\(type(of: v)) in \(type(of: v.superview!))[\(Int(v.frame.width))x\(Int(v.frame.height)) a=\(String(format: "%.2f", v.alpha)) sub=\(v.subviews.count)]")
+                left.append("\(type(of: v))[\(Int(v.frame.width))x\(Int(v.frame.height)) sub=\(v.subviews.count)]")
                 v.removeFromSuperview()
                 return
             }
@@ -297,16 +297,6 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         let pan = canvas.panGestureRecognizer
         let draw = canvas.drawingGestureRecognizer
         out.append("pan=\(pan.state.rawValue)\(pan.isEnabled ? "" : ",off") draw=\(draw.state.rawValue)\(draw.isEnabled ? "" : ",off") touches=\(PalmBlocker.lastTouchCount) dragging=\(canvas.isDragging) tracking=\(canvas.isTracking) decel=\(canvas.isDecelerating) menu=\(view.window.map(menuOnScreen) ?? false)")
-        // 所有手勢（含待命的）：和平常比較看哪裡不一樣
-        var all: [String] = []
-        func every(_ v: UIView) {
-            for g in v.gestureRecognizers ?? [] where g.isEnabled {
-                all.append("\(type(of: g)):\(g.state.rawValue):\(g.numberOfTouches)")
-            }
-            v.subviews.forEach(every)
-        }
-        every(canvas)
-        out.append("all=[" + all.joined(separator: ",") + "]")
         return out.joined(separator: " ")
     }
 
