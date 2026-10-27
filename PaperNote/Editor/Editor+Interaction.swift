@@ -284,7 +284,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         }
         let pan = canvas.panGestureRecognizer
         let draw = canvas.drawingGestureRecognizer
-        out.append("pan=\(pan.state.rawValue)\(pan.isEnabled ? "" : ",off") draw=\(draw.state.rawValue)\(draw.isEnabled ? "" : ",off") touches=\(PalmBlocker.lastTouchCount) dragging=\(canvas.isDragging) tracking=\(canvas.isTracking) decel=\(canvas.isDecelerating)")
+        out.append("pan=\(pan.state.rawValue)\(pan.isEnabled ? "" : ",off") draw=\(draw.state.rawValue)\(draw.isEnabled ? "" : ",off") touches=\(PalmBlocker.lastTouchCount) dragging=\(canvas.isDragging) tracking=\(canvas.isTracking) decel=\(canvas.isDecelerating) menu=\(view.window.map(menuOnScreen) ?? false)")
         // 所有手勢（含待命的）：和平常比較看哪裡不一樣
         var all: [String] = []
         func every(_ v: UIView) {
