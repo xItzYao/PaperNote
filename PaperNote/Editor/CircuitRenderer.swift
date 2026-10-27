@@ -68,23 +68,31 @@ enum CircuitRenderer {
         text(b.title, at: CGPoint(x: 0, y: -b.height / 2 - 7), size: 9, bold: true)
     }
 
-    /// 導線：水平段遇到沒有接在一起的交叉點，畫半圓跨過去
+    /// 導線：遇到沒有接在一起的交叉點，畫半圓跨過去（水平段往上、垂直段往右）
     static func drawWires(_ d: CircuitData, color: UIColor) {
         let crossings = d.crossings()
         let path = UIBezierPath()
+        let r = hopRadius
         for (wi, w) in d.wires.enumerated() where w.points.count >= 2 {
             path.move(to: w.points[0])
             for si in 0..<(w.points.count - 1) {
                 let a = w.points[si], b = w.points[si + 1]
-                let xs = crossings.filter { $0.wire == wi && $0.segment == si }.map(\.x)
-                if a.y == b.y, !xs.isEmpty {
+                let hops = crossings.filter { $0.wire == wi && $0.segment == si }.map(\.at)
+                if a.y == b.y, !hops.isEmpty {
                     let right = b.x > a.x
-                    for x in xs.sorted(by: right ? (<) : (>)) {
-                        let r = hopRadius
+                    for x in hops.sorted(by: right ? (<) : (>)) {
                         path.addLine(to: CGPoint(x: right ? x - r : x + r, y: a.y))
                         // 從左往右：經過上方（clockwise）；從右往左：反方向
                         path.addArc(withCenter: CGPoint(x: x, y: a.y), radius: r,
                                     startAngle: right ? .pi : 0, endAngle: right ? 2 * .pi : .pi, clockwise: right)
+                    }
+                } else if a.x == b.x, !hops.isEmpty {
+                    let down = b.y > a.y
+                    for y in hops.sorted(by: down ? (<) : (>)) {
+                        path.addLine(to: CGPoint(x: a.x, y: down ? y - r : y + r))
+                        // 從上往下：經過右側（clockwise）；從下往上：反方向
+                        path.addArc(withCenter: CGPoint(x: a.x, y: y), radius: r,
+                                    startAngle: down ? -.pi / 2 : .pi / 2, endAngle: down ? .pi / 2 : -.pi / 2, clockwise: down)
                     }
                 }
                 path.addLine(to: b)

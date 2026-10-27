@@ -275,6 +275,22 @@ enum CircuitGeometry {
         }
     }
 
+    /// 每支接腳的引腳方向（從接腳往元件裡、水平或垂直的單位向量，電路圖座標）
+    static func pinLeads(_ c: CircuitComponent) -> [CGPoint] {
+        let b = localBounds(c)
+        let t = transform(c)
+        return localPins(c).map { p in
+            var d: CGPoint
+            if abs(p.x - b.minX) < 0.5 { d = CGPoint(x: 1, y: 0) }
+            else if abs(p.x - b.maxX) < 0.5 { d = CGPoint(x: -1, y: 0) }
+            else if abs(p.y - b.minY) < 0.5 { d = CGPoint(x: 0, y: 1) }
+            else if abs(p.y - b.maxY) < 0.5 { d = CGPoint(x: 0, y: -1) }
+            else { d = abs(p.x) >= abs(p.y) ? CGPoint(x: p.x > 0 ? -1 : 1, y: 0) : CGPoint(x: 0, y: p.y > 0 ? -1 : 1) }
+            let q = CGPoint(x: t.a * d.x + t.c * d.y, y: t.b * d.x + t.d * d.y)
+            return CGPoint(x: q.x.rounded(), y: q.y.rounded())
+        }
+    }
+
     static func bounds(_ c: CircuitComponent) -> CGRect {
         localBounds(c).applying(transform(c))
     }
@@ -332,12 +348,10 @@ extension CircuitData {
     }
 
     /// 元件移動／旋轉後，接在舊接腳上的導線跟著走：
-    /// 1. 從接腳中間穿過的導線先在接腳處切成兩條（都以接腳為端點）
-    /// 2. 端點在舊接腳上的導線移到新接腳，相鄰的轉角跟著調整
-    /// 3. 原本接在這些導線上（T 字接點）、現在脫開的分支，接回那條導線上最近的位置
+    /// 1. 端點在舊接腳上的導線移到新接腳，相鄰的轉角跟著調整（從接腳中間經過的線沒有接上，留在原地）
+    /// 2. 原本接在這些導線上（T 字接點）、現在脫開的分支，接回那條導線上最近的位置
     mutating func reattach(from oldPins: [CGPoint], to newPins: [CGPoint]) {
         guard oldPins.count == newPins.count else { return }
-        splitWires(at: oldPins)
         var before = wires
         for i in wires.indices {
             var pts = wires[i].points
@@ -353,36 +367,6 @@ extension CircuitData {
             before = moved
         }
         wires.removeAll { $0.points.count < 2 }
-    }
-
-    /// 接腳落在導線中間（線段內或中間的轉角）：從那裡切成兩條
-    private mutating func splitWires(at pins: [CGPoint]) {
-        for pin in pins {
-            var i = 0
-            while i < wires.count {
-                let pts = wires[i].points
-                var cut: (index: Int, insert: Bool)?
-                for k in 0..<max(0, pts.count - 1) {
-                    if k > 0 && pts[k] == pin { cut = (k, false); break }
-                    if Self.segment(pts[k], pts[k + 1], contains: pin) { cut = (k + 1, true); break }
-                }
-                if let c = cut {
-                    var first = Array(pts[..<c.index])
-                    var second = Array(pts[c.index...])
-                    if c.insert {
-                        first.append(pin)
-                        second.insert(pin, at: 0)
-                    } else {
-                        first.append(pin)
-                    }
-                    wires[i].points = first
-                    wires.insert(CircuitWire(points: second), at: i + 1)
-                    i += 2
-                } else {
-                    i += 1
-                }
-            }
-        }
     }
 
     /// 端點原本在別條導線上、那條線改了走線後脫開的，移到那條線上最近的位置。有移動就回傳 true
@@ -446,31 +430,96 @@ extension CircuitData {
     /// 所有接腳位置
     var allPins: [CGPoint] { components.flatMap { CircuitGeometry.pins($0) } }
 
-    /// 需要畫實心圓點的接點：同一點有 3 個以上的連接（導線端點、接腳、或端點落在另一條線中間）
-    func junctions() -> [CGPoint] {
-        var endpoints: [PointKey: Int] = [:]
-        for w in wires {
-            guard let a = w.points.first, let b = w.points.last else { continue }
-            endpoints[PointKey(a), default: 0] += 1
-            endpoints[PointKey(b), default: 0] += 1
-        }
-        let pins = allPins
-        var result: [CGPoint] = []
-        for (key, n) in endpoints {
-            let p = key.point
-            var count = n + pins.filter { $0 == p }.count
-            // 端點落在別條線的中間（T 字接點）
-            for w in wires where w.points.count >= 2 {
-                for i in 0..<(w.points.count - 1) {
-                    let a = w.points[i], b = w.points[i + 1]
-                    if p != a && p != b && Self.segment(a, b, contains: p) { count += 2 }
+    /// 某一點上接在一起的情形：碰到這點的導線與接腳分成幾組，同一組的才算接上
+    private struct Node {
+        /// 導線編號 → 在這點往外走的方向
+        var wireDirs: [Int: Set<PointKey>] = [:]
+        /// 從這點中間直直經過的導線 → 段編號
+        var through: [Int: Int] = [:]
+        /// 在這點的接腳（wires.count + 第幾支）與引腳方向
+        var pinIDs: [Int] = []
+        var pinDirs: [PointKey] = []
+        /// 組別：導線用編號、接腳用 wires.count + 第幾支
+        var group: [Int: Int] = [:]
+    }
+
+    /// 接上的規則（只看導線的頭尾）：
+    /// - 兩條線重疊走同一個方向：接上
+    /// - 線頭停在這點：和這點的線都接上；但這點是接腳時，從中間經過的線不算，
+    ///   兩筆線頭剛好接成一直線時，從中間橫越的線也不算（都是跨線）
+    private func node(at p: CGPoint, pins: [(point: CGPoint, lead: CGPoint)]) -> Node {
+        var n = Node()
+        var ends: [Int] = []
+        for (wi, w) in wires.enumerated() where w.points.count >= 2 {
+            let pts = w.points
+            var dirs = Set<PointKey>()
+            for k in 0..<(pts.count - 1) {
+                let a = pts[k], b = pts[k + 1]
+                if a == p && b != p { dirs.insert(PointKey(Self.direction(a, b))) }
+                if b == p && a != p { dirs.insert(PointKey(Self.direction(b, a))) }
+                if Self.segment(a, b, contains: p) {
+                    dirs.insert(PointKey(Self.direction(p, a)))
+                    dirs.insert(PointKey(Self.direction(p, b)))
+                    n.through[wi] = k
                 }
-                // 折線中間的轉角
-                if w.points.count > 2, w.points.dropFirst().dropLast().contains(p) { count += 2 }
             }
-            if count >= 3 { result.append(p) }
+            guard !dirs.isEmpty else { continue }
+            n.wireDirs[wi] = dirs
+            if pts[0] == p || pts[pts.count - 1] == p { ends.append(wi) }
+        }
+        let pinIDs = pins.indices.filter { pins[$0].point == p }.map { wires.count + $0 }
+        n.pinIDs = pinIDs
+        n.pinDirs = pinIDs.map { PointKey(pins[$0 - wires.count].lead) }
+
+        var parent: [Int: Int] = [:]
+        func find(_ x: Int) -> Int { var x = x; while let q = parent[x], q != x { x = q }; return x }
+        func union(_ x: Int, _ y: Int) { parent[find(x)] = find(y) }
+        let ids = Array(n.wireDirs.keys) + pinIDs
+        for x in ids { parent[x] = x }
+        let wireIDs = Array(n.wireDirs.keys)
+        for (i, x) in wireIDs.enumerated() {
+            for y in wireIDs[(i + 1)...] where !n.wireDirs[x]!.isDisjoint(with: n.wireDirs[y]!) { union(x, y) }
+        }
+        if !pinIDs.isEmpty {
+            for x in ends + pinIDs.dropFirst() { union(x, pinIDs[0]) }
+        } else if ends.count == 2, let d0 = n.wireDirs[ends[0]], let d1 = n.wireDirs[ends[1]],
+                  d0.count == 1, d1.count == 1, let a = d0.first, let b = d1.first, a.x == -b.x, a.y == -b.y {
+            union(ends[0], ends[1])
+        } else if let e = ends.first {
+            for x in ids { union(x, e) }
+        }
+        for x in ids { n.group[x] = find(x) }
+        return n
+    }
+
+    private var pinsWithLeads: [(point: CGPoint, lead: CGPoint)] {
+        components.flatMap { c in Array(zip(CircuitGeometry.pins(c), CircuitGeometry.pinLeads(c))).map { (point: $0.0, lead: $0.1) } }
+    }
+
+    /// 導線的頭尾、轉角與接腳的位置（分岔只會出現在這些點）
+    private func vertexPoints(_ pins: [(point: CGPoint, lead: CGPoint)]) -> Set<PointKey> {
+        Set(wires.flatMap { $0.points }.map(PointKey.init) + pins.map { PointKey($0.point) })
+    }
+
+    /// 需要畫實心圓點的接點：接在一起的線在這裡分成 3 個以上的方向（分岔的地方）。
+    /// 線從中間經過的地方不算接上，所以不會有圓點
+    func junctions() -> [CGPoint] {
+        let pins = pinsWithLeads
+        var result: [CGPoint] = []
+        for key in vertexPoints(pins) {
+            let p = key.point
+            let n = node(at: p, pins: pins)
+            var arms: [Int: Set<PointKey>] = [:]
+            for (wi, dirs) in n.wireDirs { arms[n.group[wi]!, default: []].formUnion(dirs) }
+            for (pid, d) in zip(n.pinIDs, n.pinDirs) { arms[n.group[pid]!, default: []].insert(d) }
+            if arms.values.contains(where: { $0.count >= 3 }) { result.append(p) }
         }
         return result
+    }
+
+    /// a 往 b 的方向（水平或垂直的單位向量）
+    private static func direction(_ a: CGPoint, _ b: CGPoint) -> CGPoint {
+        CGPoint(x: b.x > a.x ? 1 : (b.x < a.x ? -1 : 0), y: b.y > a.y ? 1 : (b.y < a.y ? -1 : 0))
     }
 
     static func segment(_ a: CGPoint, _ b: CGPoint, contains p: CGPoint) -> Bool {
@@ -479,26 +528,41 @@ extension CircuitData {
         return false
     }
 
-    /// 沒有接在一起的交叉點（水平段在這裡畫跨線半圓）。回傳 (水平導線編號, 段編號, 交叉 x)
-    func crossings() -> [(wire: Int, segment: Int, x: CGFloat)] {
-        let jset = Set(junctions().map(PointKey.init))
-        var out: [(wire: Int, segment: Int, x: CGFloat)] = []
-        for (wi, w) in wires.enumerated() where w.points.count >= 2 {
-            for si in 0..<(w.points.count - 1) {
-                let a = w.points[si], b = w.points[si + 1]
-                guard a.y == b.y, a.x != b.x else { continue }
-                for (vj, v) in wires.enumerated() where vj != wi && v.points.count >= 2 {
-                    for sj in 0..<(v.points.count - 1) {
-                        let c = v.points[sj], d = v.points[sj + 1]
-                        guard c.x == d.x, c.y != d.y else { continue }
-                        let x = c.x, y = a.y
-                        let p = CGPoint(x: x, y: y)
-                        // 兩條線的內部互相穿過，且不是接點
-                        if x > min(a.x, b.x) && x < max(a.x, b.x) && y > min(c.y, d.y) && y < max(c.y, d.y) && !jset.contains(PointKey(p)) {
-                            out.append((wi, si, x))
-                        }
+    /// 線從中間經過、沒有接上的地方，在經過的那條線上畫跨線半圓。
+    /// 回傳 (導線編號, 段編號, 位置：水平段是 x、垂直段是 y)；兩條線都直直經過時畫在水平那條
+    func crossings() -> [(wire: Int, segment: Int, at: CGFloat)] {
+        let pins = pinsWithLeads
+        var points = vertexPoints(pins)
+        // 兩條線中間互相穿過的位置
+        for w in wires where w.points.count >= 2 {
+            for (a, b) in zip(w.points, w.points.dropFirst()) where a.y == b.y {
+                for v in wires where v.points.count >= 2 {
+                    for (c, d) in zip(v.points, v.points.dropFirst()) where c.x == d.x {
+                        let q = CGPoint(x: c.x, y: a.y)
+                        if Self.segment(a, b, contains: q) && Self.segment(c, d, contains: q) { points.insert(PointKey(q)) }
                     }
                 }
+            }
+        }
+        var out: [(wire: Int, segment: Int, at: CGFloat)] = []
+        for key in points {
+            let p = key.point
+            let n = node(at: p, pins: pins)
+            guard !n.through.isEmpty else { continue }
+            for (wi, si) in n.through {
+                let a = wires[wi].points[si], b = wires[wi].points[si + 1]
+                let horizontal = a.y == b.y
+                func perpendicular(_ d: PointKey) -> Bool { horizontal ? d.x == 0 : d.y == 0 }
+                var hop = false
+                for (vj, dirs) in n.wireDirs where vj != wi && n.group[vj] != n.group[wi] {
+                    let cross = dirs.filter(perpendicular)
+                    guard !cross.isEmpty else { continue }
+                    // 兩條都直直經過：只在水平那條畫
+                    if cross.count == 2 && n.through[vj] != nil && !horizontal { continue }
+                    hop = true
+                }
+                for (pid, d) in zip(n.pinIDs, n.pinDirs) where n.group[pid] != n.group[wi] && perpendicular(d) { hop = true }
+                if hop { out.append((wi, si, horizontal ? p.x : p.y)) }
             }
         }
         return out

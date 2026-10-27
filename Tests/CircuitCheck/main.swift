@@ -35,7 +35,7 @@ check("T junction is not a crossing", t.crossings().isEmpty)
 var x = CircuitData()
 x.wires = [CircuitWire(points: [P(0, 0), P(100, 0)]), CircuitWire(points: [P(50, -50), P(50, 50)])]
 check("crossing has no dot", x.junctions().isEmpty)
-check("crossing detected once at x=50", x.crossings().count == 1 && x.crossings()[0].x == 50)
+check("crossing detected once at x=50", x.crossings().count == 1 && x.crossings()[0].at == 50)
 
 // 5. 導線接到元件接腳：兩個連接，不畫圓點
 var w = CircuitData()
@@ -146,17 +146,15 @@ check("attached wire follows the pin", tee.wires[0].points.first == P(130, 150))
 check("T branch re-attaches to the moved wire", tee.wires.count == 2 && tee.wires[1].points.first == P(160, 150))
 check("T branch is still a junction", tee.junctions().map(PointKey.init).contains(PointKey(P(160, 150))))
 
-// 15. 導線從接腳中間穿過：拖動時兩邊都跟著走
+// 15. 導線從接腳中間經過不算接上：拖動元件時那條線留在原地
 var through = CircuitData()
 through.components = [CircuitComponent(part: .resistor, position: P(100, 100))]
 through.wires = [CircuitWire(points: [P(130, 50), P(130, 150)])]
 let thOld = CircuitGeometry.pins(through.components[0])
 through.components[0].position = P(120, 100)
 through.reattach(from: thOld, to: CircuitGeometry.pins(through.components[0]))
-let thPin = P(150, 100)
-check("wire through a pin is split in two", through.wires.count == 2)
-check("both halves follow the pin", through.wires.allSatisfy { $0.points.first == thPin || $0.points.last == thPin })
-check("far ends stay put", Set(through.wires.flatMap { [$0.points.first!, $0.points.last!] }.map(PointKey.init)).isSuperset(of: [PointKey(P(130, 50)), PointKey(P(130, 150))]))
+check("wire through a pin is not split", through.wires.count == 1)
+check("wire through a pin stays put", through.wires[0].points == [P(130, 50), P(130, 150)])
 
 // 16. 方塊元件：接腳數量、名字、都在格點上、都在外框裡
 func onGrid(_ p: CGPoint) -> Bool { p.x.truncatingRemainder(dividingBy: 10) == 0 && p.y.truncatingRemainder(dividingBy: 10) == 0 }
@@ -181,6 +179,62 @@ for part in [CircuitPart.dFlipFlop, .dLatch, .mux, .decoder, .encoder] {
 }
 check("block pins on grid and inside bounds for every size and rotation", allBlocksOK)
 check("gate pin names keep I/Y", CircuitGeometry.pinNames(CircuitComponent(part: .andGate, position: .zero, inputs: 3)) == ["I0", "I1", "I2", "Y"])
+
+// 17. 線從中間經過不算接上（NAND：B 輸入橫線經過 PMOS 源極接腳，那裡往下接了一條輸出線）
+var nand = CircuitData()
+nand.components = [CircuitComponent(part: .pmos, position: P(100, 100))]
+let src = CircuitGeometry.pins(nand.components[0])[2]
+check("PMOS source pin at (110, 130)", src == P(110, 130))
+nand.wires = [CircuitWire(points: [src, P(110, 200)]),
+              CircuitWire(points: [P(0, 130), P(200, 130)])]
+check("wire passing through a pin with a wire on it gets no dot", nand.junctions().isEmpty)
+check("wire passing through a pin hops over it", nand.crossings().count == 1 && nand.crossings()[0].wire == 1 && nand.crossings()[0].at == 110)
+// 接腳上接兩條往不同方向的線：分岔，要有圓點
+var pin2 = CircuitData()
+pin2.components = nand.components
+pin2.wires = [CircuitWire(points: [src, P(110, 200)]), CircuitWire(points: [src, P(160, 130)])]
+check("pin branching two ways gets a dot", pin2.junctions().map(PointKey.init) == [PointKey(src)])
+
+// 直線分兩筆畫、接在另一條線經過的地方：仍然是跨線
+var twoStrokes = CircuitData()
+twoStrokes.wires = [CircuitWire(points: [P(50, 0), P(50, 100)]), CircuitWire(points: [P(50, 100), P(50, 200)]),
+                    CircuitWire(points: [P(0, 100), P(100, 100)])]
+check("straight line in two strokes crossing a wire gets no dot", twoStrokes.junctions().isEmpty)
+check("horizontal wire hops over the two-stroke line", twoStrokes.crossings().count == 1 && twoStrokes.crossings()[0].wire == 2 && twoStrokes.crossings()[0].at == 50)
+var twoH = CircuitData()
+twoH.wires = [CircuitWire(points: [P(0, 100), P(50, 100)]), CircuitWire(points: [P(50, 100), P(100, 100)]),
+              CircuitWire(points: [P(50, 0), P(50, 200)])]
+check("horizontal line in two strokes gets no dot", twoH.junctions().isEmpty)
+check("vertical wire hops over the two-stroke line", twoH.crossings().count == 1 && twoH.crossings()[0].wire == 2 && twoH.crossings()[0].at == 100)
+// 三條線的頭尾在同一點：真的接在一起
+var bend = CircuitData()
+bend.wires = [CircuitWire(points: [P(50, 0), P(50, 100)]), CircuitWire(points: [P(50, 100), P(50, 150), P(100, 150)]),
+              CircuitWire(points: [P(50, 100), P(120, 100)])]
+check("three wire ends at one point still get a dot", bend.junctions().map(PointKey.init) == [PointKey(P(50, 100))])
+
+// 18. 圓點打在分岔的地方，不是線頭：從線中間接出去、沿著線走一段再轉彎
+var along = CircuitData()
+along.wires = [CircuitWire(points: [P(0, 100), P(200, 100)]),
+               CircuitWire(points: [P(50, 100), P(120, 100), P(120, 200)])]
+check("dot where the overlapping wire turns away", along.junctions().map(PointKey.init) == [PointKey(P(120, 100))])
+check("overlapping wire is not a crossing", along.crossings().isEmpty)
+// 從接腳拉兩條線，先重疊一段再分開
+var fork = CircuitData()
+fork.components = [CircuitComponent(part: .resistor, position: P(100, 100))]
+fork.wires = [CircuitWire(points: [P(130, 100), P(300, 100)]),
+              CircuitWire(points: [P(130, 100), P(200, 100), P(200, 200)])]
+check("no dot on the pin when both wires leave the same way", !fork.junctions().map(PointKey.init).contains(PointKey(P(130, 100))))
+check("dot where the two wires split", fork.junctions().map(PointKey.init) == [PointKey(P(200, 100))])
+// 兩條線頭成直角接在一起（L 形）：只有兩個方向，不是分岔
+var ell = CircuitData()
+ell.wires = [CircuitWire(points: [P(0, 0), P(50, 0)]), CircuitWire(points: [P(50, 0), P(50, 50)])]
+check("L corner from two wires has no dot", ell.junctions().isEmpty)
+// 引腳方向
+let pm = CircuitComponent(part: .pmos, position: P(100, 100))
+check("PMOS leads point into the part", CircuitGeometry.pinLeads(pm) == [P(1, 0), P(0, 1), P(0, -1)])
+var pmR = pm
+pmR.rotation = 90
+check("rotated PMOS leads rotate too", CircuitGeometry.pinLeads(pmR) == [P(0, 1), P(-1, 0), P(1, 0)])
 
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)
