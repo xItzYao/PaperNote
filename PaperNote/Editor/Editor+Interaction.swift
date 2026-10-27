@@ -100,7 +100,14 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
                 let rel = self.lastPencilPoint.map { String(format: "(%.0f, %.0f)", p.x - $0.x, p.y - $0.y) } ?? "nil"
                 let busy = self.busyGestures()
                 DebugLog.add("finger down r=\(String(format: "%.1f", t.majorRadius)) palm=\(palm) pencilDown=\(self.pencilDown) sincePencil=\(since)s fromPencil=\(rel) holdingPalm=\(self.palmBlocker.holdingPalm) busy=\(busy)")
-                self.uiTestDump?.accessibilityLabel = busy
+                if let dump = self.uiTestDump {
+                    dump.accessibilityLabel = "down: " + busy
+                    // 手指開始移動之後再看一次（捲動手勢這時候該開始了）
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self, weak dump] in
+                        guard let self, let dump else { return }
+                        dump.accessibilityLabel = "down: " + busy + " ｜ moving: " + self.busyGestures()
+                    }
+                }
             }
             return palm
         }
@@ -260,7 +267,17 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             v.subviews.forEach(walk)
         }
         walk(canvas)
-        return out.isEmpty ? "-" : out.joined(separator: " ")
+        // 畫布上層（一路到視窗）的手勢：開始了就會擋住畫布的捲動
+        var v = canvas.superview
+        while let s = v {
+            for g in s.gestureRecognizers ?? [] where g.state != .possible {
+                out.append("^\(type(of: s)).\(type(of: g))(\(g.state.rawValue)\(g.isEnabled ? "" : ",off"))")
+            }
+            v = s.superview
+        }
+        let pan = canvas.panGestureRecognizer
+        out.append("pan=\(pan.state.rawValue)\(pan.isEnabled ? "" : ",off") min=\(pan.minimumNumberOfTouches) scroll=\(canvas.isScrollEnabled)")
+        return out.joined(separator: " ")
     }
 
     /// 拖曳手勢要移動一小段才會開始，這裡扣掉已移動的距離，得到筆尖剛碰到的位置

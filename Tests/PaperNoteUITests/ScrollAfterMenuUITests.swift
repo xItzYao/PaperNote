@@ -35,6 +35,7 @@ final class ScrollAfterMenuUITests: XCTestCase {
         swipe()
         swipe()
         XCTAssertTrue(waitForPageChange(from: start), "平常要捲得動（\(start)）")
+        let normal = gestureDump
 
         app.buttons["插入"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["文字框"].waitForExistence(timeout: 5), "＋的選單要打開")
@@ -45,6 +46,6 @@ final class ScrollAfterMenuUITests: XCTestCase {
         // 往回捲（往後捲可能已經到最後一頁）
         let before = indicator.label
         for _ in 0..<3 { swipe(up: false) }
-        XCTAssertTrue(waitForPageChange(from: before), "選單關掉之後頁面要還能捲動（\(before)）。手指按下時卡住的手勢：\(gestureDump)")
+        XCTAssertTrue(waitForPageChange(from: before), "選單關掉之後頁面要還能捲動（\(before)）。手指按下時的手勢：\(gestureDump)｜平常：\(normal)")
     }
 }
