@@ -249,12 +249,16 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         walk(subBarStack)
         guard let window = view.window else { return "" }
         var left: [String] = []
-        for w in window.windowScene?.windows ?? [window] {
-            for v in w.subviews where String(describing: type(of: v)).contains("ContextMenu") {
-                left.append("\(type(of: v))[\(Int(v.frame.width))x\(Int(v.frame.height)) a=\(String(format: "%.2f", v.alpha)) sub=\(v.subviews.count)]")
+        // 最外層的選單容器（裡面的不用再找）
+        func find(_ v: UIView) {
+            if String(describing: type(of: v)).contains("ContextMenu") {
+                left.append("\(type(of: v)) in \(type(of: v.superview!))[\(Int(v.frame.width))x\(Int(v.frame.height)) a=\(String(format: "%.2f", v.alpha)) sub=\(v.subviews.count)]")
                 v.removeFromSuperview()
+                return
             }
+            v.subviews.forEach(find)
         }
+        for w in window.windowScene?.windows ?? [window] { find(w) }
         if !left.isEmpty { DebugLog.add("removed leftover menu container " + left.joined(separator: " ")) }
         return left.isEmpty ? "" : " leftover=" + left.joined(separator: " ")
     }
