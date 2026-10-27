@@ -98,7 +98,8 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
                 let since = String(format: "%.2f", CACurrentMediaTime() - self.lastPencilTime)
                 let p = t.location(in: self.view)
                 let rel = self.lastPencilPoint.map { String(format: "(%.0f, %.0f)", p.x - $0.x, p.y - $0.y) } ?? "nil"
-                let busy = self.busyGestures() + self.recoverScrollAfterMenu()
+                let busy = self.busyGestures()
+                self.finishToolbarMenus()
                 DebugLog.add("finger down r=\(String(format: "%.1f", t.majorRadius)) palm=\(palm) pencilDown=\(self.pencilDown) sincePencil=\(since)s fromPencil=\(rel) holdingPalm=\(self.palmBlocker.holdingPalm) busy=\(busy)")
                 if let dump = self.uiTestDump {
                     dump.accessibilityLabel = "down: " + busy
@@ -236,19 +237,16 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         return true
     }
 
-    /// 選單開著時滑頁面：系統用視窗上的手勢（_UIPassthroughScrollGestureRecognizer）幫頁面捲動。
-    /// 滑一下選單就關了，但這個手勢沒有拿掉，之後每次手指按下它都先開始，頁面自己的捲動就開始不了。
-    /// 手指按下時，畫面上已經沒有選單的話，把它從視窗拿掉（選單還開著時要留著，它就是負責捲動的）。回傳做了什麼（除錯用）
-    func recoverScrollAfterMenu() -> String {
-        guard let window = view.window, !menuOnScreen(in: window) else { return "" }
-        var removed = 0
-        for g in window.gestureRecognizers ?? [] where String(describing: type(of: g)).contains("PassthroughScroll") {
-            window.removeGestureRecognizer(g)
-            removed += 1
+    /// 工具列的選單開著時滑頁面：頁面跟著捲、選單也看不見了，但系統沒有真的把選單關完（選單的容器還在視窗裡），
+    /// 之後系統一直當作選單還開著：幫選單捲動頁面的手勢（_UIPassthroughScrollGestureRecognizer）每次都先開始，頁面自己的捲動就開始不了。
+    /// 手指碰到頁面時，請工具列上有選單的按鈕把選單關完（碰到頁面本來就該關掉選單）
+    func finishToolbarMenus() {
+        func walk(_ v: UIView) {
+            if let b = v as? UIButton, b.menu != nil { b.contextMenuInteraction?.dismissMenu() }
+            v.subviews.forEach(walk)
         }
-        guard removed > 0 else { return "" }
-        DebugLog.add("removed leftover menu passthrough gesture")
-        return " fix=removed passthrough"
+        walk(topBar)
+        walk(subBarStack)
     }
 
     /// 畫面上有系統選單（工具列按鈕的選單、長按選單）
