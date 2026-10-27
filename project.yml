@@ -38,6 +38,19 @@ targets:
         TARGETED_DEVICE_FAMILY: "2"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/PaperNote.app/PaperNote"
         BUNDLE_LOADER: "$(TEST_HOST)"
+  PaperNoteUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - Tests/PaperNoteUITests
+    dependencies:
+      - target: PaperNote
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.papernote.app.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "2"
+        TEST_TARGET_NAME: PaperNote
 schemes:
   PaperNote:
     build:
@@ -46,3 +59,4 @@ schemes:
     test:
       targets:
         - PaperNoteTests
+        - PaperNoteUITests

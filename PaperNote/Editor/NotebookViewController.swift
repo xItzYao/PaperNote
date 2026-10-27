@@ -184,6 +184,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     let circuitLibrary = CircuitLibraryView()
     /// 插入圖片工具：下方一排最近的照片
     let photoStrip = PhotoStripView()
+    /// UI 測試讀得到的除錯資訊（手指按下時卡住的手勢）
+    var uiTestDump: UILabel?
     /// PencilKit 開始書寫的時間（收尾後清掉）；下筆時還沒清掉就代表上一筆卡住了
     var pkUsingSince: CFTimeInterval?
     /// 筆身點兩下切到接線前的模式（再點兩下切回來）
@@ -298,6 +300,15 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         pinOverlay.onInsertIntoPage = { [weak self] img in self?.insertImage(img, jpeg: false, at: nil) }
         pinOverlay.notebookID = session.id
         view.addSubview(pinOverlay)
+
+        if ProcessInfo.processInfo.arguments.contains("-uiTestNotebook") {
+            let l = UILabel(frame: CGRect(x: 0, y: 0, width: 2, height: 2))
+            l.accessibilityIdentifier = "gestureDump"
+            l.accessibilityLabel = "-"
+            l.isAccessibilityElement = true
+            view.addSubview(l)
+            uiTestDump = l
+        }
 
         computeLayout()
         isApplyingDrawing = true

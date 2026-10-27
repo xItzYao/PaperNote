@@ -173,6 +173,7 @@ extension NotebookViewController {
         pageLabel.translatesAutoresizingMaskIntoConstraints = false
         // 點頁碼打開全部頁面
         pageLabel.isUserInteractionEnabled = true
+        pageLabel.accessibilityIdentifier = "pageIndicator"
         pageLabel.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(pageLabelTapped)))
         subBar.addSubview(pageLabel)
         NSLayoutConstraint.activate([

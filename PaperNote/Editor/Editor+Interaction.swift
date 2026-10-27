@@ -98,7 +98,9 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
                 let since = String(format: "%.2f", CACurrentMediaTime() - self.lastPencilTime)
                 let p = t.location(in: self.view)
                 let rel = self.lastPencilPoint.map { String(format: "(%.0f, %.0f)", p.x - $0.x, p.y - $0.y) } ?? "nil"
-                DebugLog.add("finger down r=\(String(format: "%.1f", t.majorRadius)) palm=\(palm) pencilDown=\(self.pencilDown) sincePencil=\(since)s fromPencil=\(rel) holdingPalm=\(self.palmBlocker.holdingPalm)")
+                let busy = self.busyGestures()
+                DebugLog.add("finger down r=\(String(format: "%.1f", t.majorRadius)) palm=\(palm) pencilDown=\(self.pencilDown) sincePencil=\(since)s fromPencil=\(rel) holdingPalm=\(self.palmBlocker.holdingPalm) busy=\(busy)")
+                self.uiTestDump?.accessibilityLabel = busy
             }
             return palm
         }
@@ -225,6 +227,22 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             return hitElement(at: touch.location(in: pagesContainer)) != nil
         }
         return true
+    }
+
+    /// 除錯：手指剛按下時，畫布上不在待命狀態（或被關掉）的手勢。頁面捲不動時看是誰卡住
+    func busyGestures() -> String {
+        var out: [String] = []
+        func walk(_ v: UIView) {
+            for g in v.gestureRecognizers ?? [] where g !== palmBlocker {
+                let off = !g.isEnabled && (g === canvas.panGestureRecognizer || g === canvas.pinchGestureRecognizer)
+                if g.state != .possible || off {
+                    out.append("\(type(of: g))(\(g.state.rawValue)\(g.isEnabled ? "" : ",off"))")
+                }
+            }
+            v.subviews.forEach(walk)
+        }
+        walk(canvas)
+        return out.isEmpty ? "-" : out.joined(separator: " ")
     }
 
     /// 拖曳手勢要移動一小段才會開始，這裡扣掉已移動的距離，得到筆尖剛碰到的位置

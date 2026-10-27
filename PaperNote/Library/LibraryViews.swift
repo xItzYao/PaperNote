@@ -43,7 +43,18 @@ struct RootView: View {
                 .ignoresSafeArea(.keyboard)
                 .ignoresSafeArea(.container, edges: .bottom)
         }
-        .onAppear { BackupManager.shared.start() }
+        .onAppear {
+            BackupManager.shared.start()
+            // UI 測試：直接打開一本有好幾頁的新筆記本
+            if ProcessInfo.processInfo.arguments.contains("-uiTestNotebook") {
+                let meta = store.createNotebook(title: "UI Test", folder: nil, paper: .blank, landscape: false)
+                if let s = try? NotebookSession(id: meta.id) {
+                    for _ in 0..<9 { s.document.pages.append(Page(background: .paper(width: 595, height: 842, style: .grid))) }
+                    s.save()
+                }
+                open(meta.id, nil)
+            }
+        }
         .onOpenURL { url in
             do {
                 switch url.pathExtension.lowercased() {
