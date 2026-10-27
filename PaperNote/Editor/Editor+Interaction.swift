@@ -270,7 +270,18 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             v = s.superview
         }
         let pan = canvas.panGestureRecognizer
-        out.append("pan=\(pan.state.rawValue)\(pan.isEnabled ? "" : ",off") min=\(pan.minimumNumberOfTouches) scroll=\(canvas.isScrollEnabled)")
+        let draw = canvas.drawingGestureRecognizer
+        out.append("pan=\(pan.state.rawValue)\(pan.isEnabled ? "" : ",off") draw=\(draw.state.rawValue)\(draw.isEnabled ? "" : ",off") touches=\(PalmBlocker.lastTouchCount)")
+        // 所有手勢（含待命的）：和平常比較看哪裡不一樣
+        var all: [String] = []
+        func every(_ v: UIView) {
+            for g in v.gestureRecognizers ?? [] where g.isEnabled {
+                all.append("\(type(of: g)):\(g.state.rawValue):\(g.numberOfTouches)")
+            }
+            v.subviews.forEach(every)
+        }
+        every(canvas)
+        out.append("all=[" + all.joined(separator: ",") + "]")
         return out.joined(separator: " ")
     }
 

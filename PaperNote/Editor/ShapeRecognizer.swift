@@ -350,7 +350,11 @@ final class PalmBlocker: UIGestureRecognizer {
         delaysTouchesEnded = false
     }
 
+    /// 除錯：最近一次手指按下時，螢幕上總共有幾個觸碰（多出來的是沒結束的觸碰）
+    private(set) static var lastTouchCount = 0
+
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        Self.lastTouchCount = event.allTouches?.count ?? 0
         for t in touches {
             if isPalm?(t) == true {
                 palmTouches.insert(t)
