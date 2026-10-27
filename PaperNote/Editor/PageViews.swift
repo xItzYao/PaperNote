@@ -99,8 +99,7 @@ final class PageContainerView: UIView {
         }
         elementsLayer.frame = CGRect(x: page.insets.left, y: page.insets.top, width: base.width, height: base.height)
         if inkView.frame.size != size { inkView.frame = CGRect(origin: .zero, size: size) }
-        inkView.setRenderScale(contentScale, immediately: true)
-        inkView.set(strokes: page.ink, offset: CGPoint(x: page.insets.left, y: page.insets.top))
+        inkView.set(strokes: page.ink, offset: CGPoint(x: page.insets.left, y: page.insets.top), renderScale: contentScale)
 
         if lastPage == nil || lastPage!.elements != page.elements {
             var reuse = elementViews
