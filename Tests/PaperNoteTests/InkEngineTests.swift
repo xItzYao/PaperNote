@@ -107,6 +107,7 @@ final class InkEngineTests: XCTestCase {
         let v = PageInkView(frame: CGRect(x: 0, y: 0, width: 600, height: 850))
         v.set(strokes: fullPage(), offset: .zero)
         v.setRenderScale(12, immediately: true)
+        waitUntilBuilt(v)
         XCTAssertFalse(v.showsBitmap)
         XCTAssertGreaterThan(v.layer.sublayers?.count ?? 0, 0)
         XCTAssertLessThanOrEqual(v.layer.sublayers?.count ?? 0, 1500 / PageInkView.strokesPerLayer + 1, "連續寫的筆跡合成幾塊，不是一筆一層")

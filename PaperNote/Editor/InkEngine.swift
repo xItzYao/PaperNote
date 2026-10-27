@@ -333,8 +333,8 @@ final class PageInkView: UIView {
 
     /// 點陣圖的解析度（每點幾個像素）＝螢幕倍率 × 縮放
     private(set) var renderScale: CGFloat = UIScreen.main.scale
-    /// 一頁點陣圖最多幾個像素（約 24MB）；超過就用向量
-    static let maxBitmapPixels: CGFloat = 6_000_000
+    /// 一頁點陣圖最多幾個像素（約 64MB）；超過就用向量。13 吋 iPad 頁面寬度填滿螢幕約 600 萬像素，放大到約 1.6 倍都還是點陣圖
+    static let maxBitmapPixels: CGFloat = 16_000_000
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -525,14 +525,18 @@ final class PageInkView: UIView {
     private var vectorShown: Bool { !(layer.sublayers ?? []).isEmpty }
 
     private func showVector() {
-        // 背景還沒畫好的圖不要了
-        generation += 1
-        isBuilding = false
-        building = nil
-        bitmap = nil
-        bitmapContent = []
-        bitmapSize = .zero
-        layer.contents = nil
+        if bitmap != nil || building != nil {
+            // 從點陣圖換成向量：背景還沒畫好的圖不要了
+            generation += 1
+            isBuilding = false
+            building = nil
+            bitmap = nil
+            bitmapContent = []
+            bitmapSize = .zero
+            // 舊的圖先留著顯示，向量好了才拿掉
+        }
+        // 向量還在背景算：算好會自己補上最新的筆跡
+        if isBuilding { return }
         rebuildVector()
     }
 
@@ -606,12 +610,40 @@ final class PageInkView: UIView {
         return p
     }
 
-    /// 前後疊放順序不變；只重畫內容有變的那幾層（寫一筆通常只動到最後一層）
+    /// 前後疊放順序不變；只重畫內容有變的那幾層（寫一筆通常只動到最後一層）。
+    /// 第一次建（剛換成向量、或剛進來的頁面）在背景算路徑
     private func rebuildVector() {
-        let new = Self.makeChunks(visibleStrokes)
+        let visible = visibleStrokes
+        if chunks.isEmpty && !visible.isEmpty {
+            let gen = generation
+            let offset = self.offset
+            isBuilding = true
+            Self.renderQueue.async {
+                let new = Self.makeChunks(visible)
+                let paths: [CGPath?] = new.map { Self.path($0, offset: offset) }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.generation == gen else { return }
+                    self.isBuilding = false
+                    self.applyVector(new, paths: paths, offset: offset)
+                    // 算的期間改過的筆跡接著補上
+                    if self.visibleStrokes != visible { self.rebuildVector() }
+                }
+            }
+            return
+        }
+        let new = Self.makeChunks(visible)
         let all = builtOffset != offset
+        let paths: [CGPath?] = new.indices.map { i in
+            all || i >= chunks.count || chunks[i] != new[i] ? Self.path(new[i], offset: offset) : nil
+        }
+        applyVector(new, paths: paths, offset: offset)
+    }
+
+    /// paths[i] 是 nil 的那層內容沒變，不用重畫
+    private func applyVector(_ new: [Chunk], paths: [CGPath?], offset: CGPoint) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        layer.contents = nil
         var layers = (layer.sublayers ?? []).compactMap { $0 as? CAShapeLayer }
         let scale = window?.screen.scale ?? UIScreen.main.scale
         while layers.count < new.count {
@@ -624,9 +656,10 @@ final class PageInkView: UIView {
             layer.addSublayer(l)
             layers.append(l)
         }
-        for (i, c) in new.enumerated() where all || i >= chunks.count || chunks[i] != c {
+        for (i, c) in new.enumerated() {
+            guard let p = paths[i] else { continue }
             let l = layers[i]
-            l.path = Self.path(c, offset: offset)
+            l.path = p
             l.lineWidth = c.width
             l.strokeColor = UIColor(hex: c.color).cgColor
         }
