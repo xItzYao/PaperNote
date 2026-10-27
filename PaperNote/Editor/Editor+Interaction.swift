@@ -236,25 +236,29 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         return true
     }
 
-    /// 選單開著時滑頁面：系統用視窗上的手勢（_UIPassthroughScrollGestureRecognizer）幫頁面捲動，選單關掉後這個手勢還在，
-    /// 頁面也還以為正在被拖。手指按下時（這時頁面不可能還在被拖）把它們恢復。回傳做了什麼（除錯用）
+    /// 選單開著時滑頁面：系統用視窗上的手勢（_UIPassthroughScrollGestureRecognizer）幫頁面捲動。
+    /// 滑一下選單就關了，但這個手勢沒有拿掉，之後每次手指按下它都先開始，頁面自己的捲動就開始不了。
+    /// 手指按下時，畫面上已經沒有選單的話，把它從視窗拿掉（選單還開著時要留著，它就是負責捲動的）。回傳做了什麼（除錯用）
     func recoverScrollAfterMenu() -> String {
-        var done: [String] = []
-        if let window = view.window {
-            for g in window.gestureRecognizers ?? [] where String(describing: type(of: g)).contains("PassthroughScroll") {
-                window.removeGestureRecognizer(g)
-                done.append("removed passthrough")
-            }
+        guard let window = view.window, !menuOnScreen(in: window) else { return "" }
+        var removed = 0
+        for g in window.gestureRecognizers ?? [] where String(describing: type(of: g)).contains("PassthroughScroll") {
+            window.removeGestureRecognizer(g)
+            removed += 1
         }
-        let pan = canvas.panGestureRecognizer
-        if (canvas.isDragging || canvas.isTracking) && pan.state == .possible {
-            pan.isEnabled = false
-            pan.isEnabled = true
-            done.append("reset pan")
+        guard removed > 0 else { return "" }
+        DebugLog.add("removed leftover menu passthrough gesture")
+        return " fix=removed passthrough"
+    }
+
+    /// 畫面上有系統選單（工具列按鈕的選單、長按選單）
+    private func menuOnScreen(in window: UIWindow) -> Bool {
+        let windows = window.windowScene?.windows ?? [window]
+        func has(_ v: UIView) -> Bool {
+            if String(describing: type(of: v)).contains("ContextMenu") && !v.isHidden && v.alpha > 0.01 { return true }
+            return v.subviews.contains(where: has)
         }
-        guard !done.isEmpty else { return "" }
-        DebugLog.add("recover scroll after menu: " + done.joined(separator: ", "))
-        return " fix=" + done.joined(separator: "+")
+        return windows.contains { !$0.isHidden && has($0) }
     }
 
     /// 除錯：手指剛按下時，畫布上不在待命狀態（或被關掉）的手勢。頁面捲不動時看是誰卡住
