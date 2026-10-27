@@ -205,7 +205,8 @@ extension NotebookViewController {
 
     private func updateLassoMove(to p: CGPoint) {
         guard let start = lassoMoveStart, let sel = lassoSel else { return }
-        let d = CGPoint(x: p.x - start.x, y: p.y - start.y)
+        // 不超出頁面
+        let d = clampedDelta(moving: sel.bounds, by: CGPoint(x: p.x - start.x, y: p.y - start.y))
         let moved = sel.bounds.offsetBy(dx: d.x, dy: d.y)
         overlay.showLassoSelection(moved)
         overlay.moveLassoPreview(to: moved)
@@ -220,7 +221,7 @@ extension NotebookViewController {
     private func endLassoMove(at p: CGPoint) {
         guard let start = lassoMoveStart, let sel = lassoSel, let original = lassoMoveOriginal else { return }
         lassoMoveStart = nil
-        let d = CGPoint(x: p.x - start.x, y: p.y - start.y)
+        let d = clampedDelta(moving: sel.bounds, by: CGPoint(x: p.x - start.x, y: p.y - start.y))
         overlay.showLassoPreview(nil, frame: .zero)
         // 一次復原整個移動（筆跡可能移到別頁，那一頁也要能復原）
         let inkTargets = inkStrokes(sel.ink).map { pages[inkPageIndex(for: InkGeometry.offset($0, by: d))].id }

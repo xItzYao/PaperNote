@@ -83,6 +83,8 @@ final class PageContainerView: UIView {
         addSubview(elementsLayer)
         elementsLayer.clipsToBounds = false
         addSubview(inkView)
+        // 筆跡不會畫到頁面外
+        inkView.clipsToBounds = true
     }
 
     required init?(coder: NSCoder) { fatalError() }

@@ -184,6 +184,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     let circuitLibrary = CircuitLibraryView()
     /// 插入圖片工具：下方一排最近的照片
     let photoStrip = PhotoStripView()
+    /// 拉過最後一頁底部時出現的＋
+    let addPagePull = AddPagePullView()
     /// UI 測試讀得到的除錯資訊（手指按下時卡住的手勢）
     var uiTestDump: UILabel?
     /// PencilKit 開始書寫的時間（收尾後清掉）；下筆時還沒清掉就代表上一筆卡住了
@@ -450,7 +452,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             y += s.height + pageGap
         }
         pageFrames = frames
-        docSize = CGSize(width: docW, height: y - pageGap + docPadding + 200)
+        // 最後一頁底下就是結尾：再往上拉會出現＋新增頁面（見 Editor+AddPage）
+        docSize = CGSize(width: docW, height: y - pageGap + docPadding)
     }
 
     func contentOrigin(_ i: Int) -> CGPoint {
@@ -581,6 +584,11 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         updateVisiblePages()
         updatePageIndicator()
+        updateAddPagePull()
+    }
+
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        addPagePullEnded()
     }
 
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
@@ -800,7 +808,13 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     private func processNewStroke(duration: TimeInterval, countBefore: Int) {
         var drawing = canvas.drawing
-        guard drawing.strokes.count == countBefore + 1, let stroke = drawing.strokes.last else { return }
+        guard drawing.strokes.count == countBefore + 1, var stroke = drawing.strokes.last else { return }
+        // 不畫到頁面外：超出這一筆所在那一頁的部分遮掉
+        if let masked = maskedToPage(stroke) {
+            stroke = masked
+            drawing.strokes[drawing.strokes.count - 1] = masked
+            setDrawing(drawing)
+        }
         holdToShape.recordSample(of: stroke, presetID: BrushStore.shared.current.id)
         // 虛線：筆放開後把這一筆切成一段一段（上一步回到寫這一筆之前）
         let preset = BrushStore.shared.current
@@ -825,6 +839,16 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             drawing.strokes[drawing.strokes.count - 1] = straight
             setDrawing(drawing)
         }
+    }
+
+    /// 筆跡超出它所在的那一頁（存檔時歸到的頁）時，加上遮罩只顯示頁面裡的部分；沒超出回傳 nil
+    func maskedToPage(_ s: PKStroke) -> PKStroke? {
+        guard !pageFrames.isEmpty else { return nil }
+        let f = pageFrames[nearestPageIndex(to: s.renderBounds.center)]
+        guard !f.contains(s.renderBounds) else { return nil }
+        var m = s
+        m.mask = UIBezierPath(rect: f.applying(s.transform.inverted()))
+        return m
     }
 
     /// 不該畫出筆跡的工具卻被 PencilKit 畫了一筆 → 刪掉；手繪格線模式下改當成格線

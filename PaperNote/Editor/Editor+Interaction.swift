@@ -570,17 +570,24 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             break
         case .move:
             e.frame.origin = CGPoint(x: o.minX + dx, y: o.minY + dy)
+            // 不超出頁面：推回中心所在的那一頁裡
+            if case let (pi, _)? = locate(d.ref) {
+                let c = contentOrigin(pi)
+                e.frame = clampToPage(e.frame.offsetBy(dx: c.x, dy: c.y)).offsetBy(dx: -c.x, dy: -c.y)
+            }
             // 電路圖整個移動時也對齊頁面格點，才能和其他電路圖接得上
             e.snapCircuitToGrid()
         case .resize:
+            // 放大到頁面邊緣為止
+            let room = pageRoom(for: d.ref, from: o.origin)
             switch e.content {
             case .image:
-                let w = max(30, o.width + dx)
+                let w = min(max(30, o.width + dx), room.width, room.height * o.width / max(o.height, 1))
                 e.frame.size = CGSize(width: w, height: w * o.height / max(o.width, 1))
             case .text:
-                e.frame.size = CGSize(width: max(40, o.width + dx), height: max(28, o.height + dy))
+                e.frame.size = CGSize(width: min(max(40, o.width + dx), room.width), height: min(max(28, o.height + dy), room.height))
             case var .table(t):
-                t.scale(to: CGSize(width: o.width + dx, height: o.height + dy))
+                t.scale(to: CGSize(width: min(o.width + dx, room.width), height: min(o.height + dy, room.height)))
                 e.content = .table(t)
                 e.frame.size = t.size
             case .circuit:
@@ -616,6 +623,14 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             }
         }
         return e
+    }
+
+    /// 物件左上角在 origin（頁面內容座標）時，往右下最多能放多大才不超出頁面
+    private func pageRoom(for ref: ElementRef, from origin: CGPoint) -> CGSize {
+        guard case let (pi, _)? = locate(ref) else { return CGSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude) }
+        let ins = pages[pi].insets
+        let f = pageFrames[pi]
+        return CGSize(width: max(30, f.width - ins.left - origin.x), height: max(28, f.height - ins.top - origin.y))
     }
 
     private func finishDrag(at p: CGPoint) {

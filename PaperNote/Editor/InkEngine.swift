@@ -331,8 +331,12 @@ final class LiveInkView: UIView {
         if !dirty.isNull { setNeedsDisplay(dirty) }
     }
 
+    /// 只畫在這個範圍裡（寫的那一頁在螢幕上的位置）
+    var clip: CGRect?
+
     override func draw(_ rect: CGRect) {
         guard let ctx = UIGraphicsGetCurrentContext(), let first = points.first else { return }
+        if let clip { ctx.clip(to: clip) }
         ctx.setLineCap(.round)
         ctx.setLineJoin(.round)
         color.setStroke()
@@ -805,6 +809,9 @@ extension NotebookViewController {
         d.points = [InkPoint(s.point, width: w)]
         if let u = s.updateIndex { d.pendingUpdates[u] = 0 }
         inkDraft = d
+        // 寫的時候也只畫在起點那一頁裡面（放開後整筆存在那一頁，超出頁面的部分不顯示）
+        let pi = pageIndex(containing: s.point) ?? nearestPageIndex(to: s.point)
+        liveInkView.clip = pageFrames.indices.contains(pi) ? pagesContainer.convert(pageFrames[pi], to: liveInkView) : nil
         liveInkView.begin(screen(s.point), width: w * canvas.zoomScale, color: preset.color)
         DebugLog.add("custom ink begin drawGR=\(canvas.drawingGestureRecognizer.isEnabled)")
     }
