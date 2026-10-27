@@ -208,7 +208,7 @@ extension NotebookViewController {
             return a
         }
         let b = MenuButton(configuration: config)
-        b.onMenuClosed = { [weak self] in self?.resetStuckCanvasGestures() }
+        b.onMenuClosed = { [weak self] in self?.disableLeftoverMenuPassthrough() }
         if let action { b.addTarget(self, action: action, for: .touchUpInside) }
         b.setContentHuggingPriority(.required, for: .horizontal)
         b.setContentCompressionResistancePriority(.required, for: .horizontal)

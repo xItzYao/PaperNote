@@ -1,6 +1,6 @@
 import UIKit
 
-/// 工具列按鈕：選單關掉時通知（見 resetStuckCanvasGestures）
+/// 工具列按鈕：選單關掉時通知（見 disableLeftoverMenuPassthrough）
 final class MenuButton: UIButton {
     var onMenuClosed: (() -> Void)?
 
