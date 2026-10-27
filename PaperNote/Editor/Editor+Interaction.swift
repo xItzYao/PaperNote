@@ -93,7 +93,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         palmBlocker.isPalm = { [weak self] t in
             guard let self else { return false }
             let palm = self.isPalmTouch(t)
-            if t.type == .direct { self.disableLeftoverMenuPassthrough() }
+            if t.type == .direct { self.removeLeftoverMenuPassthrough() }
             // 除錯紀錄：每個手指觸碰被判成手掌與否，以及判斷的依據
             if t.type == .direct {
                 let since = String(format: "%.2f", CACurrentMediaTime() - self.lastPencilTime)
@@ -239,12 +239,12 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
 
     /// 選單開著時直接滑頁面：系統會在視窗上裝一個把捲動傳給下面頁面的手勢（_UIPassthroughScrollGestureRecognizer），
     /// 選單關掉後沒有拿掉，之後每次手指按下它都先開始，畫布的捲動就開始不了（頁面捲不動）。
-    /// 手指碰得到畫布時選單已經在關了，用不到它：手指按下時把它關掉
-    func disableLeftoverMenuPassthrough() {
+    /// 手指碰得到畫布時選單已經在關了，用不到它：手指按下時把它從視窗拿掉（關掉 isEnabled 它還是會開始，只能拿掉）
+    func removeLeftoverMenuPassthrough() {
         guard let window = view.window else { return }
-        for g in window.gestureRecognizers ?? [] where g.isEnabled && String(describing: type(of: g)).contains("PassthroughScroll") {
-            g.isEnabled = false
-            DebugLog.add("menu closed, disabled \(type(of: g))")
+        for g in window.gestureRecognizers ?? [] where String(describing: type(of: g)).contains("PassthroughScroll") {
+            window.removeGestureRecognizer(g)
+            DebugLog.add("removed leftover \(type(of: g))")
         }
     }
 
