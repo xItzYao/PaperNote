@@ -520,7 +520,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             if pageViews[page.id] == nil {
                 let v = PageContainerView(pageID: page.id)
                 v.frame = pageFrames[i]
-                v.configure(page: page, session: session, contentScale: elementContentScale)
+                v.configure(page: page, session: session, contentScale: elementContentScale,
+                            inkInBackground: !pageFrames[i].intersects(visible))
                 pagesContainer.insertSubview(v, belowSubview: overlay)
                 pageViews[page.id] = v
             }

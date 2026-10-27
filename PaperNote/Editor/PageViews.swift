@@ -87,7 +87,8 @@ final class PageContainerView: UIView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(page: Page, session: NotebookSession, contentScale: CGFloat) {
+    /// inkInBackground：頁面還在畫面外（捲動時剛進來），筆跡在背景準備
+    func configure(page: Page, session: NotebookSession, contentScale: CGFloat, inkInBackground: Bool = false) {
         let size = session.fullSize(of: page)
         let base = session.baseSize(of: page)
         let bgChanged = lastPage == nil || lastPage!.insets != page.insets || lastPage!.highlights != page.highlights
@@ -99,7 +100,7 @@ final class PageContainerView: UIView {
         }
         elementsLayer.frame = CGRect(x: page.insets.left, y: page.insets.top, width: base.width, height: base.height)
         if inkView.frame.size != size { inkView.frame = CGRect(origin: .zero, size: size) }
-        inkView.set(strokes: page.ink, offset: CGPoint(x: page.insets.left, y: page.insets.top))
+        inkView.set(strokes: page.ink, offset: CGPoint(x: page.insets.left, y: page.insets.top), inBackground: inkInBackground)
 
         if lastPage == nil || lastPage!.elements != page.elements {
             var reuse = elementViews

@@ -341,12 +341,19 @@ final class PageInkView: UIView {
     required init?(coder: NSCoder) { fatalError() }
 
     /// offset：頁面內容原點在這個 view 裡的位置（擴展頁面的留白）
-    func set(strokes: [InkStroke], offset: CGPoint) {
+    /// inBackground：還在畫面外的頁面，路徑在背景算好再放上去，不佔捲動的那一格
+    func set(strokes: [InkStroke], offset: CGPoint, inBackground: Bool = false) {
         guard strokes != self.strokes || offset != self.offset else { return }
         self.strokes = strokes
         self.offset = offset
-        rebuild()
+        if inBackground { rebuildInBackground() } else { rebuild() }
     }
+
+    /// 背景還在算路徑，筆跡還沒放上去
+    private(set) var isBuilding = false
+    /// 每次重建加一；背景算好時已經有更新的內容就丟掉
+    private var generation = 0
+    private static let buildQueue = DispatchQueue(label: "PageInkView.build", qos: .userInitiated)
 
     /// 套索移動中先藏起來的筆跡
     func setHidden(_ ids: Set<UUID>) {
@@ -386,11 +393,11 @@ final class PageInkView: UIView {
         (((a.width + b.width) / 2) * 20).rounded() / 20
     }
 
-    private func makeChunks() -> [Chunk] {
+    private static func makeChunks(_ strokes: [InkStroke], hidden hiddenIDs: Set<UUID>) -> [Chunk] {
         var out: [Chunk] = []
         func add(_ s: InkStroke, width: CGFloat, variable: Bool) {
             if let last = out.last, last.color == s.colorHex, last.width == width, last.variable == variable,
-               last.strokes.count < Self.strokesPerLayer {
+               last.strokes.count < strokesPerLayer {
                 out[out.count - 1].strokes.append(s)
             } else {
                 out.append(Chunk(color: s.colorHex, width: width, variable: variable, strokes: [s]))
@@ -403,7 +410,7 @@ final class PageInkView: UIView {
             } else {
                 var widths: [CGFloat] = []
                 for (a, b) in zip(s.points, s.points.dropFirst()) {
-                    let w = Self.segmentWidth(a, b)
+                    let w = segmentWidth(a, b)
                     if !widths.contains(w) { widths.append(w) }
                 }
                 for w in widths { add(s, width: w, variable: true) }
@@ -412,14 +419,13 @@ final class PageInkView: UIView {
         return out
     }
 
-    private func path(_ c: Chunk) -> CGPath {
+    private static func path(_ c: Chunk, offset o: CGPoint) -> CGPath {
         let p = CGMutablePath()
-        let o = offset
         func pt(_ q: InkPoint) -> CGPoint { CGPoint(x: q.point.x + o.x, y: q.point.y + o.y) }
         for s in c.strokes {
             guard let first = s.points.first else { continue }
             if c.variable {
-                for (a, b) in zip(s.points, s.points.dropFirst()) where Self.segmentWidth(a, b) == c.width {
+                for (a, b) in zip(s.points, s.points.dropFirst()) where segmentWidth(a, b) == c.width {
                     p.move(to: pt(a))
                     p.addLine(to: pt(b))
                 }
@@ -435,8 +441,33 @@ final class PageInkView: UIView {
 
     /// 前後疊放順序不變；只重畫內容有變的那幾層（寫一筆通常只動到最後一層）
     private func rebuild() {
-        let new = makeChunks()
+        generation += 1
+        let new = Self.makeChunks(strokes, hidden: hiddenIDs)
         let all = builtOffset != offset
+        let paths: [CGPath?] = new.indices.map { i in
+            all || i >= chunks.count || chunks[i] != new[i] ? Self.path(new[i], offset: offset) : nil
+        }
+        apply(new, paths: paths, offset: offset)
+    }
+
+    private func rebuildInBackground() {
+        generation += 1
+        let gen = generation
+        let strokes = self.strokes, hidden = hiddenIDs, offset = self.offset
+        isBuilding = true
+        Self.buildQueue.async {
+            let new = Self.makeChunks(strokes, hidden: hidden)
+            let paths: [CGPath?] = new.map { Self.path($0, offset: offset) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.generation == gen else { return }
+                self.apply(new, paths: paths, offset: offset)
+            }
+        }
+    }
+
+    /// paths[i] 是 nil 的那層內容沒變，不用重畫
+    private func apply(_ new: [Chunk], paths: [CGPath?], offset: CGPoint) {
+        isBuilding = false
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         var layers = (layer.sublayers ?? []).compactMap { $0 as? CAShapeLayer }
@@ -451,9 +482,10 @@ final class PageInkView: UIView {
             layer.addSublayer(l)
             layers.append(l)
         }
-        for (i, c) in new.enumerated() where all || i >= chunks.count || chunks[i] != c {
+        for (i, c) in new.enumerated() {
+            guard let p = paths[i] else { continue }
             let l = layers[i]
-            l.path = path(c)
+            l.path = p
             l.lineWidth = c.width
             l.strokeColor = UIColor(hex: c.color).cgColor
         }

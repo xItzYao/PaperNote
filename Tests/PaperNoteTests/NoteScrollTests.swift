@@ -52,10 +52,10 @@ final class NoteScrollTests: XCTestCase {
     }
 
     /// 從頭捲到尾，回傳最卡的一格（秒）與平均
-    private func scrollThrough() -> (worst: Double, average: Double) {
+    private func scrollThrough() -> (worst: Double, average: Double, worstScroll: Double) {
         let canvas = editor.canvas
         let frame = 1.0 / 60
-        var worst = 0.0, total = 0.0, steps = 0
+        var worst = 0.0, total = 0.0, steps = 0, worstScroll = 0.0
         var y: CGFloat = 0
         let maxY = canvas.contentSize.height - canvas.bounds.height
         var worstAt = ""
@@ -64,6 +64,7 @@ final class NoteScrollTests: XCTestCase {
             let t = CACurrentMediaTime()
             canvas.contentOffset.y = y
             let t1 = CACurrentMediaTime()
+            worstScroll = max(worstScroll, t1 - t)
             canvas.layoutIfNeeded()
             let t2 = CACurrentMediaTime()
             spin(frame)
@@ -76,7 +77,7 @@ final class NoteScrollTests: XCTestCase {
             steps += 1
         }
         print("SCROLLDIAG worst \(worstAt)")
-        return (worst, total / Double(max(steps, 1)))
+        return (worst, total / Double(max(steps, 1)), worstScroll)
     }
 
     func testScrollingPagesFullOfCustomInk() throws {
@@ -84,6 +85,8 @@ final class NoteScrollTests: XCTestCase {
         let r = scrollThrough()
         print("SCROLLDIAG customInk worst=\(Int(r.worst * 1000))ms avg=\(String(format: "%.1f", r.average * 1000))ms")
         XCTAssertLessThan(r.worst, 0.05, "自製筆刷：捲動時有一格卡了 \(Int(r.worst * 1000))ms")
+        // 捲動那一格本身（新頁面進來時）不能做重活；之前整頁筆跡在這裡建，CI 上 20ms、iPad 上更久
+        XCTAssertLessThan(r.worstScroll, 0.012, "自製筆刷：新頁面進來時捲動那一格花了 \(Int(r.worstScroll * 1000))ms")
     }
 
     func testScrollingPagesFullOfPencilKitInk() throws {
@@ -91,5 +94,25 @@ final class NoteScrollTests: XCTestCase {
         let r = scrollThrough()
         print("SCROLLDIAG pencilKit worst=\(Int(r.worst * 1000))ms avg=\(String(format: "%.1f", r.average * 1000))ms")
         XCTAssertLessThan(r.worst, 0.05, "PencilKit：捲動時有一格卡了 \(Int(r.worst * 1000))ms")
+    }
+
+    /// 捲動時新進來、還在畫面外的頁面：筆跡在背景準備，捲到之前就畫好
+    func testOffscreenPageBuildsInkInBackground() throws {
+        try openNotebook(customInk: true, strokes: 1600)
+        let canvas = editor.canvas
+        var newPage: PageContainerView?
+        var y: CGFloat = 0
+        while newPage == nil, y < canvas.contentSize.height - canvas.bounds.height {
+            let before = Set(editor.pageViews.keys)
+            y += 120
+            canvas.contentOffset.y = y
+            if let id = Set(editor.pageViews.keys).subtracting(before).first { newPage = editor.pageViews[id] }
+        }
+        let page = try XCTUnwrap(newPage, "捲動時應該有新頁面進來")
+        XCTAssertFalse(page.frame.intersects(editor.visibleDocRect()), "新進來的頁面應該還在畫面外")
+        XCTAssertTrue(page.inkView.isBuilding, "畫面外的頁面不該在捲動那一格建筆跡")
+        spin(0.5)
+        XCTAssertFalse(page.inkView.isBuilding)
+        XCTAssertEqual(page.inkView.layer.sublayers?.count, 1600 / PageInkView.strokesPerLayer, "背景建好之後筆跡要畫上去")
     }
 }
