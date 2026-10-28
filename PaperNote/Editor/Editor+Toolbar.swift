@@ -766,8 +766,12 @@ extension NotebookViewController {
         var items: [UIMenuElement] = [
             UIAction(title: "全部頁面…", image: UIImage(systemName: "square.grid.2x2")) { [weak self] _ in self?.presentPageOverview() },
             UIAction(title: "跳到頁碼…", image: UIImage(systemName: "arrow.right.doc.on.clipboard")) { [weak self] _ in self?.presentJumpToPage() },
-            UIAction(title: "在此頁後新增空白頁", image: UIImage(systemName: "doc.badge.plus")) { [weak self] _ in self?.addBlankPage(at: i + 1) },
-            UIAction(title: "在此頁前新增空白頁", image: UIImage(systemName: "doc.badge.plus")) { [weak self] _ in self?.addBlankPage(at: i) },
+            UIAction(title: "在此頁後新增頁面…", image: UIImage(systemName: "doc.badge.plus")) { [weak self] _ in
+                self?.presentPaperPicker(title: "在第 \(i + 1) 頁後新增頁面", insertAt: i + 1)
+            },
+            UIAction(title: "在此頁前新增頁面…", image: UIImage(systemName: "doc.badge.plus")) { [weak self] _ in
+                self?.presentPaperPicker(title: "在第 \(i + 1) 頁前新增頁面", insertAt: i)
+            },
             UIAction(title: "擴展此頁空白…", image: UIImage(systemName: "arrow.up.left.and.arrow.down.right")) { [weak self] _ in self?.presentExpandSheet() },
         ]
         if !pages[i].insets.isZero {

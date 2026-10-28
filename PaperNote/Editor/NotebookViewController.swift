@@ -868,19 +868,6 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     // MARK: - Pages
 
-    func addBlankPage(at index: Int) {
-        let refIndex = min(max(0, index - 1), pages.count - 1)
-        let ref = pages[refIndex]
-        let size = session.baseSize(of: ref)
-        var style: PaperStyle = .blank
-        if case let .paper(_, _, s) = ref.background { style = s }
-        let newPage = Page(background: .paper(width: size.width, height: size.height, style: style))
-        performLayoutChange {
-            session.document.pages.insert(newPage, at: index)
-        }
-        scrollToPage(index, animated: true)
-    }
-
     func deletePage(_ index: Int) {
         guard pages.count > 1 else {
             showMessage("至少要保留一頁")

@@ -125,6 +125,13 @@ struct FolderView: View {
     @State private var search = ""
     @State private var showImporter = false
     @State private var showNewNotebook = false
+
+    /// 不用全螢幕視窗從下面滑上來的動畫，小視窗自己淡入
+    private func setNewNotebookShown(_ shown: Bool) {
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) { showNewNotebook = shown }
+    }
     @State private var showNewFolder = false
     @State private var newFolderName = ""
     @State private var renameTarget: LibraryItem?
@@ -228,7 +235,7 @@ struct FolderView: View {
                     Image(systemName: "ellipsis.circle")
                 }
                 Menu {
-                    Button { showNewNotebook = true } label: { Label("新增筆記本", systemImage: "book.closed") }
+                    Button { setNewNotebookShown(true) } label: { Label("新增筆記本", systemImage: "book.closed") }
                     Button { showImporter = true } label: { Label("匯入 PDF、zip 或 PaperNote 檔", systemImage: "doc.richtext") }
                     Button { showMigration = true } label: { Label("從 GoodNotes 搬家…", systemImage: "shippingbox") }
                     Button { newFolderName = ""; showNewFolder = true } label: { Label("新增資料夾", systemImage: "folder.badge.plus") }
@@ -435,12 +442,16 @@ struct FolderView: View {
         } message: { _ in
             Text("要匯出成哪一種格式？")
         }
-        .sheet(isPresented: $showNewNotebook) {
-            NewNotebookSheet { title, paper, landscape in
-                let meta = store.createNotebook(title: title, folder: folderID, paper: paper, landscape: landscape)
-                showNewNotebook = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { open(meta.id, nil) }
-            }
+        // 畫面中間的小視窗（和新增頁面同一個）：點旁邊取消
+        .fullScreenCover(isPresented: $showNewNotebook) {
+            PaperPickerOverlay(title: "新增筆記本", confirmTitle: "建立", askName: true, style: .ruled, landscape: false,
+                               onConfirm: { title, paper, landscape in
+                                   let meta = store.createNotebook(title: title, folder: folderID, paper: paper, landscape: landscape)
+                                   setNewNotebookShown(false)
+                                   DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { open(meta.id, nil) }
+                               },
+                               onCancel: { setNewNotebookShown(false) })
+                .presentationBackground(.clear)
         }
         .alert("新增資料夾", isPresented: $showNewFolder) {
             TextField("資料夾名稱", text: $newFolderName)
@@ -791,40 +802,6 @@ struct NotebookCell: View {
                     .padding(12)
             }
         }
-    }
-}
-
-struct NewNotebookSheet: View {
-    let onCreate: (String, PaperStyle, Bool) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var title = ""
-    @State private var paper: PaperStyle = .ruled
-    @State private var landscape = false
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                TextField("筆記本名稱", text: $title)
-                Picker("紙張", selection: $paper) {
-                    ForEach(PaperStyle.allCases) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                Picker("方向", selection: $landscape) {
-                    Text("直式").tag(false)
-                    Text("橫式").tag(true)
-                }
-                .pickerStyle(.segmented)
-            }
-            .navigationTitle("新增筆記本")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("建立") { onCreate(title.trimmingCharacters(in: .whitespacesAndNewlines), paper, landscape) }
-                }
-            }
-        }
-        .presentationDetents([.medium])
     }
 }
 

@@ -1,8 +1,9 @@
 import XCTest
+import SwiftUI
 @testable import PaperNote
 
 /// 回報的需求：
-/// 1. 捲到最後一頁底下就停住；再往上拉出現＋，問要新增哪種頁面
+/// 1. 捲到最後一頁底下就停住；再往上拉出現＋，放開後畫面中間跳出選紙張的小視窗（可以預覽、選直式或橫式）
 /// 2. 圖片、筆跡都不能超出頁面
 final class PageBoundsTests: XCTestCase {
     private final class FakePan: UIPanGestureRecognizer {
@@ -63,30 +64,73 @@ final class PageBoundsTests: XCTestCase {
         XCTAssertLessThanOrEqual(bottom - last.maxY, editor.docPadding + 1, "最後一頁底下不能再有一大段空白")
     }
 
-    func testPullingPastTheEndOffersPageTemplates() throws {
-        editor.pendingMenu = nil
+    private var picker: UIHostingController<PaperPickerOverlay>? {
+        editor.presentedViewController as? UIHostingController<PaperPickerOverlay>
+    }
+
+    func testPullingPastTheEndOpensThePaperPicker() throws {
         pull(by: NotebookViewController.addPagePullThreshold + 20)
         XCTAssertFalse(editor.addPagePull.isHidden, "拉過頭要出現＋")
         XCTAssertTrue(editor.addPagePull.armed)
         release()
-        let menu = try XCTUnwrap(editor.pendingMenu, "放開要問新增哪種頁面")
-        XCTAssertEqual(menu.children.map(\.title), PaperStyle.allCases.map(\.title))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        let host = try XCTUnwrap(picker, "放開要跳出選紙張的小視窗")
+        XCTAssertEqual(host.modalPresentationStyle, .overFullScreen, "小視窗疊在頁面上，旁邊看得到頁面")
+        // 預設是最後一頁的紙張和方向
+        XCTAssertEqual(host.rootView.style, .grid)
+        XCTAssertFalse(host.rootView.landscape)
+        // 點旁邊取消：不會加頁
+        let n = editor.pages.count
+        host.rootView.onCancel()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        XCTAssertNil(picker)
+        XCTAssertEqual(editor.pages.count, n)
     }
 
     func testShortPullDoesNotAddAPage() {
-        editor.pendingMenu = nil
         pull(by: 30)
         XCTAssertFalse(editor.addPagePull.isHidden, "拉一點點就看得到＋")
         XCTAssertFalse(editor.addPagePull.armed)
         release()
-        XCTAssertNil(editor.pendingMenu, "沒拉夠不會跳選單")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertNil(picker, "沒拉夠不會跳出小視窗")
     }
 
-    func testAppendingAPageUsesTheChosenTemplate() {
+    func testChoosingInThePickerAddsThatPaperAtTheEnd() throws {
+        editor.presentPaperPicker(title: "新增頁面", insertAt: editor.pages.count)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        let host = try XCTUnwrap(picker)
         let n = editor.pages.count
-        editor.appendPage(style: .dotted)
+        host.rootView.onConfirm("", .dotted, true)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
         XCTAssertEqual(editor.pages.count, n + 1)
-        XCTAssertEqual(editor.pages.last?.background, .paper(width: 595, height: 842, style: .dotted))
+        XCTAssertEqual(editor.pages.last?.background, .paper(width: 842, height: 595, style: .dotted), "橫式＝寬邊在上")
+        XCTAssertNil(picker, "選好就關掉")
+    }
+
+    func testAddingAPageBeforeThisPage() {
+        let first = editor.pages[0].id
+        editor.insertPage(at: 0, style: .ruled, landscape: false)
+        XCTAssertEqual(editor.pages[0].background, .paper(width: 595, height: 842, style: .ruled))
+        XCTAssertEqual(editor.pages[1].id, first, "原本的第一頁往後移")
+    }
+
+    func testPaperPreviewsShowTheirPaper() {
+        func inkedPixels(_ img: UIImage) -> Int {
+            guard let cg = img.cgImage else { return 0 }
+            let w = cg.width, h = cg.height
+            var px = [UInt8](repeating: 0, count: w * h * 4)
+            let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return (0..<(w * h)).filter { px[$0 * 4] < 250 || px[$0 * 4 + 2] < 250 }.count
+        }
+        XCTAssertEqual(inkedPixels(PageRenderer.paperPreview(.blank, landscape: false)), 0, "空白紙沒有線")
+        for s in [PaperStyle.ruled, .grid, .dotted] {
+            XCTAssertGreaterThan(inkedPixels(PageRenderer.paperPreview(s, landscape: false)), 0, "\(s.title) 的預覽要看得到紙上的線或點")
+        }
+        let land = PageRenderer.paperPreview(.ruled, landscape: true)
+        XCTAssertGreaterThan(land.size.width, land.size.height, "橫式預覽是橫的")
     }
 
     // MARK: 不超出頁面

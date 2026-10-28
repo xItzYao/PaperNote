@@ -1,6 +1,6 @@
 import UIKit
 
-/// 捲到最後一頁底下再往上拉：出現＋，拉夠了放開就問要新增哪種頁面
+/// 捲到最後一頁底下再往上拉：出現＋，拉夠了放開就跳出選紙張的小視窗
 final class AddPagePullView: UIView {
     private let icon = UIImageView(image: UIImage(systemName: "plus.circle.fill"))
     let label = UILabel()
@@ -73,36 +73,9 @@ extension NotebookViewController {
         presentAddPageMenu()
     }
 
+    /// 拉過最後一頁放開：中間跳出選紙張的小視窗，選好加在最後面
     func presentAddPageMenu() {
-        guard let last = pageFrames.last else { return }
-        let actions = PaperStyle.allCases.map { style in
-            UIAction(title: style.title, image: UIImage(systemName: Self.paperSymbol(style))) { [weak self] _ in
-                self?.appendPage(style: style)
-            }
-        }
-        let menu = UIMenu(title: "新增頁面", children: actions)
-        presentMenu(menu, atDocPoint: CGPoint(x: last.midX, y: last.maxY))
-    }
-
-    static func paperSymbol(_ style: PaperStyle) -> String {
-        switch style {
-        case .blank: return "doc"
-        case .ruled: return "line.3.horizontal"
-        case .grid: return "squareshape.split.3x3"
-        case .dotted: return "circle.grid.3x3"
-        }
-    }
-
-    /// 在最後面加一頁（大小和最後一頁一樣）
-    func appendPage(style: PaperStyle) {
-        guard let ref = pages.last else { return }
-        let size = session.baseSize(of: ref)
-        let newPage = Page(background: .paper(width: size.width, height: size.height, style: style))
-        let index = pages.count
-        performLayoutChange {
-            session.document.pages.insert(newPage, at: index)
-        }
-        scrollToPage(index, animated: true)
+        presentPaperPicker(title: "新增頁面", insertAt: pages.count)
     }
 }
 
