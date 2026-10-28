@@ -241,7 +241,8 @@ final class TableEditorUXTests: XCTestCase {
         let o = origin
         let p = CGPoint(x: o.x + 150, y: o.y + 60)
         let t = titles(editor.elementMenu(ref, at: p).children)
-        for item in ["合併", "分割…", "底色", "列與欄", "平均分配", "鎖定寬高", "重複…"] {
+        // 列與欄、樣式直接排在長按選單裡（不再包一層「列與欄」子選單）
+        for item in ["合併", "分割…", "底色", "插入", "刪除", "平均分配", "鎖定寬高", "重複…", "格線", "字級"] {
             XCTAssertTrue(t.contains(item), "長按格子要有「\(item)」")
         }
         XCTAssertEqual(editor.tableCellSel, CellRange((1, 1), (1, 1)), "長按的格子被選起來")
