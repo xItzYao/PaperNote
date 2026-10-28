@@ -36,6 +36,9 @@ enum DragKind {
     case move, resize, colLine(Int), rowLine(Int), cells
     /// 拖曳選取範圍右下角的填滿控制點：重複這一組
     case fill
+    /// 拖曳表格上方的欄標頭／左邊的列標頭：選好幾欄（列），參數是一開始按的那一欄（列）
+    case colHeaders(Int)
+    case rowHeaders(Int)
 }
 
 struct DragState {
@@ -232,6 +235,10 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     // 表格編輯
     var tableCellSel: CellRange?
     var tableDrawTarget: ElementRef?
+    /// 在已有的表格上手繪格線：這一筆的所有點（劃掉格線要看整條路徑）
+    var tableDrawPoints: [CGPoint] = []
+    /// 工具列的＋（插入表格的小視窗指著它）
+    weak var insertButton: UIButton?
     weak var tableCellLabel: UILabel?
 
     // 橡皮擦擦螢光標示
@@ -883,7 +890,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         setDrawing(d)
         guard tool == .tableDraw, let target = tableDrawTarget else { return }
         let pts = stroke.path.map { $0.location.applying(stroke.transform) }
-        if let a = pts.first, let b = pts.last { applyTableStroke(target, from: a, to: b) }
+        applyTableStroke(target, points: pts)
     }
 
     // MARK: - Pages

@@ -344,6 +344,11 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
                 if case let (pi, ei)? = locate(hit), pages[pi].elements[ei].isTable { updateCellSelection(from: p, to: p) }
             }
         case .select:
+            // 點標頭：選整欄（整列）
+            if let h = tableHeaderHit(at: p) {
+                selectTableHeaders(h)
+                return
+            }
             if handleImageDeleteTap(at: p) { return }
             if let del = tableDeleteHandlePoint(), p.distance(to: del) < 20 / canvas.zoomScale, let s = selectedTable() {
                 deleteElement(s.ref)
@@ -466,6 +471,17 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         guard g.state == .began, tool == .select || tool == .image else { return }
         endTextEditing()
         let p = g.location(in: pagesContainer)
+        // 長按標頭：選整欄（整列，已經選了好幾欄就不變），跳出列與欄的選單
+        if let h = tableHeaderHit(at: p) {
+            let sel = tableCellSel
+            let inside = sel.map { h.columns ? (h.index >= $0.c0 && h.index <= $0.c1) : (h.index >= $0.r0 && h.index <= $0.r1) } ?? false
+            let full = sel.map { h.columns ? ($0.r0 == 0 && $0.r1 == (selectedTable()?.table.rows ?? 1) - 1)
+                : ($0.c0 == 0 && $0.c1 == (selectedTable()?.table.cols ?? 1) - 1) } ?? false
+            if !(inside && full) { selectTableHeaders(h) }
+            let anchor = tableHeaderRects().map { h.columns ? $0.cols[h.index] : $0.rows[h.index] } ?? CGRect(origin: p, size: .zero)
+            presentMenu(UIMenu(children: tableRowColItems(anchor: .doc(anchor))), atDocPoint: p, avoiding: anchor)
+            return
+        }
         if let hit = hitElement(at: p) {
             select(hit)
             presentMenu(elementMenu(hit, at: p), atDocPoint: p)
@@ -564,6 +580,8 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         let r = docFrame(of: e, pageIndex: pi)
         let tol = 16 / canvas.zoomScale
         if case let .table(t) = e.content, t.size.width > 0, t.size.height > 0 {
+            // 上方、左邊的標頭：拖曳選好幾欄（列）
+            if let h = tableHeaderHit(at: p) { return (ref, h.columns ? .colHeaders(h.index) : .rowHeaders(h.index)) }
             if !e.locked, let f = tableFillHandlePoint(), p.distance(to: f) < tol * 1.3 { return (ref, .fill) }
             if !e.locked {
                 if p.distance(to: CGPoint(x: r.maxX, y: r.maxY)) < tol * 1.5 { return (ref, .resize) }
@@ -612,6 +630,14 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
                 updateFillDrag(from: d.start, to: p)
                 return
             }
+            if case let .colHeaders(c) = d.kind {
+                dragTableHeaders(columns: true, from: c, to: p)
+                return
+            }
+            if case let .rowHeaders(r) = d.kind {
+                dragTableHeaders(columns: false, from: r, to: p)
+                return
+            }
             let e = draggedElement(d, to: p)
             session.document.pages[pi].elements[ei] = e
             pageViews[pages[pi].id]?.liveUpdate(e)
@@ -626,6 +652,20 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
                 dragState = nil
                 finishFillDrag(from: d.start, to: p)
                 return
+            }
+            if let d = dragState {
+                switch d.kind {
+                case let .colHeaders(c):
+                    dragTableHeaders(columns: true, from: c, to: p)
+                    dragState = nil
+                    return
+                case let .rowHeaders(r):
+                    dragTableHeaders(columns: false, from: r, to: p)
+                    dragState = nil
+                    return
+                default:
+                    break
+                }
             }
             finishDrag(at: p)
         default:
@@ -644,7 +684,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         let o = d.original.frame
         let minCell = TableData.minCell
         switch d.kind {
-        case .cells, .fill:
+        case .cells, .fill, .colHeaders, .rowHeaders:
             break
         case .move:
             e.frame.origin = CGPoint(x: o.minX + dx, y: o.minY + dy)
@@ -765,31 +805,22 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         })
         switch e.content {
         case let .table(t):
+            // 長按的格子不在選取範圍裡：改選這一格
             let local = p - contentOrigin(pi) - e.frame.origin
             if let cell = t.cell(at: local) {
+                if let sel = tableCellSel, cell.row >= sel.r0, cell.row <= sel.r1, cell.col >= sel.c0, cell.col <= sel.c1 {
+                } else {
+                    tableCellSel = t.expanded(CellRange(cell, cell))
+                    updateTableCellChrome()
+                }
                 items.append(UIAction(title: "編輯文字", image: UIImage(systemName: "keyboard")) { [weak self] _ in
                     self?.beginTextEditing(ref, cell: cell)
                 })
-                items.append(UIMenu(title: "列與欄", image: UIImage(systemName: "tablecells"), children: [
-                    UIAction(title: "在上方插入列") { [weak self] _ in self?.modifyTable(ref) { $0.insertRow(at: cell.row) } },
-                    UIAction(title: "在下方插入列") { [weak self] _ in self?.modifyTable(ref) { $0.insertRow(at: cell.row + 1) } },
-                    UIAction(title: "在左側插入欄") { [weak self] _ in self?.modifyTable(ref) { $0.insertColumn(at: cell.col) } },
-                    UIAction(title: "在右側插入欄") { [weak self] _ in self?.modifyTable(ref) { $0.insertColumn(at: cell.col + 1) } },
-                    UIAction(title: "刪除此列", attributes: t.rows > 1 ? [] : .disabled) { [weak self] _ in
-                        self?.modifyTable(ref) { $0.removeRow(cell.row) }
-                    },
-                    UIAction(title: "刪除此欄", attributes: t.cols > 1 ? [] : .disabled) { [weak self] _ in
-                        self?.modifyTable(ref) { $0.removeColumn(cell.col) }
-                    },
-                ]))
             }
-            items.append(UIMenu(title: "格線", image: UIImage(systemName: "paintbrush"), children: [
-                UIAction(title: "黑色") { [weak self] _ in self?.modifyTable(ref) { $0.lineColorHex = "#333333FF" } },
-                UIAction(title: "灰色") { [weak self] _ in self?.modifyTable(ref) { $0.lineColorHex = "#9E9E9EFF" } },
-                UIAction(title: "藍色") { [weak self] _ in self?.modifyTable(ref) { $0.lineColorHex = "#1E5BD8FF" } },
-                UIAction(title: "加粗") { [weak self] _ in self?.modifyTable(ref) { $0.lineWidth = min($0.lineWidth + 0.5, 4) } },
-                UIAction(title: "變細") { [weak self] _ in self?.modifyTable(ref) { $0.lineWidth = max($0.lineWidth - 0.5, 0.5) } },
-            ]))
+            let anchor = TablePanelAnchor.doc(tableSelectionDocRect() ?? CGRect(origin: p, size: .zero))
+            items += tableCellItems(anchor: anchor)
+            items.append(UIMenu(title: "列與欄", image: UIImage(systemName: "tablecells"), children: tableRowColItems(anchor: anchor)))
+            items.append(UIMenu(title: "樣式", image: UIImage(systemName: "paintbrush"), children: tableStyleItems()))
         case .text:
             items.append(UIAction(title: "編輯文字", image: UIImage(systemName: "keyboard")) { [weak self] _ in
                 self?.beginTextEditing(ref, cell: nil)
@@ -825,7 +856,9 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
     func emptyAreaMenu(at p: CGPoint) -> UIMenu {
         UIMenu(children: [
             UIAction(title: "貼上", image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in self?.pasteFromClipboard(at: p) },
-            UIAction(title: "插入表格…", image: UIImage(systemName: "tablecells")) { [weak self] _ in self?.promptInsertTable(at: p) },
+            UIAction(title: "插入表格…", image: UIImage(systemName: "tablecells")) { [weak self] _ in
+                self?.presentInsertTablePanel(anchor: .doc(CGRect(x: p.x, y: p.y, width: 1, height: 1)), at: p)
+            },
             UIAction(title: "插入文字框", image: UIImage(systemName: "character.textbox")) { [weak self] _ in self?.insertTextBox(at: p) },
         ])
     }
@@ -929,23 +962,6 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         if tool != .select { setTool(.select) }
         select(ref)
         return ref
-    }
-
-    func promptInsertTable(at p: CGPoint? = nil) {
-        let a = UIAlertController(title: "插入表格", message: "輸入列數與欄數", preferredStyle: .alert)
-        a.addTextField { tf in tf.placeholder = "列數"; tf.text = "3"; tf.keyboardType = .numberPad }
-        a.addTextField { tf in tf.placeholder = "欄數"; tf.text = "3"; tf.keyboardType = .numberPad }
-        a.addAction(UIAlertAction(title: "取消", style: .cancel))
-        a.addAction(UIAlertAction(title: "插入", style: .default) { [weak self, weak a] _ in
-            guard let self else { return }
-            let rows = min(max(Int(a?.textFields?[0].text ?? "") ?? 3, 1), 40)
-            let cols = min(max(Int(a?.textFields?[1].text ?? "") ?? 3, 1), 20)
-            let pageW = self.session.baseSize(of: self.pages[self.currentPageIndex]).width
-            let cellW = min(140, max(40, (pageW * 0.85) / CGFloat(cols)))
-            let t = TableData.make(rows: rows, cols: cols, cellWidth: cellW.rounded(), cellHeight: 44)
-            _ = self.insertElement(.table(t), size: t.size, at: p)
-        })
-        present(a, animated: true)
     }
 
     func insertTextBox(at p: CGPoint?, text: String = "") {

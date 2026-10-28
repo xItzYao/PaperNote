@@ -533,7 +533,9 @@ final class OverlayView: UIView {
 
     private let fillHandleLayer = CAShapeLayer()
     private let fillPreviewLayer = CAShapeLayer()
-    private let tableLockLayer = CAShapeLayer()
+    /// 欄、列標頭的底色：一般、選到、鎖定、選到又鎖定
+    private let headerLayers = (0..<4).map { _ in CAShapeLayer() }
+    private var headerTexts: [CATextLayer] = []
 
     private func install(_ l: CAShapeLayer, fill: UIColor?, stroke: UIColor?, dashed: Bool = false) {
         guard l.superlayer == nil else { return }
@@ -565,14 +567,44 @@ final class OverlayView: UIView {
         CATransaction.commit()
     }
 
-    /// 鎖定寬度的欄（上緣）、鎖定高度的列（左緣）畫一條橘色粗線
-    func showTableLocks(_ rects: [CGRect]) {
+    /// 表格上方的欄標頭（A B C…）、左邊的列標頭（1 2 3…）。點、拖曳選整欄整列；鎖定的是橘色
+    struct TableHeader {
+        var rect: CGRect
+        var label: String
+        var selected: Bool
+        var locked: Bool
+    }
+
+    func showTableHeaders(_ headers: [TableHeader]) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        install(tableLockLayer, fill: UIColor.systemOrange.withAlphaComponent(0.85), stroke: nil)
-        let path = UIBezierPath()
-        for r in rects { path.append(UIBezierPath(roundedRect: r, cornerRadius: min(r.width, r.height) / 2)) }
-        tableLockLayer.path = rects.isEmpty ? nil : path.cgPath
+        let fills: [UIColor] = [UIColor(white: 0.93, alpha: 1), UIColor.systemBlue.withAlphaComponent(0.85),
+                                UIColor.systemOrange.withAlphaComponent(0.35), UIColor.systemOrange.withAlphaComponent(0.9)]
+        for (l, f) in zip(headerLayers, fills) {
+            install(l, fill: f, stroke: UIColor(white: 0.75, alpha: 1))
+            l.lineWidth = 0.5 * lineScale
+        }
+        var paths = (0..<4).map { _ in UIBezierPath() }
+        for h in headers { paths[(h.selected ? 1 : 0) + (h.locked ? 2 : 0)].append(UIBezierPath(rect: h.rect)) }
+        for (l, p) in zip(headerLayers, paths) { l.path = headers.isEmpty ? nil : p.cgPath }
+        while headerTexts.count < headers.count {
+            let t = CATextLayer()
+            t.alignmentMode = .center
+            t.contentsScale = UIScreen.main.scale * 3
+            layer.addSublayer(t)
+            headerTexts.append(t)
+        }
+        let size = 11 * lineScale
+        for (i, t) in headerTexts.enumerated() {
+            guard i < headers.count else { t.isHidden = true; continue }
+            let h = headers[i]
+            t.isHidden = false
+            t.string = h.label
+            t.font = UIFont.systemFont(ofSize: size, weight: .semibold)
+            t.fontSize = size
+            t.foregroundColor = (h.selected ? UIColor.white : UIColor.darkGray).cgColor
+            t.frame = CGRect(x: h.rect.minX, y: h.rect.midY - size * 0.65, width: h.rect.width, height: size * 1.4)
+        }
         CATransaction.commit()
     }
 

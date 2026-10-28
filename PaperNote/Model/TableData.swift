@@ -659,3 +659,134 @@ extension TableData {
         repeatGroup = try c.decodeIfPresent(TableRepeat.self, forKey: .repeatGroup)
     }
 }
+
+// MARK: - 手繪格線的手勢（不用找按鈕）
+
+/// 在表格上畫的一筆代表什麼
+enum TableGesture: Equatable {
+    /// 劃掉格線（在線上來回塗）：合併線兩邊的格子
+    case merge([CellRange])
+    /// 在表格上下外側畫一條橫線：在那裡加一列（高度＝線到表格邊的距離）
+    case addRow(at: Int, height: CGFloat)
+    /// 在表格左右外側畫一條直線：加一欄
+    case addColumn(at: Int, width: CGFloat)
+}
+
+extension TableData {
+    /// 離表格多遠以內的線算是要加列／欄
+    static let addReach: CGFloat = 200
+
+    /// pts 是表格座標的一筆。認不出這兩種手勢就回傳 nil（照原本：切格子、加斜線）
+    func gesture(for pts: [CGPoint]) -> TableGesture? {
+        guard pts.count >= 2, rows > 0, cols > 0 else { return nil }
+        if let m = scribbledLines(pts) { return .merge(m) }
+        return outsideLine(pts)
+    }
+
+    /// 在同一段格線上來回穿過 2 次以上（整筆至少 3 次）＝劃掉那段線
+    private func scribbledLines(_ pts: [CGPoint]) -> [CellRange]? {
+        var ranges: [CellRange] = []
+        var total = 0
+        for c in 1..<max(cols, 1) {
+            let x = colX(c)
+            var hits: [Int: Int] = [:]
+            for (a, b) in zip(pts, pts.dropFirst()) where (a.x - x) * (b.x - x) < 0 {
+                let y = a.y + (b.y - a.y) * (x - a.x) / (b.x - a.x)
+                if let r = rowIndex(at: y), isColLineVisible(c, atRow: r) { hits[r, default: 0] += 1 }
+            }
+            for (r, n) in hits where n >= 2 {
+                ranges.append(CellRange(anchor(r, c - 1), anchor(r, c)))
+                total += n
+            }
+        }
+        for r in 1..<max(rows, 1) {
+            let y = rowY(r)
+            var hits: [Int: Int] = [:]
+            for (a, b) in zip(pts, pts.dropFirst()) where (a.y - y) * (b.y - y) < 0 {
+                let x = a.x + (b.x - a.x) * (y - a.y) / (b.y - a.y)
+                if let c = colIndex(at: x), isRowLineVisible(r, atColumn: c) { hits[c, default: 0] += 1 }
+            }
+            for (c, n) in hits where n >= 2 {
+                ranges.append(CellRange(anchor(r - 1, c), anchor(r, c)))
+                total += n
+            }
+        }
+        return total >= 3 && !ranges.isEmpty ? ranges : nil
+    }
+
+    /// 表格外面、和邊平行、長度至少蓋過一半的線
+    private func outsideLine(_ pts: [CGPoint]) -> TableGesture? {
+        let xs = pts.map(\.x), ys = pts.map(\.y)
+        let box = CGRect(x: xs.min()!, y: ys.min()!, width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!)
+        let w = size.width, h = size.height
+        func overlap(_ a0: CGFloat, _ a1: CGFloat, _ b1: CGFloat) -> CGFloat { max(0, min(a1, b1) - max(a0, 0)) }
+        if box.width >= box.height * 2, overlap(box.minX, box.maxX, w) >= w * 0.5 {
+            if box.minY >= h - 2, box.midY - h <= Self.addReach {
+                return .addRow(at: rows, height: max(Self.minCell, box.midY - h))
+            }
+            if box.maxY <= 2, -box.midY <= Self.addReach {
+                return .addRow(at: 0, height: max(Self.minCell, -box.midY))
+            }
+        }
+        if box.height >= box.width * 2, overlap(box.minY, box.maxY, h) >= h * 0.5 {
+            if box.minX >= w - 2, box.midX - w <= Self.addReach {
+                return .addColumn(at: cols, width: max(Self.minCell, box.midX - w))
+            }
+            if box.maxX <= 2, -box.midX <= Self.addReach {
+                return .addColumn(at: 0, width: max(Self.minCell, -box.midX))
+            }
+        }
+        return nil
+    }
+}
+
+// MARK: - 範本
+
+enum TableTemplate: String, CaseIterable, Identifiable {
+    case timetable, lab, week, compare
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .timetable: return "課表"
+        case .lab: return "實驗紀錄"
+        case .week: return "週計畫"
+        case .compare: return "比較表"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .timetable: return "calendar"
+        case .lab: return "flask"
+        case .week: return "checklist"
+        case .compare: return "rectangle.split.3x1"
+        }
+    }
+
+    /// 第一列（和第一欄）是標題，淡灰底
+    var table: TableData {
+        func make(_ header: [String], firstColumn: [String], widths: [CGFloat], height: CGFloat) -> TableData {
+            var t = TableData.make(rows: firstColumn.count + 1, cols: header.count, cellHeight: height)
+            t.colWidths = widths
+            for (c, s) in header.enumerated() { t.setText(s, row: 0, col: c) }
+            for (r, s) in firstColumn.enumerated() { t.setText(s, row: r + 1, col: 0) }
+            t.setFill(CellRange((0, 0), (0, header.count - 1)), hex: "#EEEEEEFF")
+            return t
+        }
+        switch self {
+        case .timetable:
+            return make(["", "一", "二", "三", "四", "五"], firstColumn: (1...8).map { "\($0)" },
+                        widths: [44] + Array(repeating: 92, count: 5), height: 44)
+        case .lab:
+            return make(["次數", "測量 1", "測量 2", "測量 3", "平均"], firstColumn: (1...5).map { "\($0)" },
+                        widths: [64, 100, 100, 100, 100], height: 40)
+        case .week:
+            return make(["星期", "待辦"], firstColumn: ["一", "二", "三", "四", "五", "六", "日"],
+                        widths: [64, 380], height: 48)
+        case .compare:
+            return make(["項目", "A", "B"], firstColumn: ["", "", "", ""], widths: [120, 160, 160], height: 44)
+        }
+    }
+}

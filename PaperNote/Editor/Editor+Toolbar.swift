@@ -111,6 +111,7 @@ extension NotebookViewController {
             center.addArrangedSubview(b)
         }
         let insert = makeButton(symbol: "plus.circle", title: nil, action: nil)
+        insertButton = insert
         insert.accessibilityLabel = "插入"
         insert.menu = makeInsertMenu()
         insert.showsMenuAsPrimaryAction = true
@@ -644,13 +645,14 @@ extension NotebookViewController {
     // MARK: 工具列的小視窗
 
     /// 粗細、虛線、筆刷設定的小視窗：開著時筆照樣可以在畫布上寫（一下筆就關掉），換工具也會關掉
-    func presentToolPopover(_ vc: UIViewController, from source: UIView, size: CGSize) {
+    /// rect：指著 source 裡的這一塊（沒給就是整個 source）
+    func presentToolPopover(_ vc: UIViewController, from source: UIView, rect: CGRect? = nil, size: CGSize) {
         dismissToolPopover()
         vc.modalPresentationStyle = .popover
         vc.preferredContentSize = size
         if let pop = vc.popoverPresentationController {
             pop.sourceView = source
-            pop.sourceRect = source.bounds
+            pop.sourceRect = rect ?? source.bounds
             pop.passthroughViews = [canvas]
         }
         present(vc, animated: true)
@@ -757,7 +759,11 @@ extension NotebookViewController {
 
     func makeInsertMenu() -> UIMenu {
         UIMenu(children: [
-            UIAction(title: "表格…", image: UIImage(systemName: "tablecells")) { [weak self] _ in self?.promptInsertTable() },
+            UIAction(title: "表格…", image: UIImage(systemName: "tablecells")) { [weak self] _ in
+                guard let self else { return }
+                let r = self.visibleDocRect()
+                self.presentInsertTablePanel(anchor: self.insertButton.map { .view($0) } ?? .doc(CGRect(x: r.midX, y: r.midY, width: 1, height: 1)))
+            },
             UIAction(title: "手繪新表格", image: UIImage(systemName: "pencil.and.outline")) { [weak self] _ in self?.setTool(.tableDraw) },
             UIAction(title: "文字框", image: UIImage(systemName: "character.textbox")) { [weak self] _ in self?.insertTextBox(at: nil) },
             UIAction(title: "照片…", image: UIImage(systemName: "photo")) { [weak self] _ in self?.presentPhotoPicker() },

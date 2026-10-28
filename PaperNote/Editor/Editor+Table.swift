@@ -50,13 +50,15 @@ extension NotebookViewController {
             overlay.showMoveHandle(nil)
             overlay.showDeleteHandle(nil)
             overlay.showFillHandle(nil)
-            overlay.showTableLocks([])
+            overlay.showTableHeaders([])
             return
         }
         overlay.showMoveHandle(tableMoveHandlePoint())
         overlay.showDeleteHandle(tableDeleteHandlePoint())
-        overlay.showTableLocks(tableLockMarks(s.table, at: s.docRect.origin))
-        defer { overlay.showFillHandle(tableFillHandlePoint()) }
+        defer {
+            overlay.showFillHandle(tableFillHandlePoint())
+            updateTableHeadersChrome()
+        }
         if let sel = tableCellSel {
             let r = clampedRange(sel, in: s.table)
             tableCellSel = r
@@ -84,36 +86,18 @@ extension NotebookViewController {
 
     // MARK: - 表格工具列（像 Word 的表格設計）
 
-    private func tableAction(_ change: @escaping (inout TableData, CellRange) -> Void) {
+    func tableAction(_ change: @escaping (inout TableData, CellRange) -> Void) {
         guard let s = selectedTable() else { return }
         let range = tableCellSel ?? CellRange((0, 0), (0, 0))
         modifyTable(s.ref) { change(&$0, range) }
         updateTableCellChrome()
     }
 
+    /// 表格工具列：選到的格子、列與欄、儲存格、樣式、手繪格線、固定位置。
+    /// 打字：點兩下格子；選整欄整列：點表格上方、左邊的標頭；合併、加列欄：手繪格線模式直接畫
     func buildTableRibbon() -> [UIView] {
         guard let s = selectedTable() else { return [] }
         var views: [UIView] = []
-
-        func menuButton(_ symbol: String, _ label: String, _ items: [UIMenuElement]) -> UIButton {
-            let b = makeButton(symbol: symbol, title: nil, action: nil)
-            b.accessibilityLabel = label
-            b.menu = UIMenu(title: label, children: items)
-            b.showsMenuAsPrimaryAction = true
-            return b
-        }
-        func actionButton(_ symbol: String, _ label: String, _ handler: @escaping () -> Void) -> UIButton {
-            let b = makeButton(symbol: symbol, title: nil, action: nil)
-            b.accessibilityLabel = label
-            b.addAction(UIAction { _ in handler() }, for: .touchUpInside)
-            return b
-        }
-        func act(_ title: String, _ symbol: String? = nil, attributes: UIMenuElement.Attributes = [],
-                 _ change: @escaping (inout TableData, CellRange) -> Void) -> UIAction {
-            UIAction(title: title, image: symbol.flatMap { UIImage(systemName: $0) }, attributes: attributes) { [weak self] _ in
-                self?.tableAction(change)
-            }
-        }
 
         let cell = UILabel()
         cell.font = .monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
@@ -123,190 +107,46 @@ extension NotebookViewController {
         tableCellLabel = cell
         views.append(cell)
 
-        views.append(actionButton("keyboard", "編輯文字") { [weak self] in
-            guard let self, let s = self.selectedTable() else { return }
-            let r = self.tableCellSel ?? CellRange((0, 0), (0, 0))
-            self.beginTextEditing(s.ref, cell: (r.r0, r.c0))
-        })
-
-        views.append(menuButton("plus.rectangle.on.rectangle", "插入", [
-            act("在上方插入列", "arrow.up.to.line") { t, r in t.insertRow(at: r.r0) },
-            act("在下方插入列", "arrow.down.to.line") { t, r in t.insertRow(at: r.r1 + 1) },
-            act("在左側插入欄", "arrow.left.to.line") { t, r in t.insertColumn(at: r.c0) },
-            act("在右側插入欄", "arrow.right.to.line") { t, r in t.insertColumn(at: r.c1 + 1) },
-        ]))
-
-        views.append(menuButton("minus.rectangle", "刪除", [
-            act("刪除列", attributes: .destructive) { t, r in for row in (r.r0...r.r1).reversed() { t.removeRow(row) } },
-            act("刪除欄", attributes: .destructive) { t, r in for col in (r.c0...r.c1).reversed() { t.removeColumn(col) } },
-            UIAction(title: "刪除整個表格", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
-                guard let self, let s = self.selectedTable() else { return }
-                self.deleteElement(s.ref)
-            },
-        ]))
-
-        func imageButton(_ image: UIImage, _ label: String, _ handler: @escaping () -> Void) -> UIButton {
-            var config = UIButton.Configuration.plain()
-            config.image = image
-            config.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6)
-            let b = UIButton(configuration: config)
+        /// 選單在打開時才依目前選取的範圍產生；重複、分割的小視窗指著這顆按鈕
+        func menuButton(_ image: UIImage?, _ label: String, _ items: @escaping (UIButton) -> [UIMenuElement]) -> UIButton {
+            let b = makeButton(symbol: "circle", title: nil, action: nil)
+            b.configuration?.image = image
             b.accessibilityLabel = label
-            b.setContentHuggingPriority(.required, for: .horizontal)
-            b.addAction(UIAction { _ in handler() }, for: .touchUpInside)
+            b.menu = UIMenu(title: label, children: [UIDeferredMenuElement.uncached { [weak b] done in
+                guard let b else { return done([]) }
+                done(items(b))
+            }])
+            b.showsMenuAsPrimaryAction = true
             return b
         }
+        func symbol(_ name: String) -> UIImage? {
+            UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .regular))
+        }
 
-        views.append(imageButton(TableIcons.merge, "合併儲存格") { [weak self] in
-            guard let self else { return }
-            guard let r = self.tableCellSel, !r.isSingle else {
-                self.showToast("先在表格裡拖曳，選取要合併的儲存格")
-                return
-            }
-            self.tableAction { t, r in t.mergeCells(r) }
-        })
+        views.append(menuButton(symbol("tablecells"), "列與欄") { [weak self] b in self?.tableRowColItems(anchor: .view(b)) ?? [] })
+        views.append(menuButton(TableIcons.merge, "儲存格") { [weak self] b in self?.tableCellItems(anchor: .view(b)) ?? [] })
+        views.append(menuButton(symbol("paintbrush"), "樣式") { [weak self] _ in self?.tableStyleItems() ?? [] })
 
-        views.append(imageButton(TableIcons.split, "分割儲存格") { [weak self] in
-            self?.presentSplitDialog()
-        })
-
-        views.append(menuButton("line.diagonal", "斜線", [
-            act("左上到右下") { t, r in t.setDiagonal(r.r0, r.c0, reverse: false) },
-            act("右上到左下") { t, r in t.setDiagonal(r.r0, r.c0, reverse: true) },
-            act("移除斜線", attributes: .destructive) { t, r in t.setDiagonal(r.r0, r.c0, reverse: nil) },
-        ]))
-
-        views.append(actionButton("pencil.and.outline", "手繪格線") { [weak self] in
+        let draw = makeButton(symbol: "pencil.and.outline", title: nil, action: nil)
+        draw.accessibilityLabel = "手繪格線"
+        draw.addAction(UIAction { [weak self] _ in
             guard let self, let s = self.selectedTable() else { return }
             self.setTool(.tableDraw)
             self.tableDrawTarget = s.ref
             self.rebuildSubBar()
             self.updateTableDraftChrome()
-        })
-
-        let fills: [(String, String?)] = [("黃色", "#FFF59DFF"), ("綠色", "#C8E6C9FF"), ("藍色", "#BBDEFBFF"),
-                                          ("粉紅", "#F8BBD0FF"), ("灰色", "#E0E0E0FF"), ("無底色", nil)]
-        views.append(menuButton("drop.fill", "儲存格底色", fills.map { name, hex in
-            act(name, hex == nil ? "circle.slash" : "circle.fill") { t, r in t.setFill(r, hex: hex) }
-        }))
-
-        views.append(menuButton("squareshape.split.3x3", "格線", [
-            act("黑色") { t, _ in t.lineColorHex = "#333333FF" },
-            act("灰色") { t, _ in t.lineColorHex = "#9E9E9EFF" },
-            act("藍色") { t, _ in t.lineColorHex = "#1E5BD8FF" },
-            act("紅色") { t, _ in t.lineColorHex = "#D32F2FFF" },
-            act("加粗", "plus") { t, _ in t.lineWidth = min(t.lineWidth + 0.5, 5) },
-            act("變細", "minus") { t, _ in t.lineWidth = max(t.lineWidth - 0.5, 0.5) },
-        ]))
-
-        views.append(menuButton("textformat.size", "字級", [
-            act("字放大", "plus") { t, _ in t.fontSize = min(t.fontSize + 2, 48) },
-            act("字縮小", "minus") { t, _ in t.fontSize = max(t.fontSize - 2, 8) },
-        ]))
-
-        // 選了好幾欄（列）就只平均分配選到的，只選一格就是全部；鎖定的不動
-        let distribute = makeButton(symbol: "arrow.left.and.right", title: nil, action: nil)
-        distribute.accessibilityLabel = "平均分配"
-        distribute.menu = UIMenu(title: "平均分配", children: [UIDeferredMenuElement.uncached { [weak self] done in
-            guard let self, let r = self.tableCellSel else { return done([]) }
-            let cols = r.c1 > r.c0 ? "\(self.columnName(r.c0))–\(self.columnName(r.c1)) 欄" : "全部欄"
-            let rows = r.r1 > r.r0 ? "第 \(r.r0 + 1)–\(r.r1 + 1) 列" : "全部列"
-            done([
-                act("平均分配欄寬（\(cols)）") { t, r in t.distributeColumns(r.c1 > r.c0 ? r.c0...r.c1 : nil) },
-                act("平均分配列高（\(rows)）") { t, r in t.distributeRows(r.r1 > r.r0 ? r.r0...r.r1 : nil) },
-            ])
-        }])
-        distribute.showsMenuAsPrimaryAction = true
-        views.append(distribute)
-
-        // 鎖定列高、欄寬：縮放表格、平均分配時不會變（表格上方、左邊的橘色線標出鎖定的欄、列）
-        let lock = makeButton(symbol: "lock.rectangle", title: nil, action: nil)
-        lock.accessibilityLabel = "鎖定寬高"
-        lock.menu = UIMenu(title: "鎖定寬高", children: [UIDeferredMenuElement.uncached { [weak self] done in
-            guard let self, let r = self.tableCellSel else { return done([]) }
-            let cols = r.c1 > r.c0 ? "\(self.columnName(r.c0))–\(self.columnName(r.c1))" : self.columnName(r.c0)
-            let rows = r.r1 > r.r0 ? "\(r.r0 + 1)–\(r.r1 + 1)" : "\(r.r0 + 1)"
-            done([
-                act("鎖定欄寬（\(cols) 欄）", "lock") { t, r in t.setColsLocked(r.c0...r.c1, true) },
-                act("鎖定列高（第 \(rows) 列）", "lock") { t, r in t.setRowsLocked(r.r0...r.r1, true) },
-                act("解除選取範圍的鎖定", "lock.open") { t, r in
-                    t.setColsLocked(r.c0...r.c1, false)
-                    t.setRowsLocked(r.r0...r.r1, false)
-                },
-                act("解除全部鎖定", "lock.open", attributes: .destructive) { t, _ in
-                    t.lockedCols = []
-                    t.lockedRows = []
-                },
-            ])
-        }])
-        lock.showsMenuAsPrimaryAction = true
-        views.append(lock)
-
-        let repeatButton = makeButton(symbol: "square.stack.3d.down.right", title: nil, action: nil)
-        repeatButton.accessibilityLabel = "重複"
-        repeatButton.addAction(UIAction { [weak self, weak repeatButton] _ in
-            guard let self, let repeatButton else { return }
-            self.presentRepeatPanel(from: repeatButton)
         }, for: .touchUpInside)
-        views.append(repeatButton)
+        views.append(draw)
 
-        views.append(actionButton(s.element.locked ? "lock.fill" : "lock.open", s.element.locked ? "解除固定" : "固定位置") { [weak self] in
+        let lock = makeButton(symbol: s.element.locked ? "lock.fill" : "lock.open", title: nil, action: nil)
+        lock.accessibilityLabel = s.element.locked ? "解除固定" : "固定位置"
+        lock.addAction(UIAction { [weak self] _ in
             guard let self, let s = self.selectedTable() else { return }
             self.modifyElement(s.ref) { $0.locked.toggle() }
             self.rebuildSubBar()
-        })
+        }, for: .touchUpInside)
+        views.append(lock)
         return views
-    }
-
-    /// 像 Word 一樣輸入要分割成幾欄、幾列
-    func presentSplitDialog() {
-        guard let s = selectedTable() else { return }
-        let range = s.table.expanded(tableCellSel ?? CellRange((0, 0), (0, 0)))
-        let span = s.table.span(range.r0, range.c0)
-        // 只選一格（或一個合併格）＝像 Word 分割那一格；選了很多格＝每一格都分割
-        let single = span.rowSpan == range.r1 - range.r0 + 1 && span.colSpan == range.c1 - range.c0 + 1
-        let isMerged = single && span.rowSpan * span.colSpan > 1
-        let message = single ? cellLabel(range) : "\(cellLabel(range))：選取的每一格都會分割"
-        let a = UIAlertController(title: "分割儲存格", message: message, preferredStyle: .alert)
-        a.addTextField { tf in
-            tf.placeholder = "欄數（左右）"
-            tf.text = single ? "\(max(2, span.colSpan))" : "2"
-            tf.keyboardType = .numberPad
-        }
-        a.addTextField { tf in
-            tf.placeholder = "列數（上下）"
-            tf.text = single ? "\(span.rowSpan)" : "1"
-            tf.keyboardType = .numberPad
-        }
-        a.addAction(UIAlertAction(title: "取消", style: .cancel))
-        if isMerged {
-            a.addAction(UIAlertAction(title: "取消合併", style: .default) { [weak self] _ in
-                self?.tableAction { t, r in t.unmerge(r.r0, r.c0) }
-            })
-        }
-        a.addAction(UIAlertAction(title: "分割", style: .default) { [weak self, weak a] _ in
-            let cols = min(max(Int(a?.textFields?[0].text ?? "") ?? 2, 1), 20)
-            let rows = min(max(Int(a?.textFields?[1].text ?? "") ?? 1, 1), 20)
-            guard cols * rows > 1 || isMerged else { return }
-            self?.tableAction { t, r in t.splitCells(r, cols: cols, rows: rows) }
-            self?.tableCellSel = nil
-            self?.updateTableCellChrome()
-        })
-        present(a, animated: true)
-    }
-
-    // MARK: - 鎖定標記
-
-    /// 鎖定的欄：表格上方一條橘線；鎖定的列：表格左邊一條橘線（文件座標）
-    func tableLockMarks(_ t: TableData, at o: CGPoint) -> [CGRect] {
-        let z = canvas.zoomScale
-        let bar = 4 / z, gap = 6 / z, inset = 2 / z
-        var out = t.lockedCols.filter { $0 < t.cols }.map { c in
-            CGRect(x: o.x + t.colX(c) + inset, y: o.y - gap - bar, width: max(1, t.colWidths[c] - inset * 2), height: bar)
-        }
-        out += t.lockedRows.filter { $0 < t.rows }.map { r in
-            CGRect(x: o.x - gap - bar, y: o.y + t.rowY(r) + inset, width: bar, height: max(1, t.rowHeights[r] - inset * 2))
-        }
-        return out
     }
 
     // MARK: - 重複（做大表格）
@@ -382,7 +222,7 @@ extension NotebookViewController {
     }
 
     /// 「重複」小視窗：方向、組數；選取範圍在已經重複過的那一組裡，就是修改那一組
-    func presentRepeatPanel(from source: UIView) {
+    func presentRepeatPanel(anchor: TablePanelAnchor) {
         guard let s = selectedTable() else { return }
         let t = s.table
         let sel = tableCellSel ?? CellRange((0, 0), (t.rows - 1, t.cols - 1))
@@ -402,7 +242,7 @@ extension NotebookViewController {
         }
         let panel = TableRepeatPanel(direction: direction, count: editing?.count ?? 1, editing: editing != nil, blockLabel: label,
                                      onApply: { [weak self] d, n in self?.applyTableRepeat(direction: d, count: n, editing: editing, selection: sel) })
-        presentToolPopover(UIHostingController(rootView: panel), from: source, size: CGSize(width: 380, height: 250))
+        presentTablePanel(UIHostingController(rootView: panel), anchor: anchor, size: CGSize(width: 380, height: 250))
     }
 
     /// direction：0 往上、1 往下、2 往左、3 往右

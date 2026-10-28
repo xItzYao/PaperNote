@@ -158,11 +158,15 @@ extension NotebookViewController {
             switch g.state {
             case .began:
                 tableDraftStart = p
+                tableDrawPoints = [p]
             case .changed:
+                tableDrawPoints.append(p)
                 if let s = tableDraftStart { overlay.showTableDraft(rect: nil, xs: [], ys: [], live: (s, p)) }
             case .ended:
-                if let s = tableDraftStart { applyTableStroke(target, from: s, to: p) }
+                tableDrawPoints.append(p)
+                if tableDraftStart != nil { applyTableStroke(target, points: tableDrawPoints) }
                 tableDraftStart = nil
+                tableDrawPoints = []
                 updateTableDraftChrome()
             default:
                 tableDraftStart = nil
