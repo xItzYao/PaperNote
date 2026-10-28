@@ -120,6 +120,42 @@ final class ImageToolTests: XCTestCase {
         XCTAssertEqual(editor.tool, .image)
     }
 
+    /// 回報的需求：圖片長按要有「剪下」
+    func testImageMenuHasCut() throws {
+        editor.setTool(.image)
+        editor.insertPhotoFromStrip(photo(.red))
+        let ref = try XCTUnwrap(editor.selected)
+        XCTAssertTrue(editor.longPressGesture.isEnabled, "圖片工具也可以長按打開選單")
+        let titles = editor.elementMenu(ref, at: .zero).children.flatMap { ($0 as? UIMenu)?.children ?? [$0] }.map(\.title)
+        XCTAssertTrue(titles.contains("剪下"))
+        editor.cutElement(ref)
+        XCTAssertTrue(images(onPage: 0).isEmpty, "剪下之後圖片不在頁面上")
+        XCTAssertNotNil(editor.clipboardElement, "剪下的圖片可以貼上")
+    }
+
+    /// 回報的需求：圖片左上角、鎖頭旁邊多一個紅色叉叉
+    func testRedCrossNextToTheLockDeletesTheImage() throws {
+        editor.setTool(.image)
+        editor.insertPhotoFromStrip(photo(.red))
+        let ref = try XCTUnwrap(editor.selected)
+        let lock = try XCTUnwrap(editor.lockIconTargets().first { $0.ref == ref })
+        let cross = try XCTUnwrap(editor.imageDeleteTarget(), "選到的圖片要有紅色叉叉")
+        XCTAssertEqual(cross.point.y, lock.point.y, accuracy: 0.5, "和鎖頭同一排")
+        XCTAssertGreaterThan(cross.point.x, lock.point.x, "在鎖頭右邊")
+        editor.handleTap(FakeTap(cross.point))
+        XCTAssertTrue(images(onPage: 0).isEmpty, "點紅色叉叉刪除圖片")
+        XCTAssertNil(editor.imageDeleteTarget())
+    }
+
+    func testLockedImageHasNoRedCross() throws {
+        editor.setTool(.image)
+        editor.insertPhotoFromStrip(photo(.red))
+        let ref = try XCTUnwrap(editor.selected)
+        editor.toggleLock(ref)
+        editor.select(ref)
+        XCTAssertNil(editor.imageDeleteTarget(), "鎖定的圖片不顯示叉叉，免得誤刪")
+    }
+
     func testInsertMenuHasNoPaste() {
         let titles = editor.makeInsertMenu().children.map(\.title)
         XCTAssertFalse(titles.contains("貼上"), "長按畫面就能貼上，＋選單裡不放")

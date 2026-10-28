@@ -563,7 +563,7 @@ extension NotebookViewController {
             return (ElementRef(pageID: pages[pi].id, elementID: e.id), p, e.locked)
         }
         func lockable(_ e: PageElement) -> Bool { e.isTable || e.isImage }
-        if tool == .select, editingTextView == nil, let ref = selected, case let (pi, ei)? = locate(ref),
+        if tool == .select || tool == .image, editingTextView == nil, let ref = selected, case let (pi, ei)? = locate(ref),
            lockable(pages[pi].elements[ei]) {
             return [target(pages[pi].elements[ei], pi)]
         }
@@ -579,6 +579,23 @@ extension NotebookViewController {
 
     func updateLockChrome() {
         overlay.showLockIcons(lockIconTargets().map { ($0.point, $0.locked) })
+        overlay.showImageDelete(imageDeleteTarget()?.point)
+    }
+
+    /// 選到的圖片（沒鎖定）：左上角鎖頭右邊的紅色叉叉
+    func imageDeleteTarget() -> (ref: ElementRef, point: CGPoint)? {
+        guard tool == .select || tool == .image, editingTextView == nil, let ref = selected,
+              case let (pi, ei)? = locate(ref), pages[pi].elements[ei].isImage, !pages[pi].elements[ei].locked,
+              let lock = lockIconTargets().first(where: { $0.ref == ref }) else { return nil }
+        return (ref, CGPoint(x: lock.point.x + 36 / canvas.zoomScale, y: lock.point.y))
+    }
+
+    /// p 按在圖片的紅色叉叉上就刪掉，回傳有沒有刪
+    func handleImageDeleteTap(at p: CGPoint) -> Bool {
+        guard let t = imageDeleteTarget(), t.point.distance(to: p) < 20 / canvas.zoomScale else { return false }
+        deleteElement(t.ref)
+        showToast("已刪除圖片（可以按復原）")
+        return true
     }
 
     func lockIconHit(at p: CGPoint) -> ElementRef? {

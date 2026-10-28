@@ -318,12 +318,13 @@ final class LibraryStore: ObservableObject {
     // MARK: Notebooks
 
     @discardableResult
-    func createNotebook(title: String, folder: UUID?, paper: PaperStyle, landscape: Bool, coverHex: String? = nil) -> NotebookMeta {
+    func createNotebook(title: String, folder: UUID?, paper: PaperStyle, landscape: Bool, size paperSize: PaperSize = .a4,
+                        coverHex: String? = nil) -> NotebookMeta {
         var meta = NotebookMeta(title: title.isEmpty ? "未命名筆記本" : title, folderId: folder,
                                 coverHex: coverHex ?? Palette.covers.randomElement()!)
         let dir = notebookURL(meta.id)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        let size = landscape ? CGSize(width: 842, height: 595) : CGSize(width: 595, height: 842)
+        let size = PaperSize.oriented(paperSize.size, landscape: landscape)
         let doc = NotebookDocument(pages: [Page(background: .paper(width: size.width, height: size.height, style: paper))])
         try? NotebookSession.writeDocument(doc, to: dir)
         meta.pageCount = 1

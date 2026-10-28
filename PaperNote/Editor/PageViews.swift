@@ -220,6 +220,30 @@ final class OverlayView: UIView {
         }.cgImage
     }
 
+    /// 選到的圖片左上角、鎖頭旁邊的紅色叉叉（點一下刪除）
+    private let imageDeleteLayer = CALayer()
+    private static let deleteImage = handleImage("xmark", color: .systemRed)
+
+    func showImageDelete(_ p: CGPoint?) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if imageDeleteLayer.superlayer == nil {
+            imageDeleteLayer.contents = Self.deleteImage
+            imageDeleteLayer.contentsGravity = .resizeAspect
+            imageDeleteLayer.shadowColor = UIColor.black.cgColor
+            imageDeleteLayer.shadowOpacity = 0.2
+            imageDeleteLayer.shadowRadius = 2
+            imageDeleteLayer.shadowOffset = CGSize(width: 0, height: 1)
+            layer.addSublayer(imageDeleteLayer)
+        }
+        if let p {
+            let s = Self.handleSize * lineScale
+            imageDeleteLayer.frame = CGRect(x: p.x - s / 2, y: p.y - s / 2, width: s, height: s)
+        }
+        imageDeleteLayer.isHidden = p == nil
+        CATransaction.commit()
+    }
+
     /// 表格旁的鎖頭（點一下鎖定／解鎖）
     func showLockIcons(_ items: [(CGPoint, Bool)]) {
         CATransaction.begin()

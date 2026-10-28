@@ -10,7 +10,10 @@ struct PaperPickerOverlay: View {
     let askName: Bool
     @State var style: PaperStyle
     @State var landscape: Bool
-    let onConfirm: (_ name: String, _ style: PaperStyle, _ landscape: Bool) -> Void
+    /// 可以選的大小（新增頁面時，旁邊那頁不是 A4／B5／Letter 的話，最前面多一個「同第 N 頁」）
+    var sizes: [PaperSize] = PaperSize.presets
+    @State var sizeIndex = 0
+    let onConfirm: (_ name: String, _ style: PaperStyle, _ landscape: Bool, _ size: PaperSize) -> Void
     let onCancel: () -> Void
 
     @State private var name = ""
@@ -30,6 +33,18 @@ struct PaperPickerOverlay: View {
         .onAppear { withAnimation(.easeOut(duration: 0.18)) { appeared = true } }
     }
 
+    /// 現在選的大小和方向
+    private var previewSize: CGSize {
+        PaperSize.oriented(sizes[min(sizeIndex, sizes.count - 1)].size, landscape: landscape)
+    }
+
+    /// 縮圖的框：長邊 92pt，照紙張比例
+    private var previewFrame: CGSize {
+        let s = previewSize
+        let k = 92 / max(s.width, s.height)
+        return CGSize(width: s.width * k, height: s.height * k)
+    }
+
     private var card: some View {
         VStack(spacing: 18) {
             Text(title).font(.headline)
@@ -41,10 +56,10 @@ struct PaperPickerOverlay: View {
                 ForEach(PaperStyle.allCases) { s in
                     Button { style = s } label: {
                         VStack(spacing: 6) {
-                            Image(uiImage: PageRenderer.paperPreview(s, landscape: landscape))
+                            Image(uiImage: PageRenderer.paperPreview(s, size: previewSize))
                                 .resizable()
                                 .aspectRatio(contentMode: .fit)
-                                .frame(width: landscape ? 92 : 66, height: landscape ? 66 : 92)
+                                .frame(width: previewFrame.width, height: previewFrame.height)
                                 .overlay(RoundedRectangle(cornerRadius: 3)
                                     .stroke(style == s ? Color.accentColor : Color.gray.opacity(0.35), lineWidth: style == s ? 3 : 1))
                                 .shadow(color: .black.opacity(0.08), radius: 2, y: 1)
@@ -59,6 +74,11 @@ struct PaperPickerOverlay: View {
                 }
             }
             .animation(.easeInOut(duration: 0.15), value: landscape)
+            .animation(.easeInOut(duration: 0.15), value: sizeIndex)
+            Picker("大小", selection: $sizeIndex) {
+                ForEach(sizes.indices, id: \.self) { i in Text(sizes[i].title).tag(i) }
+            }
+            .pickerStyle(.segmented)
             Picker("方向", selection: $landscape) {
                 Label("直式", systemImage: "rectangle.portrait").tag(false)
                 Label("橫式", systemImage: "rectangle").tag(true)
@@ -68,7 +88,7 @@ struct PaperPickerOverlay: View {
                 Button("取消", action: onCancel)
                 Spacer()
                 Button(confirmTitle) {
-                    onConfirm(name.trimmingCharacters(in: .whitespacesAndNewlines), style, landscape)
+                    onConfirm(name.trimmingCharacters(in: .whitespacesAndNewlines), style, landscape, sizes[min(sizeIndex, sizes.count - 1)])
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -81,9 +101,8 @@ struct PaperPickerOverlay: View {
 }
 
 extension PageRenderer {
-    /// 紙張的縮圖（A4 比例，和真的頁面用同一套畫法）
-    static func paperPreview(_ style: PaperStyle, landscape: Bool) -> UIImage {
-        let page = landscape ? CGSize(width: 842, height: 595) : CGSize(width: 595, height: 842)
+    /// 紙張的縮圖（和真的頁面用同一套畫法）；size 是頁面大小（點）
+    static func paperPreview(_ style: PaperStyle, size page: CGSize) -> UIImage {
         // 整數大小，邊緣才不會有半透明的像素
         let size = CGSize(width: (page.width / 4).rounded(), height: (page.height / 4).rounded())
         let fmt = UIGraphicsImageRendererFormat()
@@ -107,11 +126,12 @@ extension NotebookViewController {
         var style: PaperStyle = .blank
         if case let .paper(_, _, s) = ref.background { style = s }
         let size = session.baseSize(of: ref)
+        let sizes = paperSizeOptions(like: ref)
         let picker = PaperPickerOverlay(title: title, confirmTitle: "新增", askName: false, style: style,
-                                        landscape: size.width > size.height,
-                                        onConfirm: { [weak self] _, s, l in
+                                        landscape: size.width > size.height, sizes: sizes.options, sizeIndex: sizes.selected,
+                                        onConfirm: { [weak self] _, s, l, paper in
                                             self?.dismiss(animated: true)
-                                            self?.insertPage(at: index, style: s, landscape: l)
+                                            self?.insertPage(at: index, style: s, landscape: l, size: paper)
                                         },
                                         onCancel: { [weak self] in self?.dismiss(animated: true) })
         let h = UIHostingController(rootView: picker)
@@ -121,14 +141,22 @@ extension NotebookViewController {
         present(h, animated: false)
     }
 
-    /// 在 index 插入一頁：大小和參考頁一樣，方向照選的（直式＝窄邊在上）
-    func insertPage(at index: Int, style: PaperStyle, landscape: Bool) {
+    /// 新增頁面可以選的大小：A4／B5／Letter；旁邊那頁（例如匯入的 PDF）不是這三種的話，最前面多一個「同第 N 頁」並預設選它
+    func paperSizeOptions(like ref: Page) -> (options: [PaperSize], selected: Int) {
+        let size = PaperSize.oriented(session.baseSize(of: ref), landscape: false)
+        if let i = PaperSize.presets.firstIndex(where: { abs($0.size.width - size.width) < 2 && abs($0.size.height - size.height) < 2 }) {
+            return (PaperSize.presets, i)
+        }
+        let n = (pageIndex(of: ref.id) ?? 0) + 1
+        return ([PaperSize(title: "同第 \(n) 頁", size: size)] + PaperSize.presets, 0)
+    }
+
+    /// 在 index 插入一頁：大小照選的（沒指定就和參考頁一樣），方向照選的（直式＝窄邊在上）
+    func insertPage(at index: Int, style: PaperStyle, landscape: Bool, size paper: PaperSize? = nil) {
         guard !pages.isEmpty else { return }
         let ref = pages[min(max(0, index - 1), pages.count - 1)]
-        let size = session.baseSize(of: ref)
-        let short = min(size.width, size.height), long = max(size.width, size.height)
-        let w = landscape ? long : short, h = landscape ? short : long
-        let newPage = Page(background: .paper(width: w, height: h, style: style))
+        let s = PaperSize.oriented(paper?.size ?? session.baseSize(of: ref), landscape: landscape)
+        let newPage = Page(background: .paper(width: s.width, height: s.height, style: style))
         let at = min(max(0, index), pages.count)
         performLayoutChange {
             session.document.pages.insert(newPage, at: at)

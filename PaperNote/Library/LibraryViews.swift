@@ -445,8 +445,8 @@ struct FolderView: View {
         // 畫面中間的小視窗（和新增頁面同一個）：點旁邊取消
         .fullScreenCover(isPresented: $showNewNotebook) {
             PaperPickerOverlay(title: "新增筆記本", confirmTitle: "建立", askName: true, style: .ruled, landscape: false,
-                               onConfirm: { title, paper, landscape in
-                                   let meta = store.createNotebook(title: title, folder: folderID, paper: paper, landscape: landscape)
+                               onConfirm: { title, paper, landscape, size in
+                                   let meta = store.createNotebook(title: title, folder: folderID, paper: paper, landscape: landscape, size: size)
                                    setNewNotebookShown(false)
                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { open(meta.id, nil) }
                                },

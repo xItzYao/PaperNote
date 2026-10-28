@@ -107,11 +107,38 @@ final class PageBoundsTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
         let host = try XCTUnwrap(picker)
         let n = editor.pages.count
-        host.rootView.onConfirm("", .dotted, true)
+        host.rootView.onConfirm("", .dotted, true, .a4)
         waitForPickerToClose()
         XCTAssertEqual(editor.pages.count, n + 1)
         XCTAssertEqual(editor.pages.last?.background, .paper(width: 842, height: 595, style: .dotted), "橫式＝寬邊在上")
         XCTAssertNil(picker, "選好就關掉")
+    }
+
+    func testChoosingAPaperSize() {
+        editor.insertPage(at: editor.pages.count, style: .ruled, landscape: false, size: .b5)
+        XCTAssertEqual(editor.pages.last?.background, .paper(width: 516, height: 729, style: .ruled), "B5 是 182 × 257 mm")
+        editor.insertPage(at: editor.pages.count, style: .grid, landscape: true, size: .letter)
+        XCTAssertEqual(editor.pages.last?.background, .paper(width: 792, height: 612, style: .grid), "Letter 橫式")
+    }
+
+    func testSizeOptionsDefaultToTheNeighbouringPage() {
+        // A4 的頁：選項就是 A4／B5／Letter，預設 A4
+        let a4 = editor.paperSizeOptions(like: editor.pages[0])
+        XCTAssertEqual(a4.options.map(\.title), ["A4", "B5", "Letter"])
+        XCTAssertEqual(a4.selected, 0)
+        // 不是常見大小的頁（像匯入的 PDF）：最前面多一個「同第 N 頁」，預設選它
+        editor.insertPage(at: 1, style: .blank, landscape: false, size: PaperSize(title: "x", size: CGSize(width: 700, height: 1000)))
+        let odd = editor.paperSizeOptions(like: editor.pages[1])
+        XCTAssertEqual(odd.options.first?.title, "同第 2 頁")
+        XCTAssertEqual(odd.options.first?.size, CGSize(width: 700, height: 1000))
+        XCTAssertEqual(odd.selected, 0)
+    }
+
+    func testNewNotebookUsesTheChosenSize() throws {
+        let meta = LibraryStore.shared.createNotebook(title: "SizeTest", folder: nil, paper: .dotted, landscape: true, size: .b5)
+        defer { LibraryStore.shared.deleteNotebook(meta.id) }
+        let s = try NotebookSession(id: meta.id)
+        XCTAssertEqual(s.document.pages.first?.background, .paper(width: 729, height: 516, style: .dotted))
     }
 
     func testAddingAPageBeforeThisPage() {
@@ -131,11 +158,12 @@ final class PageBoundsTests: XCTestCase {
             ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
             return (0..<(w * h)).filter { px[$0 * 4] < 250 || px[$0 * 4 + 2] < 250 }.count
         }
-        XCTAssertEqual(inkedPixels(PageRenderer.paperPreview(.blank, landscape: false)), 0, "空白紙沒有線")
+        let a4 = PaperSize.a4.size
+        XCTAssertEqual(inkedPixels(PageRenderer.paperPreview(.blank, size: a4)), 0, "空白紙沒有線")
         for s in [PaperStyle.ruled, .grid, .dotted] {
-            XCTAssertGreaterThan(inkedPixels(PageRenderer.paperPreview(s, landscape: false)), 0, "\(s.title) 的預覽要看得到紙上的線或點")
+            XCTAssertGreaterThan(inkedPixels(PageRenderer.paperPreview(s, size: a4)), 0, "\(s.title) 的預覽要看得到紙上的線或點")
         }
-        let land = PageRenderer.paperPreview(.ruled, landscape: true)
+        let land = PageRenderer.paperPreview(.ruled, size: PaperSize.oriented(a4, landscape: true))
         XCTAssertGreaterThan(land.size.width, land.size.height, "橫式預覽是橫的")
     }
 

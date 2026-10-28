@@ -129,7 +129,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         holdRecognizer.allowFinger = settings.fingerDrawing
         eraserTracker.isEnabled = tool == .eraser
         eraserTracker.allowFinger = settings.fingerDrawing
-        longPressGesture.isEnabled = tool == .select
+        longPressGesture.isEnabled = tool == .select || tool == .image
     }
 
     func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
@@ -344,6 +344,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
                 if case let (pi, ei)? = locate(hit), pages[pi].elements[ei].isTable { updateCellSelection(from: p, to: p) }
             }
         case .select:
+            if handleImageDeleteTap(at: p) { return }
             if let del = tableDeleteHandlePoint(), p.distance(to: del) < 20 / canvas.zoomScale, let s = selectedTable() {
                 deleteElement(s.ref)
                 showToast("已刪除表格（可以按復原）")
@@ -381,7 +382,12 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
                 updatePageResizeChrome()
             }
         case .image:
-            // 圖片工具：點圖片選起來（可以拖曳、拉右下角調整大小），點空白處取消
+            // 圖片工具：點圖片選起來（可以拖曳、拉右下角調整大小），點空白處取消；左上角的鎖頭、紅色叉叉也能點
+            if handleImageDeleteTap(at: p) { return }
+            if let ref = lockIconHit(at: p) {
+                toggleLock(ref)
+                return
+            }
             if let hit = hitElement(at: p), case let (pi, ei)? = locate(hit), case .image = pages[pi].elements[ei].content {
                 select(hit)
             } else {
@@ -457,7 +463,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
     }
 
     @objc func handleLongPress(_ g: UILongPressGestureRecognizer) {
-        guard g.state == .began, tool == .select else { return }
+        guard g.state == .began, tool == .select || tool == .image else { return }
         endTextEditing()
         let p = g.location(in: pagesContainer)
         if let hit = hitElement(at: p) {
@@ -799,6 +805,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         }
         items.append(UIMenu(options: .displayInline, children: [
             UIAction(title: "拷貝", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in self?.copyElement(ref) },
+            UIAction(title: "剪下", image: UIImage(systemName: "scissors")) { [weak self] _ in self?.cutElement(ref) },
             UIAction(title: "複製一份", image: UIImage(systemName: "plus.square.on.square")) { [weak self] _ in self?.duplicateElement(ref) },
             UIAction(title: "刪除", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in self?.deleteElement(ref) },
         ]))
@@ -852,6 +859,12 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             if let img = renderRegion(UIBezierPath(rect: docFrame(of: e, pageIndex: pi))) { pb.image = img }
         }
         clipboardElement = (e, pb.changeCount)
+    }
+
+    /// 剪下：拷貝到剪貼簿再刪掉（長按空白處可以貼上）
+    func cutElement(_ ref: ElementRef) {
+        copyElement(ref)
+        deleteElement(ref)
     }
 
     func duplicateElement(_ ref: ElementRef) {

@@ -27,6 +27,24 @@ enum PaperStyle: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// 紙張大小（直式：寬 × 高，單位是點，1 點 = 1/72 英吋）
+struct PaperSize: Equatable, Identifiable {
+    let title: String
+    let size: CGSize
+    var id: String { title }
+
+    static let a4 = PaperSize(title: "A4", size: CGSize(width: 595, height: 842))        // 210 × 297 mm
+    static let b5 = PaperSize(title: "B5", size: CGSize(width: 516, height: 729))        // 182 × 257 mm
+    static let letter = PaperSize(title: "Letter", size: CGSize(width: 612, height: 792)) // 8.5 × 11 in
+    static let presets = [a4, b5, letter]
+
+    /// size 的方向改成直式或橫式
+    static func oriented(_ size: CGSize, landscape: Bool) -> CGSize {
+        let short = min(size.width, size.height), long = max(size.width, size.height)
+        return landscape ? CGSize(width: long, height: short) : CGSize(width: short, height: long)
+    }
+}
+
 enum PageBackground: Codable, Equatable {
     case pdf(file: String, index: Int)
     case paper(width: CGFloat, height: CGFloat, style: PaperStyle)
