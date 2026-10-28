@@ -268,8 +268,7 @@ extension NotebookViewController {
             break
         }
         canvas.drawingPolicy = settings.fingerDrawing ? .anyInput : .pencilOnly
-        // 擴展頁面：最後一頁底下多留半個畫面，才拉得到下緣的控制點
-        canvas.contentInset.bottom = tool == .pageResize ? max(200, canvas.bounds.height * 0.5) : 0
+        canvas.contentInset.bottom = bottomInset
         // 只有開啟「用手指書寫」時，手指才用來截圖、選字、畫表格線、圈選；否則單指捲動
         let fingerUsedByTool = settings.fingerDrawing && (tool.drawsWithPan || customInkActive)
         canvas.panGestureRecognizer.minimumNumberOfTouches = fingerUsedByTool ? 2 : 1
@@ -322,6 +321,11 @@ extension NotebookViewController {
                 ruler.addAction(UIAction { [weak self] _ in self?.canvas.isRulerActive.toggle() }, for: .touchUpInside)
                 subBarStack.addArrangedSubview(ruler)
                 return
+            }
+            if tool == .highlighter {
+                // 螢光筆也可以像筆一樣選細、中、粗（再點一次或長按調整 pt）
+                subBarStack.addArrangedSubview(toolbarSeparator())
+                for v in penStyleControls(dash: false) { subBarStack.addArrangedSubview(v) }
             }
             let add = makeButton(symbol: "plus", title: nil, action: nil)
             add.accessibilityLabel = "新增常用筆刷"
@@ -537,7 +541,8 @@ extension NotebookViewController {
     // MARK: 筆的線條樣式
 
     /// 細、中、粗（不同粗細的橫線圖示）＋虛線：改的是目前選的這支筆。長按粗細圖示可以自訂 pt
-    func penStyleControls() -> [UIView] {
+    /// 細、中、粗（筆和螢光筆都有）；dash：筆才有虛線
+    func penStyleControls(dash withDash: Bool = true) -> [UIView] {
         let names = ["細", "中", "粗"]
         penWidthButtons = (0..<3).map { slot in
             let b = UIButton(configuration: .plain())
@@ -559,6 +564,11 @@ extension NotebookViewController {
             return b
         }
 
+        guard withDash else {
+            penDashButton = nil
+            refreshPenStyleControls()
+            return penWidthButtons
+        }
         let dash = UIButton(configuration: .plain())
         dash.accessibilityLabel = "虛線"
         dash.addAction(UIAction { [weak self] _ in

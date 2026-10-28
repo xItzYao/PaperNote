@@ -188,8 +188,9 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     let photoStrip = PhotoStripView()
     /// 拉過最後一頁底部時出現的＋
     let addPagePull = AddPagePullView()
-    /// UI 測試讀得到的除錯資訊（手指按下時卡住的手勢）
+    /// UI 測試讀得到的除錯資訊（手指按下時卡住的手勢、畫布捲到哪裡）
     var uiTestDump: UILabel?
+    var uiTestOffset: UILabel?
     /// PencilKit 開始書寫的時間（收尾後清掉）；下筆時還沒清掉就代表上一筆卡住了
     var pkUsingSince: CFTimeInterval?
     /// 筆身點兩下切到接線前的模式（再點兩下切回來）
@@ -316,7 +317,14 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             l.isAccessibilityElement = true
             view.addSubview(l)
             uiTestDump = l
+            let o = UILabel(frame: CGRect(x: 0, y: 2, width: 2, height: 2))
+            o.accessibilityIdentifier = "scrollOffset"
+            o.accessibilityLabel = "0"
+            o.isAccessibilityElement = true
+            view.addSubview(o)
+            uiTestOffset = o
         }
+        DebugLog.watchMainThread()
 
         computeLayout()
         isApplyingDrawing = true
@@ -522,12 +530,17 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         let size = CGSize(width: docSize.width * z, height: docSize.height * z)
         if canvas.contentSize != size { canvas.contentSize = size }
         let side = max(0, (canvas.bounds.width - size.width) / 2)
-        if canvas.contentInset.left != side || canvas.contentInset.right != side || canvas.contentInset.bottom != keyboardInset {
-            canvas.contentInset = UIEdgeInsets(top: 0, left: side, bottom: keyboardInset, right: side)
+        if canvas.contentInset.left != side || canvas.contentInset.right != side || canvas.contentInset.bottom != bottomInset {
+            canvas.contentInset = UIEdgeInsets(top: 0, left: side, bottom: bottomInset, right: side)
         }
         updateSelectionChrome()
         updatePageResizeChrome()
         updateVisiblePages()
+    }
+
+    /// 畫布底下的留白：鍵盤擋住的高度；擴展頁面時再多留半個畫面，才拉得到最後一頁下緣的控制點
+    var bottomInset: CGFloat {
+        keyboardInset + (tool == .pageResize ? max(200, canvas.bounds.height * 0.5) : 0)
     }
 
     /// 讓文件座標 p 出現在畫面左上角
@@ -588,6 +601,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     // MARK: - Scroll / zoom
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        uiTestOffset?.accessibilityLabel = "\(Int(scrollView.contentOffset.y))"
         updateVisiblePages()
         updatePageIndicator()
         updateAddPagePull()
@@ -608,10 +622,12 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     }
 
     func scrollViewWillBeginZooming(_ scrollView: UIScrollView, with view: UIView?) {
+        DebugLog.add("zoom begin")
         endTextEditing()
     }
 
     func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
+        DebugLog.add("zoom end x\(String(format: "%.2f", scale / max(fitZoom, 0.01)))")
         let s = elementContentScale
         for v in pageViews.values { v.updateContentScale(s) }
     }

@@ -12,6 +12,23 @@ enum DebugLog {
         if lines.count > 400 { lines.removeFirst(lines.count - 400) }
     }
 
+    private static var watchdog: Timer?
+    private static var lastTick = CACurrentMediaTime()
+
+    /// 主執行緒卡住（畫面停住）超過 150ms 就記下來：頁面捲不動、寫字卡一下時看是不是主執行緒在忙
+    static func watchMainThread() {
+        guard watchdog == nil else { return }
+        lastTick = CACurrentMediaTime()
+        let t = Timer(timeInterval: 0.05, repeats: true) { _ in
+            let now = CACurrentMediaTime()
+            let gap = now - lastTick
+            lastTick = now
+            if gap > 0.15 { add("main thread stalled \(Int(gap * 1000))ms") }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        watchdog = t
+    }
+
     static var text: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         let ink = EditorSettings.shared.customInk ? "開" : "關"

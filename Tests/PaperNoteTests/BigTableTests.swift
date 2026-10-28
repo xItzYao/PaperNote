@@ -233,6 +233,20 @@ final class BigTableEditorTests: XCTestCase {
         XCTAssertEqual(table?.rows, 2 + 14, "15 組改 14 組，少一組")
     }
 
+    /// 回報的需求：螢光筆也要像筆一樣可以調粗細
+    func testHighlighterHasWidthChoices() throws {
+        editor.setTool(.highlighter)
+        let saved = BrushStore.shared.current
+        defer { BrushStore.shared.update(saved) }
+        XCTAssertEqual(editor.penWidthButtons.count, 3, "螢光筆的工具列要有細、中、粗")
+        XCTAssertEqual(BrushStore.shared.current.style, .marker)
+        let widths = BrushStore.shared.styleWidths(.marker)
+        let slot = widths.indices.first { abs(widths[$0] - saved.width) > 0.01 } ?? 0
+        editor.penWidthButtons[slot].sendActions(for: .touchUpInside)
+        XCTAssertEqual(BrushStore.shared.current.width, widths[slot], accuracy: 0.01)
+        XCTAssertNil(editor.penDashButton, "螢光筆沒有虛線")
+    }
+
     func testPageResizeLeavesRoomBelowAndDoesNotAddPages() {
         editor.setTool(.pageResize)
         XCTAssertGreaterThan(editor.canvas.contentInset.bottom, 100, "最後一頁底下要能再往下拉，才擴展得到")
@@ -241,6 +255,9 @@ final class BigTableEditorTests: XCTestCase {
         c.contentOffset.y = maxY + NotebookViewController.addPagePullThreshold + 30
         editor.scrollViewDidScroll(c)
         XCTAssertTrue(editor.addPagePull.isHidden, "擴展頁面時不出現新增頁面的＋")
+        // 縮放也不能把底下的留白弄不見
+        editor.scrollViewDidZoom(c)
+        XCTAssertGreaterThan(editor.canvas.contentInset.bottom, 100, "縮放後最後一頁底下還是有留白")
         editor.setTool(.pen)
         XCTAssertEqual(editor.canvas.contentInset.bottom, 0)
     }
