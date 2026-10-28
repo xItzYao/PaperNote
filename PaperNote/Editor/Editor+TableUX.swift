@@ -56,25 +56,24 @@ extension NotebookViewController {
         updateTableDraftChrome()
     }
 
-    /// 橡皮擦沿著表格裡的格線擦過去（擦過那段線的大半）：合併線兩邊的格子。鎖定的表格不動
-    func eraseTableLines(_ path: [CGPoint]) {
-        guard path.count >= 2 else { return }
-        let pi = pageIndex(containing: path[0]) ?? nearestPageIndex(to: path[0])
-        guard pages.indices.contains(pi) else { return }
-        let tol = max(6 / canvas.zoomScale, eraserRadius)
-        let xs = path.map(\.x), ys = path.map(\.y)
-        let bounds = CGRect(x: xs.min()!, y: ys.min()!, width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!)
-        var merged = 0
-        for e in pages[pi].elements where !e.locked {
-            guard case let .table(t) = e.content else { continue }
-            let frame = docFrame(of: e, pageIndex: pi)
-            guard frame.insetBy(dx: -tol, dy: -tol).intersects(bounds) else { continue }
-            let ranges = t.erasedLines(path.map { CGPoint(x: $0.x - frame.minX, y: $0.y - frame.minY) }, tolerance: tol)
-            guard !ranges.isEmpty else { continue }
-            modifyTable(ElementRef(pageID: pages[pi].id, elementID: e.id)) { for r in ranges { $0.mergeCells(r) } }
-            merged += ranges.count
-        }
-        if merged > 0 { showToast(merged > 1 ? "擦掉格線：已合併 \(merged) 組格子" : "擦掉格線：已合併格子") }
+    /// 擦線：p 是到目前為止擦過的路徑（文件座標）。會被擦掉的線先變半透明
+    func previewTableErase(_ ref: ElementRef, points: [CGPoint]) {
+        guard case let (pi, ei)? = locate(ref), case let .table(t) = pages[pi].elements[ei].content else { return }
+        let o = docFrame(of: pages[pi].elements[ei], pageIndex: pi).origin
+        tableErasePreview = t.erasedLines(points.map { CGPoint(x: $0.x - o.x, y: $0.y - o.y) }, tolerance: 10 / canvas.zoomScale)
+        overlay.showFadedLines(tableErasePreview.map { (CGPoint(x: $0.from.x + o.x, y: $0.from.y + o.y), CGPoint(x: $0.to.x + o.x, y: $0.to.y + o.y)) },
+                               width: t.lineWidth + 3)
+    }
+
+    /// 擦線放開：擦掉預覽裡的線（合併兩邊的格子）
+    func finishTableErase(_ ref: ElementRef, points: [CGPoint]) {
+        previewTableErase(ref, points: points)
+        let ranges = tableErasePreview.map(\.range)
+        tableErasePreview = []
+        overlay.showFadedLines([], width: 0)
+        guard !ranges.isEmpty else { return }
+        modifyTable(ref) { for r in ranges { $0.mergeCells(r) } }
+        updateTableDraftChrome()
     }
 
     // MARK: - 欄、列標頭

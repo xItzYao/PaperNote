@@ -42,18 +42,8 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         eraserTracker.onPoint = { [weak self] p in
             self?.eraseHighlights(at: p)
             self?.eraseInk(at: p)
-            self?.eraserPath.append(p)
         }
-        eraserTracker.onBegan = { [weak self] _ in
-            self?.inkEraseUndoRegistered = []
-            self?.eraserPath = []
-        }
-        // 橡皮擦沿著表格的格線擦過去：放開時合併線兩邊的格子
-        eraserTracker.onEnded = { [weak self] in
-            guard let self else { return }
-            self.eraseTableLines(self.eraserPath)
-            self.eraserPath = []
-        }
+        eraserTracker.onBegan = { [weak self] _ in self?.inkEraseUndoRegistered = [] }
         canvas.addGestureRecognizer(eraserTracker)
 
         // 記住筆尖最後的位置（調色盤小圖示出現在這附近）
@@ -829,8 +819,9 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             }
             let anchor = TablePanelAnchor.doc(tableSelectionDocRect() ?? CGRect(origin: p, size: .zero))
             items += tableCellItems(anchor: anchor)
-            items.append(UIMenu(title: "列與欄", image: UIImage(systemName: "tablecells"), children: tableRowColItems(anchor: anchor)))
-            items.append(UIMenu(title: "樣式", image: UIImage(systemName: "paintbrush"), children: tableStyleItems()))
+            // 直接排在選單裡（不要選單裡再一層選單裡再一層）
+            items.append(UIMenu(options: .displayInline, children: tableRowColItems(anchor: anchor)))
+            items.append(UIMenu(options: .displayInline, children: tableStyleItems()))
         case .text:
             items.append(UIAction(title: "編輯文字", image: UIImage(systemName: "keyboard")) { [weak self] _ in
                 self?.beginTextEditing(ref, cell: nil)

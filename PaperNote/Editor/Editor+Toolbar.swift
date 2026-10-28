@@ -139,7 +139,13 @@ extension NotebookViewController {
             done(self?.makeSettingsMenuItems() ?? [])
         }])
         settingsButton.showsMenuAsPrimaryAction = true
-        let right = UIStackView(arrangedSubviews: [undo, redo, favoriteButton, favList, overview, pageMenu, settingsButton])
+        let export = makeButton(symbol: "square.and.arrow.up", title: nil, action: nil)
+        export.accessibilityLabel = "匯出"
+        export.addAction(UIAction { [weak self, weak export] _ in
+            guard let self, let export else { return }
+            self.presentExportChoice(from: export)
+        }, for: .touchUpInside)
+        let right = UIStackView(arrangedSubviews: [undo, redo, favoriteButton, favList, overview, pageMenu, export, settingsButton])
         right.spacing = 2
 
         for s in [left, center, right] {
@@ -223,6 +229,7 @@ extension NotebookViewController {
             tableDraft = nil
             tableDraftStart = nil
             tableDrawTarget = nil
+            tableEraseLines = false
             resizeDrag = nil
             clearLassoSelection()
             circuitSel = nil
@@ -433,7 +440,17 @@ extension NotebookViewController {
 
         case .tableDraw:
             if tableDrawTarget != nil {
-                // 在既有表格上畫線
+                // 在既有表格上畫線：畫線（切開、斜線、加列欄）或擦線（合併）
+                let mode = UISegmentedControl(items: [UIImage(systemName: "pencil")!, UIImage(systemName: "eraser")!])
+                mode.setTitle(nil, forSegmentAt: 0)
+                mode.selectedSegmentIndex = tableEraseLines ? 1 : 0
+                mode.accessibilityLabel = "畫線或擦線"
+                mode.addAction(UIAction { [weak self, weak mode] _ in
+                    guard let self, let mode else { return }
+                    self.tableEraseLines = mode.selectedSegmentIndex == 1
+                    self.showToast(self.tableEraseLines ? "擦線：沿著格線擦，放開就合併兩邊的格子" : "畫線：切開格子、畫斜線、在表格旁邊加列欄")
+                }, for: .valueChanged)
+                subBarStack.addArrangedSubview(mode)
                 let done = makeButton(symbol: "checkmark.circle.fill", title: "完成", action: nil)
                 done.configuration?.baseForegroundColor = .systemBlue
                 done.addAction(UIAction { [weak self] _ in self?.finishTableEditDraw() }, for: .touchUpInside)
@@ -892,26 +909,28 @@ extension NotebookViewController {
                 s.smartHighlight.toggle()
             },
         ])
+        // 最下面：使用說明、關於我
         let help = UIMenu(options: .displayInline, children: [
             UIAction(title: "使用說明…", image: UIImage(systemName: "questionmark.circle")) { [weak self] _ in
                 guard let self else { return }
                 self.presentHelp(from: self.settingsButton)
+            },
+            UIAction(title: "關於我…", image: UIImage(systemName: "person.crop.circle")) { [weak self] _ in
+                let about = UIHostingController(rootView: AboutView())
+                about.modalPresentationStyle = .formSheet
+                self?.present(about, animated: true)
             },
         ])
         let actions = UIMenu(options: .displayInline, children: [
             UIAction(title: "管理常用筆刷…", image: UIImage(systemName: "swatchpalette")) { [weak self] _ in
                 self?.presentBrushManager()
             },
-            UIAction(title: "匯出…", image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
-                guard let self else { return }
-                self.presentExportChoice(from: self.settingsButton)
-            },
             UIAction(title: "清除畫面上所有貼圖", image: UIImage(systemName: "pin.slash"), attributes: .destructive) { [weak self] _ in
                 PinStore.shared.removeAll()
                 self?.pinOverlay.reload()
             },
         ])
-        return [help, toggles, actions]
+        return [toggles, actions, help]
     }
 
     // MARK: - Favorites

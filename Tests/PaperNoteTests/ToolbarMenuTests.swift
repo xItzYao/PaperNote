@@ -41,8 +41,36 @@ final class ToolbarMenuTests: XCTestCase {
     }
 
     func testHelpLivesInTheMoreMenu() {
-        XCTAssertTrue(titles(editor.makeSettingsMenuItems()).contains("使用說明…"), "「⋯」裡要有使用說明")
+        let t = titles(editor.makeSettingsMenuItems())
+        XCTAssertTrue(t.contains("使用說明…"), "「⋯」裡要有使用說明")
+        XCTAssertEqual(t.last, "關於我…", "關於我在「⋯」最下面")
+        XCTAssertFalse(t.contains("匯出…"), "匯出不在「⋯」裡")
         XCTAssertFalse(allButtons(editor.topBar).contains { $0.accessibilityLabel == "說明" }, "工具列不再放說明按鈕")
+        let buttons = allButtons(editor.topBar)
+        let export = buttons.firstIndex { $0.accessibilityLabel == "匯出" }
+        let more = buttons.firstIndex { $0 === editor.settingsButton }
+        XCTAssertNotNil(export, "匯出是「⋯」旁邊的一個按鈕")
+        if let export, let more { XCTAssertEqual(export + 1, more, "匯出在「⋯」左邊") }
+    }
+
+    /// 選單最多兩層（選單 → 子選單），不要再往下一層
+    private func depth(_ e: UIMenuElement) -> Int {
+        guard let m = e as? UIMenu else { return 0 }
+        let inner = m.children.map(depth).max() ?? 0
+        return m.options.contains(.displayInline) ? inner : 1 + inner
+    }
+
+    func testMenusAreAtMostTwoLevels() throws {
+        XCTAssertLessThanOrEqual(editor.makeSettingsMenuItems().map(depth).max() ?? 0, 1, "「⋯」選單")
+        XCTAssertLessThanOrEqual(editor.makePageMenuItems().map(depth).max() ?? 0, 1, "頁面選單")
+        let t = TableData.make(rows: 2, cols: 2)
+        let o = editor.contentOrigin(0)
+        let ref = try XCTUnwrap(editor.insertElement(.table(t), size: t.size, at: CGPoint(x: o.x + 200, y: o.y + 200)))
+        let cell = CGPoint(x: o.x + 200, y: o.y + 200)
+        XCTAssertLessThanOrEqual(editor.elementMenu(ref, at: cell).children.map(depth).max() ?? 0, 1, "長按表格格子的選單")
+        let anchor = TablePanelAnchor.doc(CGRect(origin: cell, size: .zero))
+        XCTAssertLessThanOrEqual((editor.tableRowColItems(anchor: anchor) + editor.tableCellItems(anchor: anchor) + editor.tableStyleItems()).map(depth).max() ?? 0, 1,
+                                 "表格工具列按鈕的選單")
     }
 
     func testPageMenuHasNoDuplicates() {

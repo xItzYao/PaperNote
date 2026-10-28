@@ -154,6 +154,25 @@ extension NotebookViewController {
 
 extension NotebookViewController {
     func handleTableDrawPan(_ g: UIPanGestureRecognizer, _ p: CGPoint) {
+        if let target = tableDrawTarget, tableEraseLines {
+            // 擦線：沿著格線擦，會擦掉的線先變半透明，放開才合併
+            switch g.state {
+            case .began:
+                tableDrawPoints = [p]
+            case .changed:
+                tableDrawPoints.append(p)
+                previewTableErase(target, points: tableDrawPoints)
+            case .ended:
+                tableDrawPoints.append(p)
+                finishTableErase(target, points: tableDrawPoints)
+                tableDrawPoints = []
+            default:
+                tableDrawPoints = []
+                tableErasePreview = []
+                overlay.showFadedLines([], width: 0)
+            }
+            return
+        }
         if let target = tableDrawTarget {
             switch g.state {
             case .began:

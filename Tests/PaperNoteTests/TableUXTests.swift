@@ -53,7 +53,10 @@ final class TableGestureTests: XCTestCase {
     func testErasingAlongALineMergesTheCells() {
         // 沿著 A1、B1 中間的直線從上擦到下
         let pts = stride(from: CGFloat(2), through: 38, by: 3).map { CGPoint(x: 100 + sin($0) * 3, y: $0) }
-        XCTAssertEqual(t.erasedLines(pts, tolerance: 8), [CellRange((0, 0), (0, 1))])
+        let lines = t.erasedLines(pts, tolerance: 8)
+        XCTAssertEqual(lines.map(\.range), [CellRange((0, 0), (0, 1))])
+        XCTAssertEqual(lines.first?.from, CGPoint(x: 100, y: 0), "預覽畫的是整段線")
+        XCTAssertEqual(lines.first?.to, CGPoint(x: 100, y: 40))
     }
 
     func testErasingAcrossALineDoesNotMerge() {
@@ -69,7 +72,7 @@ final class TableGestureTests: XCTestCase {
 
     func testErasingAHorizontalLineAcrossTwoCells() {
         let pts = [CGPoint(x: 4, y: 41), CGPoint(x: 196, y: 39)]
-        XCTAssertEqual(Set(t.erasedLines(pts, tolerance: 8).map { "\($0.r0)\($0.c0)\($0.r1)\($0.c1)" }), ["0010", "0111"],
+        XCTAssertEqual(Set(t.erasedLines(pts, tolerance: 8).map { "\($0.range.r0)\($0.range.c0)\($0.range.r1)\($0.range.c1)" }), ["0010", "0111"],
                        "擦掉第 1、2 列中間的橫線（A、B 兩欄）")
     }
 
@@ -159,20 +162,47 @@ final class TableEditorUXTests: XCTestCase {
         XCTAssertEqual(after.y, before.y, accuracy: 0.5, "原本的格子留在原地，新的一列長在上面")
     }
 
-    func testEraserMergesInTheEditorButNotOnALockedTable() {
-        let o = origin
-        let path = stride(from: CGFloat(2), through: 38, by: 3).map { CGPoint(x: o.x + 200, y: o.y + $0) }
+    /// 回報的需求：表格工具裡的「擦線」，會被擦掉的線先變半透明，放開才合併
+    func testEraseModeFadesTheLineThenMerges() {
+        final class FakePan: UIPanGestureRecognizer {
+            var fake: UIGestureRecognizer.State = .possible
+            override var state: UIGestureRecognizer.State {
+                get { fake }
+                set { fake = newValue }
+            }
+        }
+        editor.setTool(.tableDraw)
+        editor.tableDrawTarget = ref
+        editor.tableEraseLines = true
+        let o = origin(of: ref)
+        let pts = stride(from: CGFloat(2), through: 38, by: 3).map { CGPoint(x: o.x + 200, y: o.y + $0) }
+        let g = FakePan(target: nil, action: nil)
+        for (i, p) in pts.enumerated() where i < pts.count - 1 {
+            g.fake = i == 0 ? .began : .changed
+            editor.handleTableDrawPan(g, p)
+        }
+        XCTAssertEqual(editor.tableErasePreview.map(\.range), [CellRange((0, 1), (0, 2))], "擦到的線先變半透明（還沒合併）")
+        XCTAssertEqual(tableAt(ref).span(0, 1).colSpan, 1)
+        g.fake = .ended
+        editor.handleTableDrawPan(g, pts[pts.count - 1])
+        XCTAssertEqual(tableAt(ref).span(0, 1).colSpan, 2, "放開就合併")
+        XCTAssertTrue(editor.tableErasePreview.isEmpty)
+    }
+
+    func testEraserToolDoesNotTouchTables() {
+        // 真的橡皮擦只擦筆跡，不會動表格
         editor.setTool(.eraser)
-        editor.eraseTableLines(path)
-        editor.setTool(.select)
-        editor.select(ref)
-        XCTAssertEqual(table.span(0, 1).colSpan, 2, "橡皮擦沿著 B1、C1 中間的線擦＝合併")
-        editor.modifyElement(ref) { $0.locked = true }
-        editor.setTool(.eraser)
-        editor.eraseTableLines(path.map { CGPoint(x: $0.x - 100, y: $0.y + 40) })
-        editor.setTool(.select)
-        editor.select(ref)
-        XCTAssertEqual(table.span(1, 0).colSpan, 1, "鎖定的表格擦了也不合併")
+        XCTAssertNil(editor.eraserTracker.onEnded)
+    }
+
+    private func tableAt(_ r: ElementRef) -> TableData {
+        guard case let (pi, ei)? = editor.locate(r), case let .table(t) = editor.pages[pi].elements[ei].content else { return .make(rows: 1, cols: 1) }
+        return t
+    }
+
+    private func origin(of r: ElementRef) -> CGPoint {
+        guard case let (pi, ei)? = editor.locate(r) else { return .zero }
+        return editor.docFrame(of: editor.pages[pi].elements[ei], pageIndex: pi).origin
     }
 
     // MARK: 標頭

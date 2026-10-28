@@ -608,6 +608,24 @@ final class OverlayView: UIView {
         CATransaction.commit()
     }
 
+    /// 擦線時會被擦掉的格線：蓋一層半透明白色，看起來變淡
+    private let fadedLinesLayer = CAShapeLayer()
+
+    func showFadedLines(_ segments: [(CGPoint, CGPoint)], width: CGFloat) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        install(fadedLinesLayer, fill: nil, stroke: UIColor.white.withAlphaComponent(0.7))
+        fadedLinesLayer.lineCap = .butt
+        fadedLinesLayer.lineWidth = width
+        let path = UIBezierPath()
+        for (a, b) in segments {
+            path.move(to: a)
+            path.addLine(to: b)
+        }
+        fadedLinesLayer.path = segments.isEmpty ? nil : path.cgPath
+        CATransaction.commit()
+    }
+
     /// 表格內選取的儲存格範圍
     func showCellSelection(_ rect: CGRect?) {
         CATransaction.begin()

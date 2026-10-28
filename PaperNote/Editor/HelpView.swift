@@ -54,7 +54,7 @@ struct HelpView: View {
                 }
                 Section("表格（選取表格後第二列會出現表格工具）") {
                     row(Item(symbol: "hand.tap", title: "不用找按鈕", detail: "點兩下格子打字；點表格上方、左邊的標頭選整欄整列（拖曳選好幾欄），長按標頭插入、刪除、平均分配、鎖定；長按格子合併、分割、底色。拖選取範圍右下角的藍點往下或往右重複，做大表格。"))
-                    row(Item(symbol: "pencil.and.outline", title: "用筆改表格", detail: "按「手繪格線」後：在格子裡畫線切開、畫斜線；在格線上來回塗掉＝合併兩邊的格子（用橡皮擦沿著格線擦也可以，不用切到手繪格線）；在表格外面靠近邊的地方畫一條線＝在那裡加一列或一欄。"))
+                    row(Item(symbol: "pencil.and.outline", title: "用筆改表格", detail: "按「手繪格線」後：在格子裡畫線切開、畫斜線；在格線上來回塗掉、或切到「擦線」沿著格線擦（會擦掉的線先變淡）＝合併兩邊的格子；在表格外面靠近邊的地方畫一條線＝在那裡加一列或一欄。"))
                     ForEach(table) { row($0) }
                 }
                 Section("其他") {
@@ -63,7 +63,8 @@ struct HelpView: View {
                     row(Item(symbol: "square.grid.2x2", title: "全部頁面", detail: "用縮圖看整本筆記，點一下跳到那頁。長按拖曳可以調整頁面順序；按「選取」可以一次複製或刪除多頁；上方切到「我的最愛」只看收藏的頁面。"))
                     row(Item(symbol: "doc.on.doc", title: "頁面", detail: "在這頁前後新增頁面（可以選紙張、大小、方向）、刪除頁面；刪除的頁面 30 天內可以在「最近刪除的頁面」還原。捲到最後一頁再往上拉也可以新增頁面。"))
                     row(Item(symbol: "hand.raised", title: "手掌防誤觸", detail: "在「⋯」選擇右手或左手寫字。寫字時與剛寫完的一瞬間，手掌壓在筆尖附近（右手：右下方；左手：左下方）不會捲動、縮放或點到東西；放下筆後手指馬上就能正常操作。"))
-                    row(Item(symbol: "ellipsis.circle", title: "設定", detail: "使用說明（就是這裡）、調色盤圖示、手掌防誤觸、筆刷列靠右、手指書寫、橡皮擦自動切回筆、停住變直線、螢光筆對齊文字、管理常用筆刷、匯出（PDF，或可以繼續編輯的 PaperNote 檔）。"))
+                    row(Item(symbol: "ellipsis.circle", title: "設定", detail: "調色盤圖示、手掌防誤觸、筆刷列靠右、手指書寫、橡皮擦自動切回筆、停住變直線、螢光筆對齊文字、管理常用筆刷；最下面是使用說明（就是這裡）和關於我。"))
+                    row(Item(symbol: "square.and.arrow.up", title: "匯出", detail: "「⋯」左邊的按鈕：匯出 PDF，或可以繼續編輯的 PaperNote 檔。"))
                 }
                 Section("關於我") {
                     Text("一個大學生做的 iPad 筆記軟體，原始碼公開在 GitHub。")

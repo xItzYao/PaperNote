@@ -660,6 +660,13 @@ extension TableData {
     }
 }
 
+/// 擦線擦到的一段格線：要合併的兩格＋線的兩端（表格座標，畫半透明預覽用）
+struct ErasedLine: Equatable {
+    var range: CellRange
+    var from: CGPoint
+    var to: CGPoint
+}
+
 // MARK: - 手繪格線的手勢（不用找按鈕）
 
 /// 在表格上畫的一筆代表什麼
@@ -683,9 +690,9 @@ extension TableData {
         return outsideLine(pts)
     }
 
-    /// 橡皮擦沿著格線擦（離線 tolerance 以內、擦過那段線的 coverage 以上）：回傳要合併的格子。
-    /// 只是穿過格線（擦格子裡的字時常常會）不算
-    func erasedLines(_ pts: [CGPoint], tolerance tol: CGFloat, coverage: CGFloat = 0.6) -> [CellRange] {
+    /// 表格「擦線」：沿著格線擦（離線 tolerance 以內、擦過那段線的 coverage 以上）的那幾段線。
+    /// 只是穿過格線不算
+    func erasedLines(_ pts: [CGPoint], tolerance tol: CGFloat, coverage: CGFloat = 0.5) -> [ErasedLine] {
         guard pts.count >= 2, rows > 0, cols > 0 else { return [] }
         // 補成每 2pt 一點，才算得出沿著線擦了多長
         var dense: [CGPoint] = []
@@ -697,14 +704,18 @@ extension TableData {
             }
         }
         dense.append(pts[pts.count - 1])
-        var out: [CellRange] = []
-        func add(_ r: CellRange) { if !out.contains(r) { out.append(r) } }
+        var out: [ErasedLine] = []
+        func add(_ r: CellRange, _ a: CGPoint, _ b: CGPoint) {
+            if !out.contains(where: { $0.range == r }) { out.append(ErasedLine(range: r, from: a, to: b)) }
+        }
         for c in 1..<max(cols, 1) {
             let x = colX(c)
             for r in 0..<rows where isColLineVisible(c, atRow: r) {
                 let y0 = rowY(r), y1 = rowY(r + 1)
                 let ys = dense.filter { abs($0.x - x) <= tol && $0.y >= y0 && $0.y <= y1 }.map(\.y)
-                if let lo = ys.min(), let hi = ys.max(), hi - lo >= (y1 - y0) * coverage { add(CellRange(anchor(r, c - 1), anchor(r, c))) }
+                if let lo = ys.min(), let hi = ys.max(), hi - lo >= (y1 - y0) * coverage {
+                    add(CellRange(anchor(r, c - 1), anchor(r, c)), CGPoint(x: x, y: y0), CGPoint(x: x, y: y1))
+                }
             }
         }
         for r in 1..<max(rows, 1) {
@@ -712,7 +723,9 @@ extension TableData {
             for c in 0..<cols where isRowLineVisible(r, atColumn: c) {
                 let x0 = colX(c), x1 = colX(c + 1)
                 let xs = dense.filter { abs($0.y - y) <= tol && $0.x >= x0 && $0.x <= x1 }.map(\.x)
-                if let lo = xs.min(), let hi = xs.max(), hi - lo >= (x1 - x0) * coverage { add(CellRange(anchor(r - 1, c), anchor(r, c))) }
+                if let lo = xs.min(), let hi = xs.max(), hi - lo >= (x1 - x0) * coverage {
+                    add(CellRange(anchor(r - 1, c), anchor(r, c)), CGPoint(x: x0, y: y), CGPoint(x: x1, y: y))
+                }
             }
         }
         return out
