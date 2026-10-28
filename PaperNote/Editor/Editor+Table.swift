@@ -310,6 +310,14 @@ extension NotebookViewController {
                 showToast("橫線要至少橫跨一格的一半")
                 return
             }
+            // 畫在原本被合併蓋住的格線上：把那條線接回去，不是再切一條新的
+            if let line = t.nearestRowLine(to: y, within: 12) {
+                var test = t
+                if test.restoreRowLine(line, columns: cols) {
+                    modifyTable(ref) { _ = $0.restoreRowLine(line, columns: cols) }
+                    return
+                }
+            }
             modifyTable(ref) { $0.splitRow(row, at: y - t.rowY(row), columns: cols) }
         } else {
             let x = (la.x + lb.x) / 2
@@ -325,6 +333,13 @@ extension NotebookViewController {
             guard !rows.isEmpty else {
                 showToast("直線要至少縱跨一格的一半")
                 return
+            }
+            if let line = t.nearestColLine(to: x, within: 12) {
+                var test = t
+                if test.restoreColLine(line, rows: rows) {
+                    modifyTable(ref) { _ = $0.restoreColLine(line, rows: rows) }
+                    return
+                }
             }
             modifyTable(ref) { $0.splitColumn(col, at: x - t.colX(col), rows: rows) }
         }

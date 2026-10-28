@@ -56,6 +56,13 @@ extension NotebookViewController {
         updateTableDraftChrome()
     }
 
+    /// 手繪格線模式：畫線 ↔ 擦線（工具列的切換和 Pencil 筆身點兩下都用這個）
+    func toggleTableEraseLines() {
+        tableEraseLines.toggle()
+        rebuildSubBar()
+        showToast(tableEraseLines ? "擦線：沿著格線擦，放開就合併兩邊的格子" : "畫線：切開格子、畫斜線、在表格旁邊加列欄")
+    }
+
     /// 擦線：p 是到目前為止擦過的路徑（文件座標）。會被擦掉的線先變半透明
     func previewTableErase(_ ref: ElementRef, points: [CGPoint]) {
         guard case let (pi, ei)? = locate(ref), case let .table(t) = pages[pi].elements[ei].content else { return }

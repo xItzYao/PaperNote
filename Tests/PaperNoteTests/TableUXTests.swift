@@ -76,6 +76,28 @@ final class TableGestureTests: XCTestCase {
                        "擦掉第 1、2 列中間的橫線（A、B 兩欄）")
     }
 
+    // MARK: 合併後把原本的線畫回去
+
+    func testRedrawingALineInsideAVerticalMergeRestoresIt() {
+        var m = t
+        m.mergeCells(CellRange((0, 0), (1, 0)))
+        XCTAssertEqual(m.nearestRowLine(to: 43, within: 12), 1)
+        XCTAssertTrue(m.restoreRowLine(1, columns: [0]))
+        XCTAssertNil(m.merge(at: 0, 0), "畫回去之後又是兩格")
+        XCTAssertFalse(m.restoreRowLine(1, columns: [0]), "線本來就看得到：不算接回去")
+    }
+
+    func testRedrawingALineThroughABlockSplitsItIntoTwoMerges() {
+        var m = t
+        m.mergeCells(CellRange((0, 0), (1, 1)))
+        XCTAssertTrue(m.restoreRowLine(1, columns: [0, 1]))
+        XCTAssertEqual(m.span(0, 0), CellMerge(row: 0, col: 0, rowSpan: 1, colSpan: 2), "上半塊還是兩格合併")
+        XCTAssertEqual(m.span(1, 0), CellMerge(row: 1, col: 0, rowSpan: 1, colSpan: 2), "下半塊也是")
+        XCTAssertTrue(m.restoreColLine(1, rows: [0]))
+        XCTAssertNil(m.merge(at: 0, 0), "再畫直線：上面那塊也拆開")
+        XCTAssertEqual(m.span(1, 0).colSpan, 2, "下面那塊沒畫到，維持合併")
+    }
+
     func testTemplatesHaveHeaders() {
         let tt = TableTemplate.timetable.table
         XCTAssertEqual(tt.cols, 6)
@@ -187,6 +209,30 @@ final class TableEditorUXTests: XCTestCase {
         editor.handleTableDrawPan(g, pts[pts.count - 1])
         XCTAssertEqual(tableAt(ref).span(0, 1).colSpan, 2, "放開就合併")
         XCTAssertTrue(editor.tableErasePreview.isEmpty)
+    }
+
+    /// 回報的問題：合併後要把原本的線畫回去，會說太靠近原有的格線
+    func testDrawingTheOldLineInAMergedCellRestoresIt() {
+        editor.modifyTable(ref) { $0.mergeCells(CellRange((0, 0), (1, 0))) }
+        let o = origin(of: ref)
+        editor.applyTableStroke(ref, points: [CGPoint(x: o.x + 8, y: o.y + 42), CGPoint(x: o.x + 50, y: o.y + 41), CGPoint(x: o.x + 92, y: o.y + 39)])
+        XCTAssertNil(tableAt(ref).merge(at: 0, 0), "沿著原本的線畫：接回去")
+        XCTAssertEqual(tableAt(ref).rows, 3, "不是多切一列")
+    }
+
+    /// 回報的需求：編輯表格時 Pencil 筆身點兩下切換「擦線」，不要切到橡皮擦
+    func testPencilDoubleTapTogglesEraseLines() throws {
+        try XCTSkipIf(UIPencilInteraction.preferredTapAction == .ignore, "系統設定成點兩下不做事")
+        editor.setTool(.tableDraw)
+        editor.tableDrawTarget = ref
+        editor.rebuildSubBar()
+        editor.handlePencilDoubleTap()
+        XCTAssertEqual(editor.tool, .tableDraw, "不要切到橡皮擦")
+        XCTAssertTrue(editor.tableEraseLines, "切到擦線")
+        let toggle = editor.subBarStack.arrangedSubviews.compactMap { $0 as? UISegmentedControl }.first
+        XCTAssertEqual(toggle?.selectedSegmentIndex, 1, "工具列的切換也跟著變")
+        editor.handlePencilDoubleTap()
+        XCTAssertFalse(editor.tableEraseLines, "再點兩下切回畫線")
     }
 
     func testEraserToolDoesNotTouchTables() {

@@ -446,9 +446,8 @@ extension NotebookViewController {
                 mode.selectedSegmentIndex = tableEraseLines ? 1 : 0
                 mode.accessibilityLabel = "畫線或擦線"
                 mode.addAction(UIAction { [weak self, weak mode] _ in
-                    guard let self, let mode else { return }
-                    self.tableEraseLines = mode.selectedSegmentIndex == 1
-                    self.showToast(self.tableEraseLines ? "擦線：沿著格線擦，放開就合併兩邊的格子" : "畫線：切開格子、畫斜線、在表格旁邊加列欄")
+                    guard let self, let mode, (mode.selectedSegmentIndex == 1) != self.tableEraseLines else { return }
+                    self.toggleTableEraseLines()
                 }, for: .valueChanged)
                 subBarStack.addArrangedSubview(mode)
                 let done = makeButton(symbol: "checkmark.circle.fill", title: "完成", action: nil)

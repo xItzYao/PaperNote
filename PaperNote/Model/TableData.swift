@@ -472,6 +472,48 @@ struct TableData: Codable, Equatable {
         normalizeCells()
     }
 
+    // MARK: 把合併蓋住的格線接回去
+
+    /// 最靠近 y 的內部橫線（第 r 條，1..<rows），within 以內才算
+    func nearestRowLine(to y: CGFloat, within: CGFloat) -> Int? {
+        (1..<max(rows, 1)).filter { abs(rowY($0) - y) <= within }.min { abs(rowY($0) - y) < abs(rowY($1) - y) }
+    }
+
+    func nearestColLine(to x: CGFloat, within: CGFloat) -> Int? {
+        (1..<max(cols, 1)).filter { abs(colX($0) - x) <= within }.min { abs(colX($0) - x) < abs(colX($1) - x) }
+    }
+
+    /// 在合併格上沿著原本的第 r 條橫線畫線：跨過這條線的合併格從這裡拆成上下兩塊（文字留在上面那塊）。
+    /// columns：畫到的那幾欄。有接回去回傳 true；線本來就看得到回傳 false
+    mutating func restoreRowLine(_ r: Int, columns: Set<Int>) -> Bool {
+        guard r > 0, r < rows else { return false }
+        var changed = false
+        for c in columns.sorted() where !isRowLineVisible(r, atColumn: c) {
+            guard let i = merges.firstIndex(where: { $0.contains(r - 1, c) && $0.contains(r, c) }) else { continue }
+            let m = merges.remove(at: i)
+            let top = CellMerge(row: m.row, col: m.col, rowSpan: r - m.row, colSpan: m.colSpan)
+            let bottom = CellMerge(row: r, col: m.col, rowSpan: m.row + m.rowSpan - r, colSpan: m.colSpan)
+            for x in [top, bottom] where x.rowSpan * x.colSpan > 1 { merges.append(x) }
+            changed = true
+        }
+        return changed
+    }
+
+    /// 同上，直線：跨過第 c 條直線的合併格拆成左右兩塊
+    mutating func restoreColLine(_ c: Int, rows rowSet: Set<Int>) -> Bool {
+        guard c > 0, c < cols else { return false }
+        var changed = false
+        for r in rowSet.sorted() where !isColLineVisible(c, atRow: r) {
+            guard let i = merges.firstIndex(where: { $0.contains(r, c - 1) && $0.contains(r, c) }) else { continue }
+            let m = merges.remove(at: i)
+            let left = CellMerge(row: m.row, col: m.col, rowSpan: m.rowSpan, colSpan: c - m.col)
+            let right = CellMerge(row: m.row, col: c, rowSpan: m.rowSpan, colSpan: m.col + m.colSpan - c)
+            for x in [left, right] where x.rowSpan * x.colSpan > 1 { merges.append(x) }
+            changed = true
+        }
+        return changed
+    }
+
     /// 把一格（或合併格）平分成左右兩格
     mutating func splitCellHorizontally(_ r: Int, _ c: Int) {
         let m = span(r, c)
