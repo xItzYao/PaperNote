@@ -58,6 +58,26 @@ final class DrawnElementView: UIView {
     override func draw(_ rect: CGRect) {
         ElementRenderer.draw(element, in: bounds, session: session)
     }
+
+    /// 要用的解析度（螢幕倍率 × 縮放）。系統把 view 放回視窗時（例如切分頁再切回來）會把 contentScaleFactor
+    /// 改回螢幕預設值，放大時就會變模糊；放回視窗時改回這個值
+    private(set) var renderScale: CGFloat?
+
+    func setRenderScale(_ scale: CGFloat) {
+        renderScale = scale
+        applyRenderScale()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        applyRenderScale()
+    }
+
+    private func applyRenderScale() {
+        guard let s = renderScale, abs(contentScaleFactor - s) > 0.01 else { return }
+        contentScaleFactor = s
+        setNeedsDisplay()
+    }
 }
 
 /// 一個頁面：背景＋物件層。所有手勢都在畫布上處理，這裡不接收觸控。
@@ -150,12 +170,7 @@ final class PageContainerView: UIView {
     }
 
     func updateContentScale(_ scale: CGFloat) {
-        for v in elementViews.values {
-            if let dv = v as? DrawnElementView, abs(dv.contentScaleFactor - scale) > 0.01 {
-                dv.contentScaleFactor = scale
-                dv.setNeedsDisplay()
-            }
-        }
+        for v in elementViews.values { (v as? DrawnElementView)?.setRenderScale(scale) }
     }
 }
 
