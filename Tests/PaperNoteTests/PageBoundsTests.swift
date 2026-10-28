@@ -68,6 +68,12 @@ final class PageBoundsTests: XCTestCase {
         editor.presentedViewController as? UIHostingController<PaperPickerOverlay>
     }
 
+    /// 等小視窗關掉（淡出動畫）
+    private func waitForPickerToClose() {
+        let deadline = Date().addingTimeInterval(2)
+        while picker != nil && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+    }
+
     func testPullingPastTheEndOpensThePaperPicker() throws {
         pull(by: NotebookViewController.addPagePullThreshold + 20)
         XCTAssertFalse(editor.addPagePull.isHidden, "拉過頭要出現＋")
@@ -82,8 +88,8 @@ final class PageBoundsTests: XCTestCase {
         // 點旁邊取消：不會加頁
         let n = editor.pages.count
         host.rootView.onCancel()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
-        XCTAssertNil(picker)
+        waitForPickerToClose()
+        XCTAssertNil(picker, "點旁邊要關掉小視窗")
         XCTAssertEqual(editor.pages.count, n)
     }
 
@@ -102,7 +108,7 @@ final class PageBoundsTests: XCTestCase {
         let host = try XCTUnwrap(picker)
         let n = editor.pages.count
         host.rootView.onConfirm("", .dotted, true)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        waitForPickerToClose()
         XCTAssertEqual(editor.pages.count, n + 1)
         XCTAssertEqual(editor.pages.last?.background, .paper(width: 842, height: 595, style: .dotted), "橫式＝寬邊在上")
         XCTAssertNil(picker, "選好就關掉")
