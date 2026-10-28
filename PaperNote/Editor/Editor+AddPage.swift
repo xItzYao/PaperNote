@@ -53,7 +53,8 @@ extension NotebookViewController {
     /// 捲動時更新底下的＋（放在拉出來的空白中間）
     func updateAddPagePull() {
         let over = bottomOverscroll
-        guard over > 1, !pages.isEmpty else {
+        // 擴展頁面時拉到底是要拉控制點，不是新增頁面
+        guard over > 1, !pages.isEmpty, tool != .pageResize else {
             addPagePull.isHidden = true
             addPagePull.update(progress: 0)
             return

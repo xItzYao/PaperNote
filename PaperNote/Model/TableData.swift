@@ -30,6 +30,22 @@ struct CellFill: Codable, Equatable {
     var hex: String
 }
 
+/// 重複一組列（或欄）做成大表格：原本那組從 start 開始、有 length 列；往下／右（before = false）或往上／左複製 count 組。
+/// 記在表格裡，之後改 count 會增減組數
+struct TableRepeat: Codable, Equatable {
+    enum Axis: String, Codable { case rows, cols }
+    var axis: Axis
+    var start: Int
+    var length: Int
+    var before: Bool
+    var count: Int
+
+    /// 原本那組加上所有複製的範圍
+    var span: Range<Int> {
+        before ? (start - length * count)..<(start + length) : start..<(start + length * (count + 1))
+    }
+}
+
 /// 儲存格範圍（已正規化：r0 <= r1、c0 <= c1）
 struct CellRange: Equatable {
     var r0: Int, c0: Int, r1: Int, c1: Int
@@ -52,11 +68,17 @@ struct TableData: Codable, Equatable {
     var merges: [CellMerge] = []
     var diagonals: [CellDiagonal] = []
     var fills: [CellFill] = []
+    /// 鎖定高度的列、鎖定寬度的欄：縮放表格、平均分配時不會變
+    var lockedRows: [Int] = []
+    var lockedCols: [Int] = []
+    /// 最近一次「重複」做出來的那一組（可以再改組數）
+    var repeatGroup: TableRepeat?
 
     static let minCell: CGFloat = 24
 
     enum CodingKeys: String, CodingKey {
         case colWidths, rowHeights, cells, lineColorHex, lineWidth, fontSize, merges, diagonals, fills
+        case lockedRows, lockedCols, repeatGroup
     }
 
     var rows: Int { rowHeights.count }
@@ -186,6 +208,9 @@ struct TableData: Codable, Equatable {
             || $0.rowSpan * $0.colSpan <= 1 }
         diagonals.removeAll { $0.row >= rowCount || $0.col >= colCount }
         fills.removeAll { $0.row >= rowCount || $0.col >= colCount }
+        lockedRows = Array(Set(lockedRows.filter { $0 >= 0 && $0 < rowCount })).sorted()
+        lockedCols = Array(Set(lockedCols.filter { $0 >= 0 && $0 < colCount })).sorted()
+        if let g = repeatGroup, g.span.lowerBound < 0 || g.span.upperBound > (g.axis == .rows ? rowCount : colCount) { repeatGroup = nil }
     }
 
     // MARK: 插入／刪除列欄
@@ -200,6 +225,11 @@ struct TableData: Codable, Equatable {
         }
         for i in diagonals.indices where diagonals[i].row >= r { diagonals[i].row += 1 }
         for i in fills.indices where fills[i].row >= r { fills[i].row += 1 }
+        lockedRows = lockedRows.map { $0 >= r ? $0 + 1 : $0 }
+        if var g = repeatGroup, g.axis == .rows {
+            // 插在整組前面：整組往後移；插在組裡面：組的結構變了，不再記
+            if r <= g.span.lowerBound { g.start += 1; repeatGroup = g } else if r < g.span.upperBound { repeatGroup = nil }
+        }
     }
 
     mutating func insertColumn(at c: Int, width: CGFloat? = nil) {
@@ -212,6 +242,10 @@ struct TableData: Codable, Equatable {
         }
         for i in diagonals.indices where diagonals[i].col >= c { diagonals[i].col += 1 }
         for i in fills.indices where fills[i].col >= c { fills[i].col += 1 }
+        lockedCols = lockedCols.map { $0 >= c ? $0 + 1 : $0 }
+        if var g = repeatGroup, g.axis == .cols {
+            if c <= g.span.lowerBound { g.start += 1; repeatGroup = g } else if c < g.span.upperBound { repeatGroup = nil }
+        }
     }
 
     mutating func removeRow(_ r: Int) {
@@ -236,6 +270,10 @@ struct TableData: Codable, Equatable {
             if f.row > r { f.row -= 1 }
             return f
         }
+        lockedRows = lockedRows.compactMap { $0 == r ? nil : ($0 > r ? $0 - 1 : $0) }
+        if var g = repeatGroup, g.axis == .rows {
+            if r < g.span.lowerBound { g.start -= 1; repeatGroup = g } else if g.span.contains(r) { repeatGroup = nil }
+        }
     }
 
     mutating func removeColumn(_ c: Int) {
@@ -259,6 +297,10 @@ struct TableData: Codable, Equatable {
             if f.col == c { return nil }
             if f.col > c { f.col -= 1 }
             return f
+        }
+        lockedCols = lockedCols.compactMap { $0 == c ? nil : ($0 > c ? $0 - 1 : $0) }
+        if var g = repeatGroup, g.axis == .cols {
+            if c < g.span.lowerBound { g.start -= 1; repeatGroup = g } else if g.span.contains(c) { repeatGroup = nil }
         }
     }
 
@@ -297,6 +339,7 @@ struct TableData: Codable, Equatable {
         let endingMerges = merges.filter { $0.row + $0.rowSpan - 1 == r && $0.colSpan > 1 }
         insertRow(at: r + 1, height: total - top)
         rowHeights[r] = top
+        if lockedRows.contains(r) { lockedRows.append(r + 1) }
         for m in endingMerges where (m.col..<(m.col + m.colSpan)).contains(where: { split.contains($0) }) {
             merges.append(CellMerge(row: r + 1, col: m.col, rowSpan: 1, colSpan: m.colSpan))
         }
@@ -318,6 +361,7 @@ struct TableData: Codable, Equatable {
         let endingMerges = merges.filter { $0.col + $0.colSpan - 1 == c && $0.rowSpan > 1 }
         insertColumn(at: c + 1, width: total - left)
         colWidths[c] = left
+        if lockedCols.contains(c) { lockedCols.append(c + 1) }
         for m in endingMerges where (m.row..<(m.row + m.rowSpan)).contains(where: { split.contains($0) }) {
             merges.append(CellMerge(row: m.row, col: c + 1, rowSpan: m.rowSpan, colSpan: 1))
         }
@@ -398,6 +442,36 @@ struct TableData: Codable, Equatable {
         normalizeCells()
     }
 
+    /// 選了很多格一起分割：選取範圍裡的每一欄切成 n 欄、每一列切成 m 列（只切開選取的範圍，其他格不變）。
+    /// 只選一格（或一個合併格）時和 splitCell 一樣
+    mutating func splitCells(_ range: CellRange, cols n: Int, rows m: Int) {
+        guard n >= 1, m >= 1 else { return }
+        let r = expanded(range)
+        let a = span(r.r0, r.c0)
+        if a.row == r.r0, a.col == r.c0, a.rowSpan == r.r1 - r.r0 + 1, a.colSpan == r.c1 - r.c0 + 1 {
+            splitCell(r.r0, r.c0, cols: n, rows: m)
+            return
+        }
+        if n > 1 {
+            let rowSet = Set(r.r0...r.r1)
+            // 從右邊的欄開始切，左邊的欄號才不會跑掉
+            for c in (r.c0...r.c1).reversed() {
+                if colWidths[c] / CGFloat(n) < 12 { colWidths[c] = CGFloat(n) * 24 }
+                let piece = colWidths[c] / CGFloat(n)
+                for i in 0..<(n - 1) { splitColumn(c + i, at: piece, rows: rowSet) }
+            }
+        }
+        if m > 1 {
+            let colSet = Set(r.c0...(r.c0 + (r.c1 - r.c0 + 1) * n - 1))
+            for row in (r.r0...r.r1).reversed() {
+                if rowHeights[row] / CGFloat(m) < 12 { rowHeights[row] = CGFloat(m) * 24 }
+                let piece = rowHeights[row] / CGFloat(m)
+                for i in 0..<(m - 1) { splitRow(row + i, at: piece, columns: colSet) }
+            }
+        }
+        normalizeCells()
+    }
+
     /// 把一格（或合併格）平分成左右兩格
     mutating func splitCellHorizontally(_ r: Int, _ c: Int) {
         let m = span(r, c)
@@ -449,25 +523,121 @@ struct TableData: Codable, Equatable {
         }
     }
 
-    mutating func distributeColumns() {
+    /// 平均分配欄寬：只分配 range 裡（沒給就是全部）沒鎖定的欄，總寬不變
+    mutating func distributeColumns(_ range: ClosedRange<Int>? = nil) {
         guard cols > 0 else { return }
-        let w = size.width / CGFloat(cols)
-        colWidths = Array(repeating: w, count: cols)
+        colWidths = Self.evened(colWidths, Array(range ?? 0...(cols - 1)), locked: Set(lockedCols))
     }
 
-    mutating func distributeRows() {
+    mutating func distributeRows(_ range: ClosedRange<Int>? = nil) {
         guard rows > 0 else { return }
-        let h = size.height / CGFloat(rows)
-        rowHeights = Array(repeating: h, count: rows)
+        rowHeights = Self.evened(rowHeights, Array(range ?? 0...(rows - 1)), locked: Set(lockedRows))
     }
 
+    private static func evened(_ sizes: [CGFloat], _ indices: [Int], locked: Set<Int>) -> [CGFloat] {
+        let idx = indices.filter { sizes.indices.contains($0) && !locked.contains($0) }
+        guard idx.count > 1 else { return sizes }
+        let each = idx.reduce(0) { $0 + sizes[$1] } / CGFloat(idx.count)
+        var out = sizes
+        for i in idx { out[i] = each }
+        return out
+    }
+
+    /// 縮放整個表格：鎖定的列高、欄寬不變，其他的照比例分掉
     mutating func scale(to newSize: CGSize) {
-        let old = size
-        guard old.width > 0, old.height > 0 else { return }
-        let sx = max(newSize.width, CGFloat(cols) * Self.minCell) / old.width
-        let sy = max(newSize.height, CGFloat(rows) * Self.minCell) / old.height
-        colWidths = colWidths.map { max(12, $0 * sx) }
-        rowHeights = rowHeights.map { max(12, $0 * sy) }
+        guard size.width > 0, size.height > 0 else { return }
+        colWidths = Self.scaled(colWidths, to: newSize.width, locked: Set(lockedCols))
+        rowHeights = Self.scaled(rowHeights, to: newSize.height, locked: Set(lockedRows))
+    }
+
+    private static func scaled(_ sizes: [CGFloat], to total: CGFloat, locked: Set<Int>) -> [CGFloat] {
+        let free = sizes.indices.filter { !locked.contains($0) }
+        let fixed = sizes.indices.filter { locked.contains($0) }.reduce(0) { $0 + sizes[$1] }
+        let freeSum = free.reduce(0) { $0 + sizes[$1] }
+        guard !free.isEmpty, freeSum > 0 else { return sizes }
+        let k = max(total - fixed, CGFloat(free.count) * minCell) / freeSum
+        var out = sizes
+        for i in free { out[i] = max(12, sizes[i] * k) }
+        return out
+    }
+
+    // MARK: 鎖定列高、欄寬
+
+    mutating func setRowsLocked(_ range: ClosedRange<Int>, _ locked: Bool) {
+        lockedRows.removeAll { range.contains($0) }
+        if locked { lockedRows += Array(range) }
+        lockedRows.sort()
+    }
+
+    mutating func setColsLocked(_ range: ClosedRange<Int>, _ locked: Bool) {
+        lockedCols.removeAll { range.contains($0) }
+        if locked { lockedCols += Array(range) }
+        lockedCols.sort()
+    }
+
+    // MARK: 重複一組列／欄（做大表格）
+
+    /// 把 rows 或 cols 的 [start, start + length) 那一組重複成 count 份（before＝往上／往左）。
+    /// 已經是同一組就增減份數：例如原本 15 組改 14，最後（或最前面）那一組會拿掉
+    mutating func setRepeat(axis: TableRepeat.Axis, start: Int, length: Int, before: Bool, count: Int) {
+        normalizeCells()
+        let total = axis == .rows ? rows : cols
+        guard length > 0, count >= 0, start >= 0, start + length <= total else { return }
+        var g = TableRepeat(axis: axis, start: start, length: length, before: before, count: 0)
+        if let old = repeatGroup, old.axis == axis, old.start == start, old.length == length, old.before == before {
+            g = old
+        }
+        // 下面自己插入／刪除列欄時，不要讓 insertRow 等去調整組的位置
+        repeatGroup = nil
+        while g.count < count {
+            let src = g.start..<(g.start + g.length)
+            if g.before {
+                insertCopy(axis, of: src, at: g.start - g.length * g.count)
+                g.start += g.length
+            } else {
+                insertCopy(axis, of: src, at: g.start + g.length * (g.count + 1))
+            }
+            g.count += 1
+        }
+        while g.count > count {
+            let first = g.before ? g.start - g.length * g.count : g.start + g.length * g.count
+            for _ in 0..<g.length {
+                if axis == .rows { removeRow(first) } else { removeColumn(first) }
+            }
+            if g.before { g.start -= g.length }
+            g.count -= 1
+        }
+        repeatGroup = g.count > 0 ? g : nil
+        normalizeCells()
+    }
+
+    /// 把 src 那幾列（欄）複製一份插在 dst：大小、文字、合併、斜線、底色、鎖定都一樣
+    private mutating func insertCopy(_ axis: TableRepeat.Axis, of src: Range<Int>, at dst: Int) {
+        let shift = dst - src.lowerBound
+        if axis == .rows {
+            let heights = Array(rowHeights[src]), texts = Array(cells[src])
+            let ms = merges.filter { $0.row >= src.lowerBound && $0.row + $0.rowSpan <= src.upperBound }
+            let ds = diagonals.filter { src.contains($0.row) }, fs = fills.filter { src.contains($0.row) }
+            let locks = lockedRows.filter { src.contains($0) }
+            for (i, h) in heights.enumerated() { insertRow(at: dst + i, height: h) }
+            for i in texts.indices { cells[dst + i] = texts[i] }
+            merges += ms.map { var m = $0; m.row += shift; return m }
+            diagonals += ds.map { var d = $0; d.row += shift; return d }
+            fills += fs.map { var f = $0; f.row += shift; return f }
+            lockedRows += locks.map { $0 + shift }
+        } else {
+            let widths = Array(colWidths[src])
+            let texts = cells.map { Array($0[src]) }
+            let ms = merges.filter { $0.col >= src.lowerBound && $0.col + $0.colSpan <= src.upperBound }
+            let ds = diagonals.filter { src.contains($0.col) }, fs = fills.filter { src.contains($0.col) }
+            let locks = lockedCols.filter { src.contains($0) }
+            for (i, w) in widths.enumerated() { insertColumn(at: dst + i, width: w) }
+            for r in texts.indices { for i in texts[r].indices { cells[r][dst + i] = texts[r][i] } }
+            merges += ms.map { var m = $0; m.col += shift; return m }
+            diagonals += ds.map { var d = $0; d.col += shift; return d }
+            fills += fs.map { var f = $0; f.col += shift; return f }
+            lockedCols += locks.map { $0 + shift }
+        }
     }
 }
 
@@ -484,5 +654,8 @@ extension TableData {
         merges = try c.decodeIfPresent([CellMerge].self, forKey: .merges) ?? []
         diagonals = try c.decodeIfPresent([CellDiagonal].self, forKey: .diagonals) ?? []
         fills = try c.decodeIfPresent([CellFill].self, forKey: .fills) ?? []
+        lockedRows = try c.decodeIfPresent([Int].self, forKey: .lockedRows) ?? []
+        lockedCols = try c.decodeIfPresent([Int].self, forKey: .lockedCols) ?? []
+        repeatGroup = try c.decodeIfPresent(TableRepeat.self, forKey: .repeatGroup)
     }
 }

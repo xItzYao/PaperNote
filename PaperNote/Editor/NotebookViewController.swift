@@ -34,6 +34,8 @@ struct ElementRef: Hashable {
 
 enum DragKind {
     case move, resize, colLine(Int), rowLine(Int), cells
+    /// 拖曳選取範圍右下角的填滿控制點：重複這一組
+    case fill
 }
 
 struct DragState {

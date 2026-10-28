@@ -268,6 +268,8 @@ extension NotebookViewController {
             break
         }
         canvas.drawingPolicy = settings.fingerDrawing ? .anyInput : .pencilOnly
+        // 擴展頁面：最後一頁底下多留半個畫面，才拉得到下緣的控制點
+        canvas.contentInset.bottom = tool == .pageResize ? max(200, canvas.bounds.height * 0.5) : 0
         // 只有開啟「用手指書寫」時，手指才用來截圖、選字、畫表格線、圈選；否則單指捲動
         let fingerUsedByTool = settings.fingerDrawing && (tool.drawsWithPan || customInkActive)
         canvas.panGestureRecognizer.minimumNumberOfTouches = fingerUsedByTool ? 2 : 1

@@ -564,6 +564,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         let r = docFrame(of: e, pageIndex: pi)
         let tol = 16 / canvas.zoomScale
         if case let .table(t) = e.content, t.size.width > 0, t.size.height > 0 {
+            if !e.locked, let f = tableFillHandlePoint(), p.distance(to: f) < tol * 1.3 { return (ref, .fill) }
             if !e.locked {
                 if p.distance(to: CGPoint(x: r.maxX, y: r.maxY)) < tol * 1.5 { return (ref, .resize) }
                 if let grip = tableGripTarget(at: p) { return (ref, grip) }
@@ -607,6 +608,10 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
                 updateCellSelection(from: d.start, to: p)
                 return
             }
+            if case .fill = d.kind {
+                updateFillDrag(from: d.start, to: p)
+                return
+            }
             let e = draggedElement(d, to: p)
             session.document.pages[pi].elements[ei] = e
             pageViews[pages[pi].id]?.liveUpdate(e)
@@ -615,6 +620,11 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             if let d = dragState, case .cells = d.kind {
                 updateCellSelection(from: d.start, to: p)
                 dragState = nil
+                return
+            }
+            if let d = dragState, case .fill = d.kind {
+                dragState = nil
+                finishFillDrag(from: d.start, to: p)
                 return
             }
             finishDrag(at: p)
@@ -634,7 +644,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         let o = d.original.frame
         let minCell = TableData.minCell
         switch d.kind {
-        case .cells:
+        case .cells, .fill:
             break
         case .move:
             e.frame.origin = CGPoint(x: o.minX + dx, y: o.minY + dy)

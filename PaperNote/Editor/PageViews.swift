@@ -529,6 +529,53 @@ final class OverlayView: UIView {
         CATransaction.commit()
     }
 
+    // MARK: 表格：填滿控制點、重複預覽、鎖定標記
+
+    private let fillHandleLayer = CAShapeLayer()
+    private let fillPreviewLayer = CAShapeLayer()
+    private let tableLockLayer = CAShapeLayer()
+
+    private func install(_ l: CAShapeLayer, fill: UIColor?, stroke: UIColor?, dashed: Bool = false) {
+        guard l.superlayer == nil else { return }
+        l.fillColor = fill?.cgColor
+        l.strokeColor = stroke?.cgColor
+        if dashed { l.lineDashPattern = [6, 4] }
+        layer.addSublayer(l)
+    }
+
+    /// 選取範圍右下角的小圓點：拖曳就把這一組往下或往右重複
+    func showFillHandle(_ p: CGPoint?) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        install(fillHandleLayer, fill: .systemBlue, stroke: .white)
+        let r = 7 * lineScale
+        fillHandleLayer.lineWidth = 2 * lineScale
+        fillHandleLayer.path = p.map { UIBezierPath(ovalIn: CGRect(x: $0.x - r, y: $0.y - r, width: r * 2, height: r * 2)).cgPath }
+        CATransaction.commit()
+    }
+
+    /// 拖曳填滿控制點時，重複之後整組會佔的範圍
+    func showFillPreview(_ rect: CGRect?) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        install(fillPreviewLayer, fill: UIColor.systemBlue.withAlphaComponent(0.08), stroke: .systemBlue, dashed: true)
+        fillPreviewLayer.lineWidth = 2 * lineScale
+        fillPreviewLayer.lineDashPattern = [NSNumber(value: Double(6 * lineScale)), NSNumber(value: Double(4 * lineScale))]
+        fillPreviewLayer.path = rect.map { UIBezierPath(rect: $0).cgPath }
+        CATransaction.commit()
+    }
+
+    /// 鎖定寬度的欄（上緣）、鎖定高度的列（左緣）畫一條橘色粗線
+    func showTableLocks(_ rects: [CGRect]) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        install(tableLockLayer, fill: UIColor.systemOrange.withAlphaComponent(0.85), stroke: nil)
+        let path = UIBezierPath()
+        for r in rects { path.append(UIBezierPath(roundedRect: r, cornerRadius: min(r.width, r.height) / 2)) }
+        tableLockLayer.path = rects.isEmpty ? nil : path.cgPath
+        CATransaction.commit()
+    }
+
     /// 表格內選取的儲存格範圍
     func showCellSelection(_ rect: CGRect?) {
         CATransaction.begin()

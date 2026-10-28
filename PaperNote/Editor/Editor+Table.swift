@@ -1,4 +1,5 @@
 import UIKit
+import SwiftUI
 
 // MARK: - 表格：儲存格選取
 
@@ -43,14 +44,19 @@ extension NotebookViewController {
     }
 
     func updateTableCellChrome() {
+        overlay.showFillPreview(nil)
         guard tool == .select, editingTextView == nil, let s = selectedTable(), s.table.rows > 0, s.table.cols > 0 else {
             overlay.showCellSelection(nil)
             overlay.showMoveHandle(nil)
             overlay.showDeleteHandle(nil)
+            overlay.showFillHandle(nil)
+            overlay.showTableLocks([])
             return
         }
         overlay.showMoveHandle(tableMoveHandlePoint())
         overlay.showDeleteHandle(tableDeleteHandlePoint())
+        overlay.showTableLocks(tableLockMarks(s.table, at: s.docRect.origin))
+        defer { overlay.showFillHandle(tableFillHandlePoint()) }
         if let sel = tableCellSel {
             let r = clampedRange(sel, in: s.table)
             tableCellSel = r
@@ -61,7 +67,7 @@ extension NotebookViewController {
         tableCellLabel?.text = cellLabel(tableCellSel)
     }
 
-    private func columnName(_ c: Int) -> String {
+    func columnName(_ c: Int) -> String {
         var n = c, s = ""
         repeat {
             s = String(Character(UnicodeScalar(UInt8(65 + n % 26)))) + s
@@ -197,10 +203,51 @@ extension NotebookViewController {
             act("字縮小", "minus") { t, _ in t.fontSize = max(t.fontSize - 2, 8) },
         ]))
 
-        views.append(menuButton("arrow.left.and.right", "平均分配", [
-            act("平均分配欄寬") { t, _ in t.distributeColumns() },
-            act("平均分配列高") { t, _ in t.distributeRows() },
-        ]))
+        // 選了好幾欄（列）就只平均分配選到的，只選一格就是全部；鎖定的不動
+        let distribute = makeButton(symbol: "arrow.left.and.right", title: nil, action: nil)
+        distribute.accessibilityLabel = "平均分配"
+        distribute.menu = UIMenu(title: "平均分配", children: [UIDeferredMenuElement.uncached { [weak self] done in
+            guard let self, let r = self.tableCellSel else { return done([]) }
+            let cols = r.c1 > r.c0 ? "\(self.columnName(r.c0))–\(self.columnName(r.c1)) 欄" : "全部欄"
+            let rows = r.r1 > r.r0 ? "第 \(r.r0 + 1)–\(r.r1 + 1) 列" : "全部列"
+            done([
+                act("平均分配欄寬（\(cols)）") { t, r in t.distributeColumns(r.c1 > r.c0 ? r.c0...r.c1 : nil) },
+                act("平均分配列高（\(rows)）") { t, r in t.distributeRows(r.r1 > r.r0 ? r.r0...r.r1 : nil) },
+            ])
+        }])
+        distribute.showsMenuAsPrimaryAction = true
+        views.append(distribute)
+
+        // 鎖定列高、欄寬：縮放表格、平均分配時不會變（表格上方、左邊的橘色線標出鎖定的欄、列）
+        let lock = makeButton(symbol: "lock.rectangle", title: nil, action: nil)
+        lock.accessibilityLabel = "鎖定寬高"
+        lock.menu = UIMenu(title: "鎖定寬高", children: [UIDeferredMenuElement.uncached { [weak self] done in
+            guard let self, let r = self.tableCellSel else { return done([]) }
+            let cols = r.c1 > r.c0 ? "\(self.columnName(r.c0))–\(self.columnName(r.c1))" : self.columnName(r.c0)
+            let rows = r.r1 > r.r0 ? "\(r.r0 + 1)–\(r.r1 + 1)" : "\(r.r0 + 1)"
+            done([
+                act("鎖定欄寬（\(cols) 欄）", "lock") { t, r in t.setColsLocked(r.c0...r.c1, true) },
+                act("鎖定列高（第 \(rows) 列）", "lock") { t, r in t.setRowsLocked(r.r0...r.r1, true) },
+                act("解除選取範圍的鎖定", "lock.open") { t, r in
+                    t.setColsLocked(r.c0...r.c1, false)
+                    t.setRowsLocked(r.r0...r.r1, false)
+                },
+                act("解除全部鎖定", "lock.open", attributes: .destructive) { t, _ in
+                    t.lockedCols = []
+                    t.lockedRows = []
+                },
+            ])
+        }])
+        lock.showsMenuAsPrimaryAction = true
+        views.append(lock)
+
+        let repeatButton = makeButton(symbol: "square.stack.3d.down.right", title: nil, action: nil)
+        repeatButton.accessibilityLabel = "重複"
+        repeatButton.addAction(UIAction { [weak self, weak repeatButton] _ in
+            guard let self, let repeatButton else { return }
+            self.presentRepeatPanel(from: repeatButton)
+        }, for: .touchUpInside)
+        views.append(repeatButton)
 
         views.append(actionButton(s.element.locked ? "lock.fill" : "lock.open", s.element.locked ? "解除固定" : "固定位置") { [weak self] in
             guard let self, let s = self.selectedTable() else { return }
@@ -213,18 +260,21 @@ extension NotebookViewController {
     /// 像 Word 一樣輸入要分割成幾欄、幾列
     func presentSplitDialog() {
         guard let s = selectedTable() else { return }
-        let range = tableCellSel ?? CellRange((0, 0), (0, 0))
+        let range = s.table.expanded(tableCellSel ?? CellRange((0, 0), (0, 0)))
         let span = s.table.span(range.r0, range.c0)
-        let isMerged = span.rowSpan * span.colSpan > 1
-        let a = UIAlertController(title: "分割儲存格", message: cellLabel(range), preferredStyle: .alert)
+        // 只選一格（或一個合併格）＝像 Word 分割那一格；選了很多格＝每一格都分割
+        let single = span.rowSpan == range.r1 - range.r0 + 1 && span.colSpan == range.c1 - range.c0 + 1
+        let isMerged = single && span.rowSpan * span.colSpan > 1
+        let message = single ? cellLabel(range) : "\(cellLabel(range))：選取的每一格都會分割"
+        let a = UIAlertController(title: "分割儲存格", message: message, preferredStyle: .alert)
         a.addTextField { tf in
             tf.placeholder = "欄數（左右）"
-            tf.text = "\(max(2, span.colSpan))"
+            tf.text = single ? "\(max(2, span.colSpan))" : "2"
             tf.keyboardType = .numberPad
         }
         a.addTextField { tf in
             tf.placeholder = "列數（上下）"
-            tf.text = "\(span.rowSpan)"
+            tf.text = single ? "\(span.rowSpan)" : "1"
             tf.keyboardType = .numberPad
         }
         a.addAction(UIAlertAction(title: "取消", style: .cancel))
@@ -237,11 +287,139 @@ extension NotebookViewController {
             let cols = min(max(Int(a?.textFields?[0].text ?? "") ?? 2, 1), 20)
             let rows = min(max(Int(a?.textFields?[1].text ?? "") ?? 1, 1), 20)
             guard cols * rows > 1 || isMerged else { return }
-            self?.tableAction { t, r in t.splitCell(r.r0, r.c0, cols: cols, rows: rows) }
+            self?.tableAction { t, r in t.splitCells(r, cols: cols, rows: rows) }
             self?.tableCellSel = nil
             self?.updateTableCellChrome()
         })
         present(a, animated: true)
+    }
+
+    // MARK: - 鎖定標記
+
+    /// 鎖定的欄：表格上方一條橘線；鎖定的列：表格左邊一條橘線（文件座標）
+    func tableLockMarks(_ t: TableData, at o: CGPoint) -> [CGRect] {
+        let z = canvas.zoomScale
+        let bar = 4 / z, gap = 6 / z, inset = 2 / z
+        var out = t.lockedCols.filter { $0 < t.cols }.map { c in
+            CGRect(x: o.x + t.colX(c) + inset, y: o.y - gap - bar, width: max(1, t.colWidths[c] - inset * 2), height: bar)
+        }
+        out += t.lockedRows.filter { $0 < t.rows }.map { r in
+            CGRect(x: o.x - gap - bar, y: o.y + t.rowY(r) + inset, width: bar, height: max(1, t.rowHeights[r] - inset * 2))
+        }
+        return out
+    }
+
+    // MARK: - 重複（做大表格）
+
+    /// 填滿控制點：選取範圍右下角（已經往下／右重複過的同一組，在整組的尾端）
+    func tableFillHandlePoint() -> CGPoint? {
+        guard tool == .select, editingTextView == nil, let s = selectedTable(), !s.element.locked, let sel = tableCellSel else { return nil }
+        let t = s.table
+        var p = CGPoint(x: t.colX(sel.c1 + 1), y: t.rowY(sel.r1 + 1))
+        if let g = t.repeatGroup, !g.before, isOriginalBlock(g, sel) {
+            if g.axis == .rows { p.y = t.rowY(g.span.upperBound) } else { p.x = t.colX(g.span.upperBound) }
+        }
+        // 和表格右下角的縮放控制點錯開
+        let z = canvas.zoomScale
+        if abs(p.x - t.size.width) < 1, abs(p.y - t.size.height) < 1 { p.x -= 14 / z; p.y -= 14 / z }
+        return CGPoint(x: s.docRect.minX + p.x, y: s.docRect.minY + p.y)
+    }
+
+    /// 選取範圍就是那一組原本的範圍（同一軸）
+    private func isOriginalBlock(_ g: TableRepeat, _ sel: CellRange) -> Bool {
+        g.axis == .rows ? (sel.r0 == g.start && sel.r1 == g.start + g.length - 1)
+            : (sel.c0 == g.start && sel.c1 == g.start + g.length - 1)
+    }
+
+    /// 拖曳填滿控制點：往下拖＝重複選取的那幾列，往右拖＝那幾欄；已經重複過的同一組就接著改組數
+    private func fillPlan(from a: CGPoint, to b: CGPoint) -> (axis: TableRepeat.Axis, start: Int, length: Int, count: Int)? {
+        guard let s = selectedTable(), let sel = tableCellSel else { return nil }
+        let t = s.table
+        let dx = b.x - a.x, dy = b.y - a.y
+        var axis: TableRepeat.Axis = abs(dy) >= abs(dx) ? .rows : .cols
+        var start = axis == .rows ? sel.r0 : sel.c0
+        var length = axis == .rows ? sel.r1 - sel.r0 + 1 : sel.c1 - sel.c0 + 1
+        var base = 0
+        if let g = t.repeatGroup, !g.before, isOriginalBlock(g, sel) {
+            axis = g.axis
+            start = g.start
+            length = g.length
+            base = g.count
+        }
+        let block = axis == .rows ? t.rowY(start + length) - t.rowY(start) : t.colX(start + length) - t.colX(start)
+        guard block > 0 else { return nil }
+        let delta = axis == .rows ? dy : dx
+        return (axis, start, length, min(200, max(0, base + Int((delta / block).rounded()))))
+    }
+
+    func updateFillDrag(from a: CGPoint, to b: CGPoint) {
+        guard let s = selectedTable(), let plan = fillPlan(from: a, to: b) else { return }
+        let t = s.table
+        var r: CGRect
+        if plan.axis == .rows {
+            let top = t.rowY(plan.start), h = t.rowY(plan.start + plan.length) - top
+            r = CGRect(x: 0, y: top, width: t.size.width, height: h * CGFloat(plan.count + 1))
+        } else {
+            let left = t.colX(plan.start), w = t.colX(plan.start + plan.length) - left
+            r = CGRect(x: left, y: 0, width: w * CGFloat(plan.count + 1), height: t.size.height)
+        }
+        overlay.showFillPreview(r.offsetBy(dx: s.docRect.minX, dy: s.docRect.minY))
+        tableCellLabel?.text = "重複 \(plan.count) 組"
+    }
+
+    func finishFillDrag(from a: CGPoint, to b: CGPoint) {
+        overlay.showFillPreview(nil)
+        guard let s = selectedTable(), let plan = fillPlan(from: a, to: b) else {
+            updateTableCellChrome()
+            return
+        }
+        let before = s.table.repeatGroup?.count ?? 0
+        modifyTable(s.ref) { $0.setRepeat(axis: plan.axis, start: plan.start, length: plan.length, before: false, count: plan.count) }
+        if plan.count != before || plan.count > 0 {
+            showToast(plan.count > 0 ? "已重複 \(plan.count) 組（可以再拖藍點，或用「重複」改組數）" : "已移除重複的組")
+        }
+        updateTableCellChrome()
+    }
+
+    /// 「重複」小視窗：方向、組數；選取範圍在已經重複過的那一組裡，就是修改那一組
+    func presentRepeatPanel(from source: UIView) {
+        guard let s = selectedTable() else { return }
+        let t = s.table
+        let sel = tableCellSel ?? CellRange((0, 0), (t.rows - 1, t.cols - 1))
+        var editing: TableRepeat?
+        if let g = t.repeatGroup {
+            let inBlock = g.axis == .rows ? (sel.r0 >= g.start && sel.r1 < g.start + g.length)
+                : (sel.c0 >= g.start && sel.c1 < g.start + g.length)
+            if inBlock || tableCellSel == nil { editing = g }
+        }
+        let direction = editing.map { ($0.axis == .rows ? 0 : 2) + ($0.before ? 0 : 1) } ?? 1
+        let label: (Int) -> String = { [weak self] d in
+            guard let self else { return "" }
+            if let g = editing, (g.axis == .rows) == (d < 2), g.before == (d % 2 == 0) {
+                return g.axis == .rows ? "第 \(g.start + 1)–\(g.start + g.length) 列" : "\(self.columnName(g.start))–\(self.columnName(g.start + g.length - 1)) 欄"
+            }
+            return d < 2 ? "第 \(sel.r0 + 1)–\(sel.r1 + 1) 列" : "\(self.columnName(sel.c0))–\(self.columnName(sel.c1)) 欄"
+        }
+        let panel = TableRepeatPanel(direction: direction, count: editing?.count ?? 1, editing: editing != nil, blockLabel: label,
+                                     onApply: { [weak self] d, n in self?.applyTableRepeat(direction: d, count: n, editing: editing, selection: sel) })
+        presentToolPopover(UIHostingController(rootView: panel), from: source, size: CGSize(width: 380, height: 250))
+    }
+
+    /// direction：0 往上、1 往下、2 往左、3 往右
+    func applyTableRepeat(direction: Int, count: Int, editing: TableRepeat?, selection sel: CellRange) {
+        guard let s = selectedTable() else { return }
+        let axis: TableRepeat.Axis = direction < 2 ? .rows : .cols
+        let before = direction % 2 == 0
+        var start = axis == .rows ? sel.r0 : sel.c0
+        var length = axis == .rows ? sel.r1 - sel.r0 + 1 : sel.c1 - sel.c0 + 1
+        if let g = editing, g.axis == axis, g.before == before {
+            start = g.start
+            length = g.length
+        }
+        modifyTable(s.ref) { $0.setRepeat(axis: axis, start: start, length: length, before: before, count: count) }
+        dismissToolPopover()
+        showToast(count > 0 ? "已重複 \(count) 組" : "已移除重複的組")
+        updateTableCellChrome()
     }
 
     // MARK: - 在已有的表格上手繪格線
