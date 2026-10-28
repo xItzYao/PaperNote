@@ -42,6 +42,11 @@ enum ShapeRecognizer {
         return ellipse(in: bbox)
     }
 
+    /// 封閉路徑簡化成多邊形後的角點
+    static func closedCorners(_ pts: [CGPoint], box: CGRect) -> [CGPoint] {
+        simplifyClosed(pts, epsilon: max(6, hypot(box.width, box.height) * 0.07))
+    }
+
     /// 筆跡接近直線（偏離不大）時回傳拉直後的筆跡，否則 nil
     static func straightenIfNearlyStraight(_ stroke: PKStroke, preset: BrushPreset) -> PKStroke? {
         let pts = stroke.path.map { $0.location.applying(stroke.transform) }

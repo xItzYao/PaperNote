@@ -199,6 +199,10 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     let inkRecognizer = InkCaptureRecognizer(target: nil, action: nil)
     let liveInkView = LiveInkView()
     var inkDraft: InkDraft?
+    /// 自製筆刷停住變圖形：筆尖停住多久沒動
+    var inkHoldTimer: Timer?
+    /// 上次重新計時的位置（螢幕座標）
+    var inkHoldAnchor: CGPoint = .zero
     /// 這次擦除已經登記過上一步的頁面（下筆時清空）
     var inkEraseUndoRegistered: Set<UUID> = []
 

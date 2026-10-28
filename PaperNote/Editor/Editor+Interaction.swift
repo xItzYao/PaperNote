@@ -137,7 +137,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             switch tool {
             case .capture, .textSelect, .tableDraw:
                 return true
-            case .select:
+            case .select, .image:
                 return editingTextView == nil && dragTarget(at: g.location(in: pagesContainer)) != nil
             case .pageResize:
                 return pageHandle(at: g.location(in: pagesContainer)) != nil
@@ -313,7 +313,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         switch tool {
         case .capture: handleCapturePan(g, p)
         case .textSelect: handleTextPan(g, p)
-        case .select: handleElementPan(g, p)
+        case .select, .image: handleElementPan(g, p)
         case .pageResize: handlePageResizePan(g, p)
         case .lasso: handleLassoPan(g, g.state == .began ? panTouchDownPoint(g) : p)
         case .tableDraw: handleTableDrawPan(g, p)
@@ -380,7 +380,14 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
                 resizePageIndex = i
                 updatePageResizeChrome()
             }
-        case .tableDraw, .image:
+        case .image:
+            // 圖片工具：點圖片選起來（可以拖曳、拉右下角調整大小），點空白處取消
+            if let hit = hitElement(at: p), case let (pi, ei)? = locate(hit), case .image = pages[pi].elements[ei].content {
+                select(hit)
+            } else {
+                select(nil)
+            }
+        case .tableDraw:
             break
         case .circuit:
             handleCircuitTap(at: p)
@@ -891,8 +898,11 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
                             content: content)
         updatePage(pi) { $0.elements.append(e) }
         let ref = ElementRef(pageID: page.id, elementID: e.id)
-        // 圖片工具：留在工具裡，可以接著加下一張
-        if tool == .image { return ref }
+        // 圖片工具：留在工具裡，可以接著加下一張；剛加的先選起來，可以馬上拖曳、調整大小
+        if tool == .image {
+            select(ref)
+            return ref
+        }
         if tool != .select { setTool(.select) }
         select(ref)
         return ref

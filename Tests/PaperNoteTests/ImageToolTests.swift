@@ -3,6 +3,23 @@ import XCTest
 
 /// 回報的需求：插入圖片要有自己的工具，照片列出來點一下就加入；常常要連續把不同照片加到不同頁
 final class ImageToolTests: XCTestCase {
+    private final class FakePan: UIPanGestureRecognizer {
+        var fake: UIGestureRecognizer.State = .possible
+        override var state: UIGestureRecognizer.State {
+            get { fake }
+            set { fake = newValue }
+        }
+    }
+
+    private final class FakeTap: UITapGestureRecognizer {
+        let point: CGPoint
+        init(_ p: CGPoint) {
+            point = p
+            super.init(target: nil, action: nil)
+        }
+        override func location(in view: UIView?) -> CGPoint { point }
+    }
+
     private var window: UIWindow!
     private var editor: NotebookViewController!
     private var notebookID: UUID!
@@ -68,6 +85,39 @@ final class ImageToolTests: XCTestCase {
         editor.insertPhotoFromStrip(photo(.green))
         XCTAssertEqual(images(onPage: 1).count, 1, "捲到別頁加的照片要放在那一頁")
         XCTAssertEqual(images(onPage: 0).count, 2)
+    }
+
+    /// 回報的需求：圖片模式下也可以移動圖片
+    func testImagesCanBeMovedInTheImageTool() throws {
+        editor.setTool(.image)
+        editor.insertPhotoFromStrip(photo(.red))
+        let ref = try XCTUnwrap(editor.selected, "剛加的照片要先選起來")
+        let start = try XCTUnwrap(images(onPage: 0).first).frame
+        let o = editor.contentOrigin(0)
+        let grab = CGPoint(x: start.midX + o.x, y: start.midY + o.y)
+        XCTAssertNotNil(editor.dragTarget(at: grab), "按在圖片上要能拖")
+        let g = FakePan(target: nil, action: nil)
+        for (i, d) in [CGFloat(0), 20, 40].enumerated() {
+            g.fake = i == 0 ? .began : (i == 2 ? .ended : .changed)
+            editor.handleElementPan(g, CGPoint(x: grab.x + d, y: grab.y + d))
+        }
+        guard case let (pi, ei)? = editor.locate(ref) else { return XCTFail("圖片不見了") }
+        let moved = editor.pages[pi].elements[ei].frame
+        XCTAssertEqual(moved.minX, start.minX + 40, accuracy: 0.5)
+        XCTAssertEqual(moved.minY, start.minY + 40, accuracy: 0.5)
+        XCTAssertEqual(editor.tool, .image, "還在圖片工具")
+    }
+
+    func testTappingAnImageInTheImageToolSelectsIt() throws {
+        editor.setTool(.image)
+        editor.insertPhotoFromStrip(photo(.red))
+        let f = try XCTUnwrap(images(onPage: 0).first).frame
+        let o = editor.contentOrigin(0)
+        editor.handleTap(FakeTap(CGPoint(x: o.x + f.maxX + 200, y: o.y + f.maxY + 200)))
+        XCTAssertNil(editor.selected, "點空白處取消選取")
+        editor.handleTap(FakeTap(CGPoint(x: o.x + f.midX, y: o.y + f.midY)))
+        XCTAssertNotNil(editor.selected, "點圖片選起來")
+        XCTAssertEqual(editor.tool, .image)
     }
 
     func testInsertMenuHasNoPaste() {

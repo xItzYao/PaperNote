@@ -24,7 +24,7 @@ extension EditorTool {
     /// 拖曳要先讓頁面捲動判斷，沒捲動才算工具的拖曳（拖到物件、控制點時才會由工具接手）
     var panYieldsToScroll: Bool {
         switch self {
-        case .select, .pageResize, .lasso, .circuit: return true
+        case .select, .image, .pageResize, .lasso, .circuit: return true
         default: return false
         }
     }

@@ -768,6 +768,8 @@ struct InkDraft {
     var pressure: Bool
     /// 還會補上準確值的取樣點：編號 → points 的索引
     var pendingUpdates: [NSNumber: Int] = [:]
+    /// 停住後認出的圖形（之後筆尖移動是在調整它，不是繼續寫）
+    var shape: InkShape?
 }
 
 extension NotebookViewController {
@@ -813,11 +815,59 @@ extension NotebookViewController {
         let pi = pageIndex(containing: s.point) ?? nearestPageIndex(to: s.point)
         liveInkView.clip = pageFrames.indices.contains(pi) ? pagesContainer.convert(pageFrames[pi], to: liveInkView) : nil
         liveInkView.begin(screen(s.point), width: w * canvas.zoomScale, color: preset.color)
+        restartInkHold(at: screen(s.point))
         DebugLog.add("custom ink begin drawGR=\(canvas.drawingGestureRecognizer.isEnabled)")
+    }
+
+    // MARK: 停住變圖形
+
+    /// 停住 0.5 秒（筆尖移動不到 6pt）就把這一筆認成圖形
+    static let inkHoldDuration: TimeInterval = 0.5
+
+    private func restartInkHold(at p: CGPoint) {
+        inkHoldTimer?.invalidate()
+        inkHoldTimer = nil
+        inkHoldAnchor = p
+        guard settings.shapeSnap else { return }
+        let t = Timer(timeInterval: Self.inkHoldDuration, repeats: false) { [weak self] _ in self?.inkHeld() }
+        RunLoop.main.add(t, forMode: .common)
+        inkHoldTimer = t
+    }
+
+    func inkHeld() {
+        inkHoldTimer = nil
+        guard var d = inkDraft, d.shape == nil, let s = InkShapes.recognize(d.points.map(\.point)) else { return }
+        d.shape = s
+        inkDraft = d
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        showInkShape(s, draft: d)
+        DebugLog.add("custom ink hold -> \(s.kind)")
+    }
+
+    private func showInkShape(_ s: InkShape, draft d: InkDraft) {
+        guard let first = s.points.first else { return }
+        let w = shapeWidth(d) * canvas.zoomScale
+        liveInkView.clear()
+        liveInkView.begin(screen(first), width: w, color: UIColor(hex: d.colorHex))
+        liveInkView.add(s.points.dropFirst().map { (screen($0), w) })
+    }
+
+    /// 圖形的線寬：手寫那一筆中間的粗細（有筆壓的筆也是一樣粗）
+    private func shapeWidth(_ d: InkDraft) -> CGFloat {
+        let ws = d.points.map(\.width).sorted()
+        return ws.isEmpty ? d.baseWidth : ws[ws.count / 2]
     }
 
     func inkMoved(_ new: [InkCaptureRecognizer.Sample]) {
         guard var d = inkDraft else { return }
+        // 已經變成圖形：筆尖移動是在調整大小
+        if let s = d.shape, let last = new.last {
+            let m = InkShapes.moved(s, to: last.point)
+            d.shape = m
+            inkDraft = d
+            showInkShape(m, draft: d)
+            return
+        }
         let z = canvas.zoomScale
         var added: [(CGPoint, CGFloat)] = []
         for s in new {
@@ -830,11 +880,13 @@ extension NotebookViewController {
         }
         inkDraft = d
         liveInkView.add(added)
+        // 還在移動就重新計時
+        if let last = new.last, screen(last.point).distance(to: inkHoldAnchor) > 6 { restartInkHold(at: screen(last.point)) }
     }
 
     /// Pencil 補上了準確的位置／筆壓：換掉之前的估計值
     func inkUpdated(_ s: InkCaptureRecognizer.Sample) {
-        guard var d = inkDraft, let u = s.updateIndex, let i = d.pendingUpdates[u], d.points.indices.contains(i) else { return }
+        guard var d = inkDraft, d.shape == nil, let u = s.updateIndex, let i = d.pendingUpdates[u], d.points.indices.contains(i) else { return }
         let w = inkWidth(d, force: s.force)
         d.points[i] = InkPoint(s.point, width: w)
         inkDraft = d
@@ -842,8 +894,15 @@ extension NotebookViewController {
     }
 
     func inkEnded(cancelled: Bool) {
-        guard let d = inkDraft else { return }
+        inkHoldTimer?.invalidate()
+        inkHoldTimer = nil
+        guard var d = inkDraft else { return }
         inkDraft = nil
+        // 變成圖形的話，存的是圖形（一樣粗）
+        if let s = d.shape, !s.points.isEmpty {
+            let w = shapeWidth(d)
+            d.points = s.points.map { InkPoint($0, width: w) }
+        }
         guard let first = d.points.first else { liveInkView.clear(); return }
         // 整筆放在起點所在的那一頁（頁面內容座標）
         let pi = pageIndex(containing: first.point) ?? nearestPageIndex(to: first.point)
