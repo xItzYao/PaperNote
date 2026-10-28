@@ -84,13 +84,15 @@ extension PageRenderer {
     /// 紙張的縮圖（A4 比例，和真的頁面用同一套畫法）
     static func paperPreview(_ style: PaperStyle, landscape: Bool) -> UIImage {
         let page = landscape ? CGSize(width: 842, height: 595) : CGSize(width: 595, height: 842)
-        let scale: CGFloat = 0.25
-        let size = CGSize(width: page.width * scale, height: page.height * scale)
-        return UIGraphicsImageRenderer(size: size).image { rc in
+        // 整數大小，邊緣才不會有半透明的像素
+        let size = CGSize(width: (page.width / 4).rounded(), height: (page.height / 4).rounded())
+        let fmt = UIGraphicsImageRendererFormat()
+        fmt.opaque = true
+        return UIGraphicsImageRenderer(size: size, format: fmt).image { rc in
             let ctx = rc.cgContext
             UIColor.white.setFill()
             ctx.fill(CGRect(origin: .zero, size: size))
-            ctx.scaleBy(x: scale, y: scale)
+            ctx.scaleBy(x: size.width / page.width, y: size.height / page.height)
             let full = CGRect(origin: .zero, size: page)
             drawPaper(style, in: full, visible: full, ctx: ctx)
         }
@@ -105,19 +107,17 @@ extension NotebookViewController {
         var style: PaperStyle = .blank
         if case let .paper(_, _, s) = ref.background { style = s }
         let size = session.baseSize(of: ref)
-        weak var host: UIHostingController<PaperPickerOverlay>?
         let picker = PaperPickerOverlay(title: title, confirmTitle: "新增", askName: false, style: style,
                                         landscape: size.width > size.height,
                                         onConfirm: { [weak self] _, s, l in
-                                            host?.dismiss(animated: true)
+                                            self?.dismiss(animated: true)
                                             self?.insertPage(at: index, style: s, landscape: l)
                                         },
-                                        onCancel: { host?.dismiss(animated: true) })
+                                        onCancel: { [weak self] in self?.dismiss(animated: true) })
         let h = UIHostingController(rootView: picker)
         h.modalPresentationStyle = .overFullScreen
         h.modalTransitionStyle = .crossDissolve
         h.view.backgroundColor = .clear
-        host = h
         present(h, animated: false)
     }
 
