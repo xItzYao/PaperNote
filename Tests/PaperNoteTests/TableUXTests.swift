@@ -48,6 +48,31 @@ final class TableGestureTests: XCTestCase {
         XCTAssertNil(t.gesture(for: [CGPoint(x: 20, y: 150), CGPoint(x: 60, y: 150)]), "太短（不到一半寬）不算")
     }
 
+    // MARK: 橡皮擦擦掉格線
+
+    func testErasingAlongALineMergesTheCells() {
+        // 沿著 A1、B1 中間的直線從上擦到下
+        let pts = stride(from: CGFloat(2), through: 38, by: 3).map { CGPoint(x: 100 + sin($0) * 3, y: $0) }
+        XCTAssertEqual(t.erasedLines(pts, tolerance: 8), [CellRange((0, 0), (0, 1))])
+    }
+
+    func testErasingAcrossALineDoesNotMerge() {
+        // 擦格子裡的字時，橡皮擦橫著穿過格線：不能合併
+        let pts = [CGPoint(x: 60, y: 20), CGPoint(x: 140, y: 22), CGPoint(x: 60, y: 24)]
+        XCTAssertEqual(t.erasedLines(pts, tolerance: 8), [])
+    }
+
+    func testErasingPartOfALineIsNotEnough() {
+        let pts = [CGPoint(x: 100, y: 2), CGPoint(x: 100, y: 12)]
+        XCTAssertEqual(t.erasedLines(pts, tolerance: 8), [], "只擦了一小段（不到六成）不算")
+    }
+
+    func testErasingAHorizontalLineAcrossTwoCells() {
+        let pts = [CGPoint(x: 4, y: 41), CGPoint(x: 196, y: 39)]
+        XCTAssertEqual(Set(t.erasedLines(pts, tolerance: 8).map { "\($0.r0)\($0.c0)\($0.r1)\($0.c1)" }), ["0010", "0111"],
+                       "擦掉第 1、2 列中間的橫線（A、B 兩欄）")
+    }
+
     func testTemplatesHaveHeaders() {
         let tt = TableTemplate.timetable.table
         XCTAssertEqual(tt.cols, 6)
@@ -134,6 +159,22 @@ final class TableEditorUXTests: XCTestCase {
         XCTAssertEqual(after.y, before.y, accuracy: 0.5, "原本的格子留在原地，新的一列長在上面")
     }
 
+    func testEraserMergesInTheEditorButNotOnALockedTable() {
+        let o = origin
+        let path = stride(from: CGFloat(2), through: 38, by: 3).map { CGPoint(x: o.x + 200, y: o.y + $0) }
+        editor.setTool(.eraser)
+        editor.eraseTableLines(path)
+        editor.setTool(.select)
+        editor.select(ref)
+        XCTAssertEqual(table.span(0, 1).colSpan, 2, "橡皮擦沿著 B1、C1 中間的線擦＝合併")
+        editor.modifyElement(ref) { $0.locked = true }
+        editor.setTool(.eraser)
+        editor.eraseTableLines(path.map { CGPoint(x: $0.x - 100, y: $0.y + 40) })
+        editor.setTool(.select)
+        editor.select(ref)
+        XCTAssertEqual(table.span(1, 0).colSpan, 1, "鎖定的表格擦了也不合併")
+    }
+
     // MARK: 標頭
 
     func testTappingAColumnHeaderSelectsTheWholeColumn() throws {
@@ -185,6 +226,7 @@ final class TableEditorUXTests: XCTestCase {
         editor.presentInsertTablePanel(anchor: .doc(CGRect(origin: p, size: CGSize(width: 1, height: 1))), at: p)
         RunLoop.main.run(until: Date().addingTimeInterval(0.4))
         let host = try XCTUnwrap(editor.presentedViewController as? UIHostingController<TableInsertPanel>, "要跳出插入表格的小視窗")
+        XCTAssertEqual(host.sizingOptions, .preferredContentSize, "小視窗大小跟著內容，標題、範本不會被切掉")
         host.rootView.onInsert(.size(cols: 4, rows: 2))
         RunLoop.main.run(until: Date().addingTimeInterval(0.4))
         XCTAssertEqual(table.cols, 4)

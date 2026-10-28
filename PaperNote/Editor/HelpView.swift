@@ -54,7 +54,7 @@ struct HelpView: View {
                 }
                 Section("表格（選取表格後第二列會出現表格工具）") {
                     row(Item(symbol: "hand.tap", title: "不用找按鈕", detail: "點兩下格子打字；點表格上方、左邊的標頭選整欄整列（拖曳選好幾欄），長按標頭插入、刪除、平均分配、鎖定；長按格子合併、分割、底色。拖選取範圍右下角的藍點往下或往右重複，做大表格。"))
-                    row(Item(symbol: "pencil.and.outline", title: "用筆改表格", detail: "按「手繪格線」後：在格子裡畫線切開、畫斜線；在格線上來回塗掉＝合併兩邊的格子；在表格外面靠近邊的地方畫一條線＝在那裡加一列或一欄。"))
+                    row(Item(symbol: "pencil.and.outline", title: "用筆改表格", detail: "按「手繪格線」後：在格子裡畫線切開、畫斜線；在格線上來回塗掉＝合併兩邊的格子（用橡皮擦沿著格線擦也可以，不用切到手繪格線）；在表格外面靠近邊的地方畫一條線＝在那裡加一列或一欄。"))
                     ForEach(table) { row($0) }
                 }
                 Section("其他") {

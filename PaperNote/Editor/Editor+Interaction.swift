@@ -42,8 +42,18 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         eraserTracker.onPoint = { [weak self] p in
             self?.eraseHighlights(at: p)
             self?.eraseInk(at: p)
+            self?.eraserPath.append(p)
         }
-        eraserTracker.onBegan = { [weak self] _ in self?.inkEraseUndoRegistered = [] }
+        eraserTracker.onBegan = { [weak self] _ in
+            self?.inkEraseUndoRegistered = []
+            self?.eraserPath = []
+        }
+        // 橡皮擦沿著表格的格線擦過去：放開時合併線兩邊的格子
+        eraserTracker.onEnded = { [weak self] in
+            guard let self else { return }
+            self.eraseTableLines(self.eraserPath)
+            self.eraserPath = []
+        }
         canvas.addGestureRecognizer(eraserTracker)
 
         // 記住筆尖最後的位置（調色盤小圖示出現在這附近）

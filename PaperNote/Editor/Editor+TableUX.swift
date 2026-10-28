@@ -56,6 +56,27 @@ extension NotebookViewController {
         updateTableDraftChrome()
     }
 
+    /// 橡皮擦沿著表格裡的格線擦過去（擦過那段線的大半）：合併線兩邊的格子。鎖定的表格不動
+    func eraseTableLines(_ path: [CGPoint]) {
+        guard path.count >= 2 else { return }
+        let pi = pageIndex(containing: path[0]) ?? nearestPageIndex(to: path[0])
+        guard pages.indices.contains(pi) else { return }
+        let tol = max(6 / canvas.zoomScale, eraserRadius)
+        let xs = path.map(\.x), ys = path.map(\.y)
+        let bounds = CGRect(x: xs.min()!, y: ys.min()!, width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!)
+        var merged = 0
+        for e in pages[pi].elements where !e.locked {
+            guard case let .table(t) = e.content else { continue }
+            let frame = docFrame(of: e, pageIndex: pi)
+            guard frame.insetBy(dx: -tol, dy: -tol).intersects(bounds) else { continue }
+            let ranges = t.erasedLines(path.map { CGPoint(x: $0.x - frame.minX, y: $0.y - frame.minY) }, tolerance: tol)
+            guard !ranges.isEmpty else { continue }
+            modifyTable(ElementRef(pageID: pages[pi].id, elementID: e.id)) { for r in ranges { $0.mergeCells(r) } }
+            merged += ranges.count
+        }
+        if merged > 0 { showToast(merged > 1 ? "擦掉格線：已合併 \(merged) 組格子" : "擦掉格線：已合併格子") }
+    }
+
     // MARK: - 欄、列標頭
 
     /// 選到表格時，上方的欄標頭、左邊的列標頭（文件座標）
@@ -123,6 +144,13 @@ extension NotebookViewController {
         UIAction(title: title, image: symbol.flatMap { UIImage(systemName: $0) }, attributes: attributes) { [weak self] _ in
             self?.tableAction(change)
         }
+    }
+
+    /// SwiftUI 小視窗：大小跟著內容（不會被切掉）
+    func hosting<V: View>(_ v: V) -> UIHostingController<V> {
+        let h = UIHostingController(rootView: v)
+        h.sizingOptions = .preferredContentSize
+        return h
     }
 
     func presentTablePanel(_ vc: UIViewController, anchor: TablePanelAnchor, size: CGSize) {
@@ -250,7 +278,7 @@ extension NotebookViewController {
                                         self?.dismissToolPopover()
                                         self?.tableAction { t, r in t.unmerge(r.r0, r.c0) }
                                     })
-        presentTablePanel(UIHostingController(rootView: panel), anchor: anchor, size: CGSize(width: 320, height: 330))
+        presentTablePanel(hosting(panel), anchor: anchor, size: CGSize(width: 320, height: 340))
     }
 
     // MARK: - 插入表格（拖格子選大小，或用範本）
@@ -270,7 +298,7 @@ extension NotebookViewController {
             }
             _ = self.insertElement(.table(t), size: t.size, at: p)
         }
-        presentTablePanel(UIHostingController(rootView: panel), anchor: anchor, size: CGSize(width: 330, height: 430))
+        presentTablePanel(hosting(panel), anchor: anchor, size: CGSize(width: 340, height: 520))
     }
 }
 
@@ -324,7 +352,7 @@ struct TableInsertPanel: View {
     let onInsert: (Choice) -> Void
     @State private var cols = 3
     @State private var rows = 3
-    private let maxCols = 10, maxRows = 10, cell: CGFloat = 22, gap: CGFloat = 3
+    private let maxCols = 10, maxRows = 8, cell: CGFloat = 22, gap: CGFloat = 3
 
     var body: some View {
         VStack(spacing: 12) {

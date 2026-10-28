@@ -242,7 +242,7 @@ extension NotebookViewController {
         }
         let panel = TableRepeatPanel(direction: direction, count: editing?.count ?? 1, editing: editing != nil, blockLabel: label,
                                      onApply: { [weak self] d, n in self?.applyTableRepeat(direction: d, count: n, editing: editing, selection: sel) })
-        presentTablePanel(UIHostingController(rootView: panel), anchor: anchor, size: CGSize(width: 380, height: 250))
+        presentTablePanel(hosting(panel), anchor: anchor, size: CGSize(width: 380, height: 260))
     }
 
     /// direction：0 往上、1 往下、2 往左、3 往右

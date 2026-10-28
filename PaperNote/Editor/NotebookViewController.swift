@@ -237,6 +237,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var tableDrawTarget: ElementRef?
     /// 在已有的表格上手繪格線：這一筆的所有點（劃掉格線要看整條路徑）
     var tableDrawPoints: [CGPoint] = []
+    /// 橡皮擦這一次擦過的路徑（沿著表格格線擦＝合併）
+    var eraserPath: [CGPoint] = []
     /// 工具列的＋（插入表格的小視窗指著它）
     weak var insertButton: UIButton?
     weak var tableCellLabel: UILabel?

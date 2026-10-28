@@ -683,6 +683,41 @@ extension TableData {
         return outsideLine(pts)
     }
 
+    /// 橡皮擦沿著格線擦（離線 tolerance 以內、擦過那段線的 coverage 以上）：回傳要合併的格子。
+    /// 只是穿過格線（擦格子裡的字時常常會）不算
+    func erasedLines(_ pts: [CGPoint], tolerance tol: CGFloat, coverage: CGFloat = 0.6) -> [CellRange] {
+        guard pts.count >= 2, rows > 0, cols > 0 else { return [] }
+        // 補成每 2pt 一點，才算得出沿著線擦了多長
+        var dense: [CGPoint] = []
+        for (a, b) in zip(pts, pts.dropFirst()) {
+            let n = max(1, Int(hypot(b.x - a.x, b.y - a.y) / 2))
+            for i in 0..<n {
+                let t = CGFloat(i) / CGFloat(n)
+                dense.append(CGPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t))
+            }
+        }
+        dense.append(pts[pts.count - 1])
+        var out: [CellRange] = []
+        func add(_ r: CellRange) { if !out.contains(r) { out.append(r) } }
+        for c in 1..<max(cols, 1) {
+            let x = colX(c)
+            for r in 0..<rows where isColLineVisible(c, atRow: r) {
+                let y0 = rowY(r), y1 = rowY(r + 1)
+                let ys = dense.filter { abs($0.x - x) <= tol && $0.y >= y0 && $0.y <= y1 }.map(\.y)
+                if let lo = ys.min(), let hi = ys.max(), hi - lo >= (y1 - y0) * coverage { add(CellRange(anchor(r, c - 1), anchor(r, c))) }
+            }
+        }
+        for r in 1..<max(rows, 1) {
+            let y = rowY(r)
+            for c in 0..<cols where isRowLineVisible(r, atColumn: c) {
+                let x0 = colX(c), x1 = colX(c + 1)
+                let xs = dense.filter { abs($0.y - y) <= tol && $0.x >= x0 && $0.x <= x1 }.map(\.x)
+                if let lo = xs.min(), let hi = xs.max(), hi - lo >= (x1 - x0) * coverage { add(CellRange(anchor(r - 1, c), anchor(r, c))) }
+            }
+        }
+        return out
+    }
+
     /// 在同一段格線上來回穿過 2 次以上（整筆至少 3 次）＝劃掉那段線
     private func scribbledLines(_ pts: [CGPoint]) -> [CellRange]? {
         var ranges: [CellRange] = []
