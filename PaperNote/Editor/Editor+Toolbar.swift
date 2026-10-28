@@ -138,13 +138,7 @@ extension NotebookViewController {
             done(self?.makeSettingsMenuItems() ?? [])
         }])
         settingsButton.showsMenuAsPrimaryAction = true
-        let help = makeButton(symbol: "questionmark.circle", title: nil, action: nil)
-        help.accessibilityLabel = "說明"
-        help.addAction(UIAction { [weak self, weak help] _ in
-            guard let self, let help else { return }
-            self.presentHelp(from: help)
-        }, for: .touchUpInside)
-        let right = UIStackView(arrangedSubviews: [undo, redo, favoriteButton, favList, overview, pageMenu, help, settingsButton])
+        let right = UIStackView(arrangedSubviews: [undo, redo, favoriteButton, favList, overview, pageMenu, settingsButton])
         right.spacing = 2
 
         for s in [left, center, right] {
@@ -171,7 +165,7 @@ extension NotebookViewController {
         pageLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
         pageLabel.textColor = .secondaryLabel
         pageLabel.translatesAutoresizingMaskIntoConstraints = false
-        // 點頁碼打開全部頁面
+        // 點頁碼：直接輸入要跳到的頁碼
         pageLabel.isUserInteractionEnabled = true
         pageLabel.accessibilityIdentifier = "pageIndicator"
         pageLabel.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(pageLabelTapped)))
@@ -770,21 +764,65 @@ extension NotebookViewController {
         ])
     }
 
-    @objc func pageLabelTapped() { presentPageOverview() }
+    @objc func pageLabelTapped() { beginPageJump() }
+
+    /// 頁碼變成輸入框，選好目前的頁碼，直接打數字；Enter 或點旁邊就跳過去
+    func beginPageJump() {
+        guard !pages.isEmpty else { return }
+        let f = pageJumpField ?? makePageJumpField()
+        f.text = "\(currentPageIndex + 1)"
+        f.placeholder = "1–\(pages.count)"
+        f.isHidden = false
+        pageLabel.alpha = 0
+        f.becomeFirstResponder()
+        f.selectAll(nil)
+    }
+
+    private func makePageJumpField() -> UITextField {
+        let f = UITextField()
+        f.keyboardType = .numberPad
+        f.returnKeyType = .go
+        f.textAlignment = .center
+        f.font = .monospacedDigitSystemFont(ofSize: 15, weight: .semibold)
+        f.borderStyle = .roundedRect
+        f.accessibilityIdentifier = "pageJumpField"
+        f.translatesAutoresizingMaskIntoConstraints = false
+        f.isHidden = true
+        subBar.addSubview(f)
+        NSLayoutConstraint.activate([
+            f.centerYAnchor.constraint(equalTo: pageLabel.centerYAnchor),
+            f.centerXAnchor.constraint(equalTo: pageLabel.centerXAnchor),
+            f.widthAnchor.constraint(equalToConstant: 76),
+        ])
+        // 按 Enter 收起鍵盤，收起時（含點旁邊）跳過去
+        f.addAction(UIAction { _ in }, for: .editingDidEndOnExit)
+        f.addAction(UIAction { [weak self] _ in self?.finishPageJump() }, for: .editingDidEnd)
+        pageJumpField = f
+        return f
+    }
+
+    /// 輸入框收起：是有效的頁碼就跳過去（超過範圍就到第一頁／最後一頁）
+    func finishPageJump() {
+        guard let f = pageJumpField, !f.isHidden else { return }
+        f.isHidden = true
+        pageLabel.alpha = 1
+        if f.isFirstResponder { f.resignFirstResponder() }
+        guard let n = Int(f.text ?? ""), !pages.isEmpty else { return }
+        let i = min(max(n, 1), pages.count) - 1
+        if i != currentPageIndex { scrollToPage(i, animated: true) }
+    }
 
     func makePageMenuItems() -> [UIMenuElement] {
         guard !pages.isEmpty else { return [] }
         let i = currentPageIndex
+        // 全部頁面、跳到頁碼、擴展頁面在工具列上都有，這裡不重複
         var items: [UIMenuElement] = [
-            UIAction(title: "全部頁面…", image: UIImage(systemName: "square.grid.2x2")) { [weak self] _ in self?.presentPageOverview() },
-            UIAction(title: "跳到頁碼…", image: UIImage(systemName: "arrow.right.doc.on.clipboard")) { [weak self] _ in self?.presentJumpToPage() },
             UIAction(title: "在此頁後新增頁面…", image: UIImage(systemName: "doc.badge.plus")) { [weak self] _ in
                 self?.presentPaperPicker(title: "在第 \(i + 1) 頁後新增頁面", insertAt: i + 1)
             },
             UIAction(title: "在此頁前新增頁面…", image: UIImage(systemName: "doc.badge.plus")) { [weak self] _ in
                 self?.presentPaperPicker(title: "在第 \(i + 1) 頁前新增頁面", insertAt: i)
             },
-            UIAction(title: "擴展此頁空白…", image: UIImage(systemName: "arrow.up.left.and.arrow.down.right")) { [weak self] _ in self?.presentExpandSheet() },
         ]
         if !pages[i].insets.isZero {
             items.append(UIAction(title: "移除此頁擴展", image: UIImage(systemName: "arrow.down.right.and.arrow.up.left")) { [weak self] _ in
@@ -848,6 +886,12 @@ extension NotebookViewController {
                 s.smartHighlight.toggle()
             },
         ])
+        let help = UIMenu(options: .displayInline, children: [
+            UIAction(title: "使用說明…", image: UIImage(systemName: "questionmark.circle")) { [weak self] _ in
+                guard let self else { return }
+                self.presentHelp(from: self.settingsButton)
+            },
+        ])
         let actions = UIMenu(options: .displayInline, children: [
             UIAction(title: "管理常用筆刷…", image: UIImage(systemName: "swatchpalette")) { [weak self] _ in
                 self?.presentBrushManager()
@@ -861,7 +905,7 @@ extension NotebookViewController {
                 self?.pinOverlay.reload()
             },
         ])
-        return [toggles, actions]
+        return [help, toggles, actions]
     }
 
     // MARK: - Favorites

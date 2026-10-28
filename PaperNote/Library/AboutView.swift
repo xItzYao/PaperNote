@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// 關於我＋贊助連結＋GitHub
+/// 關於我＋GitHub
 struct AboutView: View {
-    static let supportURL = URL(string: "https://buymeacoffee.com/happytw")!
     static let githubURL = URL(string: "https://github.com/xItzYao/PaperNote")!
     @Environment(\.dismiss) private var dismiss
 
@@ -21,7 +20,7 @@ struct AboutView: View {
                             .font(.system(size: 64))
                             .foregroundStyle(Color.accentColor)
                         Text("PaperNote").font(.title2.weight(.bold))
-                        Text("大學生，喜歡或是想支持我可以透過這個連結贊助窮苦大學生 :P")
+                        Text("一個大學生做的 iPad 筆記軟體，原始碼公開在 GitHub。")
                             .multilineTextAlignment(.center)
                             .foregroundStyle(.secondary)
                     }
@@ -29,9 +28,6 @@ struct AboutView: View {
                     .padding(.vertical, 12)
                 }
                 Section {
-                    Link(destination: Self.supportURL) {
-                        Label("請我喝杯咖啡（Buy Me a Coffee）", systemImage: "cup.and.saucer.fill")
-                    }
                     Link(destination: Self.githubURL) {
                         Label("GitHub 原始碼", systemImage: "chevron.left.forwardslash.chevron.right")
                     }

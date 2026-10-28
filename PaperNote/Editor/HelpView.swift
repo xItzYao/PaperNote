@@ -57,17 +57,15 @@ struct HelpView: View {
                 }
                 Section("其他") {
                     row(Item(symbol: "star", title: "我的最愛", detail: "把目前這頁加入我的最愛並寫備註；資料庫的「我的最愛頁面」可以搜尋所有備註。"))
-                    row(Item(symbol: "square.grid.2x2", title: "全部頁面", detail: "用縮圖看整本筆記（也可以點第二列右側的頁碼打開），點一下跳到那頁。長按拖曳可以調整頁面順序；按「選取」可以一次複製或刪除多頁；上方切到「我的最愛」只看收藏的頁面。"))
-                    row(Item(symbol: "doc.on.doc", title: "頁面", detail: "跳頁、新增空白頁、刪除頁面；刪除的頁面 30 天內可以在「最近刪除的頁面」還原。"))
+                    row(Item(symbol: "number", title: "跳到頁碼", detail: "點第二列右側的頁碼，直接輸入要跳到第幾頁，按 Enter 或點旁邊就過去。"))
+                    row(Item(symbol: "square.grid.2x2", title: "全部頁面", detail: "用縮圖看整本筆記，點一下跳到那頁。長按拖曳可以調整頁面順序；按「選取」可以一次複製或刪除多頁；上方切到「我的最愛」只看收藏的頁面。"))
+                    row(Item(symbol: "doc.on.doc", title: "頁面", detail: "在這頁前後新增頁面（可以選紙張、大小、方向）、刪除頁面；刪除的頁面 30 天內可以在「最近刪除的頁面」還原。捲到最後一頁再往上拉也可以新增頁面。"))
                     row(Item(symbol: "hand.raised", title: "手掌防誤觸", detail: "在「⋯」選擇右手或左手寫字。寫字時與剛寫完的一瞬間，手掌壓在筆尖附近（右手：右下方；左手：左下方）不會捲動、縮放或點到東西；放下筆後手指馬上就能正常操作。"))
-                    row(Item(symbol: "ellipsis.circle", title: "設定", detail: "調色盤圖示、手掌防誤觸、筆刷列靠右、手指書寫、橡皮擦自動切回筆、停住變直線、螢光筆對齊文字、管理常用筆刷、匯出（PDF，或可以繼續編輯的 PaperNote 檔）。"))
+                    row(Item(symbol: "ellipsis.circle", title: "設定", detail: "使用說明（就是這裡）、調色盤圖示、手掌防誤觸、筆刷列靠右、手指書寫、橡皮擦自動切回筆、停住變直線、螢光筆對齊文字、管理常用筆刷、匯出（PDF，或可以繼續編輯的 PaperNote 檔）。"))
                 }
                 Section("關於我") {
-                    Text("大學生，喜歡或是想支持我可以透過這個連結贊助窮苦大學生 :P")
+                    Text("一個大學生做的 iPad 筆記軟體，原始碼公開在 GitHub。")
                         .font(.subheadline)
-                    Link(destination: AboutView.supportURL) {
-                        Label("請我喝杯咖啡（Buy Me a Coffee）", systemImage: "cup.and.saucer.fill")
-                    }
                     Link(destination: AboutView.githubURL) {
                         Label("GitHub 原始碼", systemImage: "chevron.left.forwardslash.chevron.right")
                     }

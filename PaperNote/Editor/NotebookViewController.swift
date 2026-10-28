@@ -135,6 +135,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     let subBar = UIView()
     let subBarStack = UIStackView()
     let pageLabel = UILabel()
+    /// 點頁碼後出現的輸入框（輸入要跳到的頁碼）
+    var pageJumpField: UITextField?
     var toolButtons: [EditorTool: UIButton] = [:]
     var presetButtons: [UUID: UIButton] = [:]
     /// 筆工具列的「細、中、粗」三個粗細按鈕與虛線開關
@@ -922,20 +924,6 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         h.modalPresentationStyle = .formSheet
         host = h
         present(h, animated: true)
-    }
-
-    func presentJumpToPage() {
-        let a = UIAlertController(title: "跳到頁碼", message: "共 \(pages.count) 頁", preferredStyle: .alert)
-        a.addTextField { tf in
-            tf.keyboardType = .numberPad
-            tf.placeholder = "頁碼"
-        }
-        a.addAction(UIAlertAction(title: "取消", style: .cancel))
-        a.addAction(UIAlertAction(title: "前往", style: .default) { [weak self, weak a] _ in
-            guard let self, let n = Int(a?.textFields?.first?.text ?? "") else { return }
-            self.scrollToPage(min(max(n, 1), self.pages.count) - 1, animated: true)
-        })
-        present(a, animated: true)
     }
 
     func presentExpandSheet(pageIndex: Int? = nil) {
