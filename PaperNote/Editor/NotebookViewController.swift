@@ -844,11 +844,18 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     private func processNewStroke(duration: TimeInterval, countBefore: Int) {
         var drawing = canvas.drawing
         guard drawing.strokes.count == countBefore + 1, var stroke = drawing.strokes.last else { return }
+        // 這一筆被換掉（遮掉頁面外、拉直）之後，PencilKit 自己的上一步找不到原本那一筆、按了沒反應：
+        // 換掉就自己登記一步，回到寫這一筆之前
+        var before = drawing
+        before.strokes.removeLast()
+        var replaced = false
+        defer { if replaced { registerCompositeUndo(drawing: before, pageIDs: []) } }
         // 不畫到頁面外：超出這一筆所在那一頁的部分遮掉
         if let masked = maskedToPage(stroke) {
             stroke = masked
             drawing.strokes[drawing.strokes.count - 1] = masked
             setDrawing(drawing)
+            replaced = true
         }
         holdToShape.recordSample(of: stroke, presetID: BrushStore.shared.current.id)
         // 虛線：筆放開後把這一筆切成一段一段（上一步回到寫這一筆之前）
@@ -857,13 +864,14 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             let width = ShapeRecognizer.samplePoint(of: stroke)?.size.width ?? preset.tool.width
             let pieces = DashedStroke.apply(stroke, dashed: true, lineWidth: width, preset: preset)
             drawing.strokes.removeLast()
-            let before = drawing
             drawing.strokes += pieces
             setDrawingAddingStrokes(drawing, added: pieces.count)
-            registerCompositeUndo(drawing: before, pageIDs: [])
+            replaced = true
             return
         }
+        // 對齊 PDF 文字：筆跡拿掉、改成螢光標示（加標示的那一步會一起復原）
         if BrushStore.shared.current.style == .marker && settings.smartHighlight && snapHighlightToText(stroke) {
+            replaced = false
             drawing.strokes.removeLast()
             setDrawing(drawing)
             return
@@ -873,6 +881,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
            let straight = ShapeRecognizer.straightenIfNearlyStraight(stroke, preset: BrushStore.shared.current) {
             drawing.strokes[drawing.strokes.count - 1] = straight
             setDrawing(drawing)
+            replaced = true
         }
     }
 
