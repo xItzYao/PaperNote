@@ -206,6 +206,31 @@ twoH.wires = [CircuitWire(points: [P(0, 100), P(50, 100)]), CircuitWire(points: 
               CircuitWire(points: [P(50, 0), P(50, 200)])]
 check("horizontal line in two strokes gets no dot", twoH.junctions().isEmpty)
 check("vertical wire hops over the two-stroke line", twoH.crossings().count == 1 && twoH.crossings()[0].wire == 2 && twoH.crossings()[0].at == 100)
+// 回報：橫線分兩筆畫、接在直線上，結果是直線被畫成半圓。存檔時兩筆接成一條，跨線回到橫線上
+var twoHJoined = twoH
+twoHJoined.joinStraightRuns()
+check("two strokes in a straight line become one wire", twoHJoined.wires.count == 2 && twoHJoined.wires[0].points == [P(0, 100), P(100, 100)])
+check("after joining, the horizontal wire hops", twoHJoined.crossings().count == 1 && twoHJoined.crossings()[0].wire == 0 && twoHJoined.crossings()[0].at == 50)
+var joinKeep = twoH
+joinKeep.joinStraightRuns(keeping: twoH.wires[1].id)
+check("joined wire keeps the selected wire's id", joinKeep.wires[0].id == twoH.wires[1].id)
+var towardEachOther = CircuitData()
+towardEachOther.wires = [CircuitWire(points: [P(50, 0), P(50, 100)]), CircuitWire(points: [P(50, 200), P(50, 100)])]
+towardEachOther.joinStraightRuns()
+check("strokes drawn toward each other join too", towardEachOther.wires.count == 1 && towardEachOther.wires[0].points == [P(50, 0), P(50, 200)])
+var bendJoin = bend
+bendJoin.joinStraightRuns()
+check("three wire ends at one point are not joined", bendJoin.wires.count == 3)
+var ellJoin = ell
+ellJoin.joinStraightRuns()
+check("an L corner from two wires is not joined", ellJoin.wires.count == 2)
+// 接腳上剛好接成一直線的兩條線不接（接腳也是接點）
+var atPin = CircuitData()
+atPin.components = [CircuitComponent(part: .resistor, position: P(100, 100))]
+let pinPoint = CircuitGeometry.pins(atPin.components[0])[1]
+atPin.wires = [CircuitWire(points: [P(pinPoint.x, pinPoint.y - 50), pinPoint]), CircuitWire(points: [pinPoint, P(pinPoint.x, pinPoint.y + 50)])]
+atPin.joinStraightRuns()
+check("wires meeting on a pin are not joined", atPin.wires.count == 2)
 // 三條線的頭尾在同一點：真的接在一起
 var bend = CircuitData()
 bend.wires = [CircuitWire(points: [P(50, 0), P(50, 100)]), CircuitWire(points: [P(50, 100), P(50, 150), P(100, 150)]),

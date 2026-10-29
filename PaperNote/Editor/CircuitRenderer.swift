@@ -10,6 +10,8 @@ enum CircuitRenderer {
         guard let ctx = UIGraphicsGetCurrentContext() else { return }
         ctx.saveGState()
         ctx.translateBy(x: rect.minX, y: rect.minY)
+        // 符號、線寬、跨線、圓點一起縮放
+        ctx.scaleBy(x: d.scale, y: d.scale)
         let color = UIColor(hex: d.colorHex)
         for c in d.components { drawComponent(c, color: color, lineWidth: d.lineWidth) }
         drawWires(d, color: color)

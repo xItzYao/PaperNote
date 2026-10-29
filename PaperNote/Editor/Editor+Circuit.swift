@@ -48,14 +48,21 @@ extension NotebookViewController {
         return docFrame(of: info.element, pageIndex: info.pi).origin
     }
 
+    /// 內容座標 → 文件座標：外框原點加上電路圖的縮放
+    func circuitTransform(_ ref: ElementRef) -> CGAffineTransform? {
+        guard let info = circuitInfo(ref) else { return nil }
+        let o = docFrame(of: info.element, pageIndex: info.pi).origin
+        return CGAffineTransform(translationX: o.x, y: o.y).scaledBy(x: info.data.scale, y: info.data.scale)
+    }
+
     func circuitLocal(_ p: CGPoint, _ ref: ElementRef) -> CGPoint {
-        guard let o = circuitOrigin(ref) else { return p }
-        return CGPoint(x: p.x - o.x, y: p.y - o.y)
+        guard let t = circuitTransform(ref) else { return p }
+        return p.applying(t.inverted())
     }
 
     func circuitDoc(_ p: CGPoint, _ ref: ElementRef) -> CGPoint {
-        guard let o = circuitOrigin(ref) else { return p }
-        return CGPoint(x: p.x + o.x, y: p.y + o.y)
+        guard let t = circuitTransform(ref) else { return p }
+        return p.applying(t)
     }
 
     /// p 附近所有的電路圖（目前正在編輯的排第一，其餘由上往下）
@@ -87,14 +94,14 @@ extension NotebookViewController {
         let tol = max(6, 12 / canvas.zoomScale)
         for ref in refs {
             guard let info = circuitInfo(ref) else { continue }
-            let local = circuitLocal(p, ref)
-            for c in info.data.components.reversed() where CircuitGeometry.bounds(c).insetBy(dx: -tol / 2, dy: -tol / 2).contains(local) {
+            let local = circuitLocal(p, ref), t = tol / info.data.scale
+            for c in info.data.components.reversed() where CircuitGeometry.bounds(c).insetBy(dx: -t / 2, dy: -t / 2).contains(local) {
                 return (ref, .component(c.id))
             }
         }
         for ref in refs {
             guard let info = circuitInfo(ref) else { continue }
-            if case let (id, _)? = wireSegmentHit(circuitLocal(p, ref), in: info.data, tolerance: tol) { return (ref, .wire(id)) }
+            if case let (id, _)? = wireSegmentHit(circuitLocal(p, ref), in: info.data, tolerance: tol / info.data.scale) { return (ref, .wire(id)) }
         }
         return nil
     }
@@ -116,7 +123,7 @@ extension NotebookViewController {
         guard let ref = circuitTarget, case let .wire(id)? = circuitSel,
               let w = circuitInfo(ref)?.data.wires.first(where: { $0.id == id }), w.points.count >= 2 else { return nil }
         let local = circuitLocal(p, ref)
-        let r = max(10, 20 / canvas.zoomScale)
+        let r = max(10, 20 / canvas.zoomScale) / (circuitInfo(ref)?.data.scale ?? 1)
         func near(_ q: CGPoint) -> Bool { hypot(q.x - local.x, q.y - local.y) <= r }
         if near(w.points[0]) { return (ref, .wireEnd(id, first: true)) }
         if near(w.points[w.points.count - 1]) { return (ref, .wireEnd(id, first: false)) }
@@ -133,7 +140,7 @@ extension NotebookViewController {
             return (hit.ref, .component(id))
         case .wire:
             let tol = max(6, 12 / canvas.zoomScale)
-            guard case let (id, i)? = wireSegmentHit(circuitLocal(p, hit.ref), in: info.data, tolerance: tol) else { return nil }
+            guard case let (id, i)? = wireSegmentHit(circuitLocal(p, hit.ref), in: info.data, tolerance: tol / info.data.scale) else { return nil }
             return (hit.ref, .wireSegment(id, i))
         }
     }
@@ -144,13 +151,18 @@ extension NotebookViewController {
     func normalizedCircuit(_ e: PageElement) -> PageElement {
         guard case var .circuit(d) = e.content else { return e }
         // 外框原點對齊頁面格點；舊資料若沒對齊，內容先平移回原位再整個吸到格點
+        let s = d.scale
         var base = e.frame
-        let aligned = CircuitData.snap(base.origin)
+        let aligned = d.snapOnPage(base.origin)
         if aligned != base.origin {
-            d.offset(by: CGPoint(x: base.minX - aligned.x, y: base.minY - aligned.y))
+            d.offset(by: CGPoint(x: (base.minX - aligned.x) / s, y: (base.minY - aligned.y) / s))
             base.origin = aligned
         }
         d.snapToGrid()
+        // 一直線分兩筆畫的導線接成一條（選取中的那條保留 id，選取才不會不見）
+        var keep: UUID?
+        if case let .wire(id)? = circuitSel { keep = id }
+        d.joinStraightRuns(keeping: keep)
         let b = d.contentBounds
         guard !b.isNull else { return e }
         let g = CircuitData.grid, m = CircuitData.margin
@@ -158,7 +170,7 @@ extension NotebookViewController {
         d.offset(by: shift)
         let nb = d.contentBounds
         var out = e
-        out.frame = CGRect(x: base.minX - shift.x, y: base.minY - shift.y, width: nb.maxX + m, height: nb.maxY + m)
+        out.frame = CGRect(x: base.minX - shift.x * s, y: base.minY - shift.y * s, width: (nb.maxX + m) * s, height: (nb.maxY + m) * s)
         out.content = .circuit(d)
         return out
     }
@@ -186,8 +198,10 @@ extension NotebookViewController {
             grew = false
             guard case var .circuit(d) = merged.content else { break }
             for other in pages[pi].elements where other.id != e.id && !absorbed.contains(other.id) && !other.locked {
-                guard case var .circuit(od) = other.content, other.frame.intersects(merged.frame) else { continue }
-                od.offset(by: CGPoint(x: other.frame.minX - merged.frame.minX, y: other.frame.minY - merged.frame.minY))
+                // 大小不同（舊的原尺寸、新的一半）的電路圖不合併
+                guard case var .circuit(od) = other.content, od.scale == d.scale, other.frame.intersects(merged.frame) else { continue }
+                let s = d.scale
+                od.offset(by: CGPoint(x: (other.frame.minX - merged.frame.minX) / s, y: (other.frame.minY - merged.frame.minY) / s))
                 d.components += od.components
                 d.wires += od.wires
                 absorbed.insert(other.id)
@@ -215,8 +229,9 @@ extension NotebookViewController {
         let pi = pageIndex(containing: p) ?? nearestPageIndex(to: p)
         guard pages.indices.contains(pi) else { return nil }
         let o = contentOrigin(pi)
-        let q = CircuitData.snap(CGPoint(x: p.x - o.x, y: p.y - o.y))
-        let e = normalizedCircuit(PageElement(frame: CGRect(x: q.x - 60, y: q.y - 60, width: 120, height: 120),
+        let s = data.scale
+        let q = data.snapOnPage(CGPoint(x: p.x - o.x, y: p.y - o.y))
+        let e = normalizedCircuit(PageElement(frame: CGRect(x: q.x - 60 * s, y: q.y - 60 * s, width: 120 * s, height: 120 * s),
                                               content: .circuit(data)))
         let (merged, absorbed) = mergingOverlaps(e, pageIndex: pi)
         updatePage(pi) { page in
@@ -243,7 +258,7 @@ extension NotebookViewController {
             circuitTarget = ref
             updateCircuit(ref, data: d)
         } else {
-            var d = CircuitData()
+            var d = CircuitData.newCircuit
             comp.position = CGPoint(x: 60, y: 60)
             d.components = [comp]
             circuitTarget = createCircuit(at: p, data: d)
@@ -361,7 +376,8 @@ extension NotebookViewController {
     /// 由拖曳起點的原始資料算出拖曳後的電路圖
     private func draggedCircuit(_ d: CircuitDrag, to p: CGPoint) -> PageElement? {
         guard case var .circuit(data) = d.original.content else { return nil }
-        let delta = CGPoint(x: p.x - d.start.x, y: p.y - d.start.y)
+        let s = data.scale
+        let delta = CGPoint(x: (p.x - d.start.x) / s, y: (p.y - d.start.y) / s)
         let g = CircuitData.grid
         let gridDelta = CGPoint(x: (delta.x / g).rounded() * g, y: (delta.y / g).rounded() * g)
         switch d.kind {
@@ -385,8 +401,8 @@ extension NotebookViewController {
             // 吸附到接腳或其他導線（不吸自己）
             var others = data
             others.wires.remove(at: wi)
-            let local = CGPoint(x: p.x - d.origin.x, y: p.y - d.origin.y)
-            let target = others.snapTarget(for: local, within: max(10, 20 / canvas.zoomScale))
+            let local = CGPoint(x: (p.x - d.origin.x) / s, y: (p.y - d.origin.y) / s)
+            let target = others.snapTarget(for: local, within: max(10, 20 / canvas.zoomScale) / s)
             data.wires[wi].points = CircuitData.movingEnd(data.wires[wi].points, first: first, to: target)
         }
         data.wires.removeAll { $0.points.count < 2 }
@@ -399,8 +415,8 @@ extension NotebookViewController {
     private func circuitSnapData(near p: CGPoint, in ref: ElementRef) -> CircuitData? {
         guard var d = circuitInfo(ref)?.data, let o = circuitOrigin(ref) else { return nil }
         for other in circuitsAt(p, margin: 40) where other != ref {
-            guard var od = circuitInfo(other)?.data, let oo = circuitOrigin(other) else { continue }
-            od.offset(by: CGPoint(x: oo.x - o.x, y: oo.y - o.y))
+            guard var od = circuitInfo(other)?.data, od.scale == d.scale, let oo = circuitOrigin(other) else { continue }
+            od.offset(by: CGPoint(x: (oo.x - o.x) / d.scale, y: (oo.y - o.y) / d.scale))
             d.components += od.components
             d.wires += od.wires
         }
@@ -410,33 +426,36 @@ extension NotebookViewController {
     private func wireSnap(_ p: CGPoint, ref: ElementRef?) -> CGPoint {
         let tol = max(10, 20 / canvas.zoomScale)
         if let ref, let data = circuitSnapData(near: p, in: ref) {
-            return circuitDoc(data.snapTarget(for: circuitLocal(p, ref), within: tol), ref)
+            return circuitDoc(data.snapTarget(for: circuitLocal(p, ref), within: tol / data.scale), ref)
         }
-        // 沒有電路圖：對齊頁面格點
+        // 沒有電路圖：對齊新電路圖在頁面上的格點
         let pi = pageIndex(containing: p) ?? nearestPageIndex(to: p)
         let o = pages.indices.contains(pi) ? contentOrigin(pi) : .zero
-        let s = CircuitData.snap(CGPoint(x: p.x - o.x, y: p.y - o.y))
+        let s = CircuitData.newCircuit.snapOnPage(CGPoint(x: p.x - o.x, y: p.y - o.y))
         return CGPoint(x: s.x + o.x, y: s.y + o.y)
     }
 
-    /// 接線用的電路圖與格點原點（沒有電路圖就用頁面內容的原點）
-    private func wireFrame(_ w: WireDraft) -> (ref: ElementRef?, origin: CGPoint)? {
+    /// 接線用的電路圖與內容座標 → 文件座標（沒有電路圖就是頁面內容的原點、新電路圖的縮放）
+    private func wireFrame(_ w: WireDraft) -> (ref: ElementRef?, toDoc: CGAffineTransform)? {
         guard let first = w.ink.first, let last = w.ink.last else { return nil }
         let ref = w.ref ?? circuitAt(last, margin: 80)
-        if let ref, let origin = circuitOrigin(ref) { return (ref, origin) }
+        if let ref, let t = circuitTransform(ref) { return (ref, t) }
         let pi = pageIndex(containing: first) ?? nearestPageIndex(to: first)
-        return (ref, pages.indices.contains(pi) ? contentOrigin(pi) : .zero)
+        let o = pages.indices.contains(pi) ? contentOrigin(pi) : .zero
+        let s = CircuitData.newScale
+        return (ref, CGAffineTransform(translationX: o.x, y: o.y).scaledBy(x: s, y: s))
     }
 
     /// 依筆跡排出直角導線（文件座標），轉角對齊電路圖（或頁面）的格點
     private func wireRoute(_ w: WireDraft) -> (ref: ElementRef?, points: [CGPoint])? {
-        guard let first = w.ink.first, let last = w.ink.last, case let (ref, o)? = wireFrame(w) else { return nil }
-        func local(_ q: CGPoint) -> CGPoint { CGPoint(x: q.x - o.x, y: q.y - o.y) }
+        guard let first = w.ink.first, let last = w.ink.last, case let (ref, t)? = wireFrame(w) else { return nil }
+        let inv = t.inverted()
+        func local(_ q: CGPoint) -> CGPoint { q.applying(inv) }
         let s = local(wireSnap(first, ref: ref)), e = local(wireSnap(last, ref: ref))
-        let z = canvas.zoomScale
+        let z = canvas.zoomScale, k = t.a
         let route = CircuitData.penRoute(w.ink.map(local), from: s, to: e,
-                                         tolerance: max(4, 8 / z), minRun: max(10, 20 / z))
-        return (ref, route.map { CGPoint(x: $0.x + o.x, y: $0.y + o.y) })
+                                         tolerance: max(4, 8 / z) / k, minRun: max(10, 20 / z) / k)
+        return (ref, route.map { $0.applying(t) })
     }
 
     private func handleWirePan(_ g: UIPanGestureRecognizer, _ p: CGPoint) {
@@ -466,17 +485,18 @@ extension NotebookViewController {
 
     /// 手繪 VDD／接地：回傳到轉角為止的導線、元件種類與位置（文件座標）
     private func terminalPlacement(_ w: WireDraft) -> (ref: ElementRef?, route: [CGPoint], part: CircuitPart, position: CGPoint)? {
-        guard let first = w.ink.first, case let (ref, o)? = wireFrame(w) else { return nil }
-        let z = canvas.zoomScale
-        let ink = w.ink.map { CGPoint(x: $0.x - o.x, y: $0.y - o.y) }
-        guard let t = CircuitData.terminalGesture(ink, tolerance: max(4, 8 / z)) else { return nil }
+        guard let first = w.ink.first, case let (ref, f)? = wireFrame(w) else { return nil }
+        let inv = f.inverted()
+        let z = canvas.zoomScale, k = f.a
+        let ink = w.ink.map { $0.applying(inv) }
+        guard let t = CircuitData.terminalGesture(ink, tolerance: max(4, 8 / z) / k) else { return nil }
         let corner = CircuitData.snap(t.corner)
-        let s = CGPoint(x: wireSnap(first, ref: ref).x - o.x, y: wireSnap(first, ref: ref).y - o.y)
+        let s = wireSnap(first, ref: ref).applying(inv)
         guard let cut = ink.indices.min(by: { ink[$0].distance(to: t.corner) < ink[$1].distance(to: t.corner) }) else { return nil }
-        let route = CircuitData.penRoute(Array(ink[...cut]), from: s, to: corner, tolerance: max(4, 8 / z), minRun: max(10, 20 / z))
+        let route = CircuitData.penRoute(Array(ink[...cut]), from: s, to: corner, tolerance: max(4, 8 / z) / k, minRun: max(10, 20 / z) / k)
         // 接地的接腳在元件上方 20、VDD 的在下方 20：讓接腳剛好落在轉角
         let pos = t.part == .ground ? CGPoint(x: corner.x, y: corner.y + 20) : CGPoint(x: corner.x, y: corner.y - 20)
-        func doc(_ q: CGPoint) -> CGPoint { CGPoint(x: q.x + o.x, y: q.y + o.y) }
+        func doc(_ q: CGPoint) -> CGPoint { q.applying(f) }
         return (ref, route.map(doc), t.part, doc(pos))
     }
 
@@ -502,9 +522,9 @@ extension NotebookViewController {
         } else {
             // 新的電路圖：起點放在內容座標 (60, 60)
             guard let start = route.first ?? terminal?.position else { return }
-            let base = CGPoint(x: start.x - 60, y: start.y - 60)
-            func rel(_ q: CGPoint) -> CGPoint { CGPoint(x: q.x - base.x, y: q.y - base.y) }
-            var data = CircuitData()
+            var data = CircuitData.newCircuit
+            let s = data.scale
+            func rel(_ q: CGPoint) -> CGPoint { CGPoint(x: (q.x - start.x) / s + 60, y: (q.y - start.y) / s + 60) }
             if hasWire { data.wires = [CircuitWire(points: route.map(rel))] }
             if var c = comp, let t = terminal {
                 c.position = rel(t.position)
@@ -573,18 +593,18 @@ extension NotebookViewController {
             return
         }
         let frame = docFrame(of: info.element, pageIndex: info.pi)
-        let o = frame.origin
+        let t = circuitTransform(ref) ?? .identity
         var sel: UIBezierPath?
         var wirePath: UIBezierPath?
         var handles: UIBezierPath?
         switch circuitSel {
         case let .component(id)?:
             if let c = info.data.components.first(where: { $0.id == id }) {
-                sel = UIBezierPath(rect: CircuitGeometry.bounds(c).offsetBy(dx: o.x, dy: o.y).insetBy(dx: -4, dy: -4))
+                sel = UIBezierPath(rect: CircuitGeometry.bounds(c).applying(t).insetBy(dx: -4, dy: -4))
             }
         case let .wire(id)?:
             if let w = info.data.wires.first(where: { $0.id == id }), w.points.count >= 2 {
-                let pts = w.points.map { CGPoint(x: $0.x + o.x, y: $0.y + o.y) }
+                let pts = w.points.map { $0.applying(t) }
                 let path = UIBezierPath()
                 path.move(to: pts[0])
                 for q in pts.dropFirst() { path.addLine(to: q) }
@@ -681,8 +701,7 @@ extension NotebookViewController {
     func circuitPartHandleCenters() -> (rotate: CGPoint, flip: CGPoint, delete: CGPoint, radius: CGFloat)? {
         guard tool == .circuit, let ref = circuitTarget, case let .component(id)? = circuitSel,
               let info = circuitInfo(ref), let c = info.data.components.first(where: { $0.id == id }) else { return nil }
-        let o = docFrame(of: info.element, pageIndex: info.pi).origin
-        let b = CircuitGeometry.bounds(c).offsetBy(dx: o.x, dy: o.y)
+        let b = CircuitGeometry.bounds(c).applying(circuitTransform(ref) ?? .identity)
         let s = 30 / canvas.zoomScale
         let x = b.maxX + s * 0.9
         return (CGPoint(x: x, y: b.minY + s * 0.3), CGPoint(x: x, y: b.minY + s * 1.5), CGPoint(x: x, y: b.minY + s * 2.7), s * 0.7)

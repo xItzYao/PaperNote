@@ -112,12 +112,26 @@ struct CircuitData: Codable, Equatable {
     var wires: [CircuitWire] = []
     var colorHex: String = "#1A1A1AFF"
     var lineWidth: CGFloat = 2
+    /// 整個電路圖在頁面上的縮放：頁面上的大小 = 內容座標 × scale（符號、線寬一起縮）。
+    /// 舊的電路圖沒有這個值，照原本的大小
+    var symbolScale: CGFloat?
+
+    var scale: CGFloat { symbolScale ?? 1 }
 
     static let grid: CGFloat = 10
     static let margin: CGFloat = 24
+    /// 新建的電路圖：符號和線都是原本的一半
+    static let newScale: CGFloat = 0.5
+    static var newCircuit: CircuitData { CircuitData(symbolScale: newScale) }
 
     static func snap(_ p: CGPoint) -> CGPoint {
         CGPoint(x: (p.x / grid).rounded() * grid, y: (p.y / grid).rounded() * grid)
+    }
+
+    /// 頁面座標對齊這個電路圖在頁面上的格點（grid × scale）
+    func snapOnPage(_ p: CGPoint) -> CGPoint {
+        let g = Self.grid * scale
+        return CGPoint(x: (p.x / g).rounded() * g, y: (p.y / g).rounded() * g)
     }
 }
 
@@ -345,6 +359,35 @@ extension CircuitData {
             simplified.append(p)
         }
         return simplified
+    }
+
+    /// 兩條線的線頭接在同一點、剛好接成一直線，那點又沒有接腳或別的線頭、轉角：其實是同一條線，接成一條。
+    /// 不然從中間橫越的線會被當成「直直經過」，跨線半圓反而畫到那條橫越的線上。
+    /// 接起來的線沿用 keep 的 id（是其中一條的話），否則沿用前面那條的
+    mutating func joinStraightRuns(keeping keep: UUID? = nil) {
+        let pins = Set(allPins.map(PointKey.init))
+        var joined = true
+        while joined {
+            joined = false
+            search: for i in wires.indices {
+                for j in wires.indices where j > i {
+                    for a in [wires[i].points, Array(wires[i].points.reversed())] {
+                        for b in [wires[j].points, Array(wires[j].points.reversed())] {
+                            guard a.count >= 2, b.count >= 2, let p = a.last, p == b[0],
+                                  Self.direction(a[a.count - 2], p) == Self.direction(p, b[1]),
+                                  !pins.contains(PointKey(p)),
+                                  !wires.indices.contains(where: { $0 != i && $0 != j && wires[$0].points.contains(p) }) else { continue }
+                            var w = wires[wires[j].id == keep ? j : i]
+                            w.points = Self.orthogonalize(a + b.dropFirst())
+                            wires[i] = w
+                            wires.remove(at: j)
+                            joined = true
+                            break search
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// 元件移動／旋轉後，接在舊接腳上的導線跟著走：
