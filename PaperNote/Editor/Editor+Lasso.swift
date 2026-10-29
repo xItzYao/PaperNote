@@ -177,9 +177,12 @@ extension NotebookViewController {
         // 移動中先把筆跡拿出來，用圖片預覽
         var rest = drawing
         rest.strokes = drawing.strokes.enumerated().filter { !set.contains($0.offset) }.map(\.element)
+        logPencilKitViewsOnce()
+        DebugLog.add("redraw lasso before: old=\(pencilKitInkOnScreen(sel.bounds)) moving=\(lassoMoveStrokes.count) transformed=\(lassoMoveStrokes.filter { $0.transform != .identity }.count) zoom=\(String(format: "%.2f", canvas.zoomScale)) offset=\(canvas.contentOffset)")
         isApplyingDrawing = true
         canvas.drawing = rest
         isApplyingDrawing = false
+        logPencilKitInk("lasso begin", [("old", sel.bounds)])
         // 自製筆刷的筆跡也先藏起來，一起放進預覽圖
         let movingInk = inkStrokes(sel.ink)
         setInkHidden(sel.ink)
@@ -237,6 +240,7 @@ extension NotebookViewController {
             return s
         })
         setDrawing(drawing)
+        logPencilKitInk("lasso end", [("old", sel.bounds), ("new", sel.bounds.offsetBy(dx: d.x, dy: d.y))])
         let movedInk = offsetModel(sel, by: d)
         lassoMoveStrokes = []
         lassoMoveOriginal = nil
@@ -455,6 +459,7 @@ extension NotebookViewController {
             drawing.strokes.remove(at: i)
         }
         setDrawing(drawing)
+        logPencilKitInk("lasso delete", [("old", sel.bounds)])
         for ref in sel.elements {
             guard let pi = pageIndex(of: ref.pageID) else { continue }
             updatePage(pi, undoable: false) { $0.elements.removeAll { $0.id == ref.elementID } }
