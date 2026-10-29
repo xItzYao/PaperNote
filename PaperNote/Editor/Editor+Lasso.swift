@@ -25,6 +25,15 @@ enum LassoGeometry {
     }
 }
 
+extension PKStroke {
+    /// 移到別的位置的同一筆（墨水、路徑、筆觸紋理不變）。
+    /// PencilKit 用每一筆的身分決定要重畫哪裡：只改 transform 放回去，它當成同一筆沒變，舊的位置不會清掉（留下殘影），
+    /// 所以建一筆新的
+    func moved(by t: CGAffineTransform) -> PKStroke {
+        PKStroke(ink: ink, path: path, transform: transform.concatenating(t), mask: mask, randomSeed: randomSeed)
+    }
+}
+
 /// 自訂套索圈到的內容：筆跡（canvas.drawing 的索引）、物件、螢光標示
 struct LassoSelection {
     var strokeIndices: [Int]
@@ -231,11 +240,7 @@ extension NotebookViewController {
         var drawing = canvas.drawing
         let base = drawing.strokes.count
         let t = CGAffineTransform(translationX: d.x, y: d.y)
-        drawing.strokes.append(contentsOf: lassoMoveStrokes.map { s in
-            var s = s
-            s.transform = s.transform.concatenating(t)
-            return s
-        })
+        drawing.strokes.append(contentsOf: lassoMoveStrokes.map { $0.moved(by: t) })
         setDrawing(drawing)
         let movedInk = offsetModel(sel, by: d)
         lassoMoveStrokes = []
@@ -486,11 +491,7 @@ extension NotebookViewController {
         var drawing = canvas.drawing
         let base = drawing.strokes.count
         let t = CGAffineTransform(translationX: d.x, y: d.y)
-        drawing.strokes.append(contentsOf: clip.strokes.map { s in
-            var s = s
-            s.transform = s.transform.concatenating(t)
-            return s
-        })
+        drawing.strokes.append(contentsOf: clip.strokes.map { $0.moved(by: t) })
         setDrawing(drawing)
 
         let o = contentOrigin(target)

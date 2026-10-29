@@ -257,6 +257,27 @@ final class InkEngineTests: XCTestCase {
         let removed = length(line) - out.reduce(0) { $0 + length($1) }
         XCTAssertEqual(removed, r * 2, accuracy: 0.01)
     }
+
+    /// 虛線：100pt 的直線、每段 10、間隔 5 → 0…10、15…25 … 90…100，七段，每段剛好 10
+    func testDashedSplitsAtExactLengths() {
+        let line = stroke([(0, 0), (37, 0), (100, 0)], width: 2)
+        let pieces = InkGeometry.dashed(line, dash: 10, gap: 5)
+        XCTAssertEqual(pieces.count, 7)
+        for (k, p) in pieces.enumerated() {
+            XCTAssertEqual(p.points.first!.point.x, CGFloat(k) * 15, accuracy: 0.001)
+            XCTAssertEqual(p.points.last!.point.x, CGFloat(k) * 15 + 10, accuracy: 0.001)
+            XCTAssertEqual(p.colorHex, line.colorHex)
+        }
+        XCTAssertTrue(pieces[2].points.contains { abs($0.point.x - 37) < 0.001 }, "原本的點留著（轉彎處的形狀不變）")
+    }
+
+    func testDashedKeepsTheWidthAlongTheLine() {
+        let line = InkStroke(colorHex: "#000000FF", points: [InkPoint(.zero, width: 2), InkPoint(CGPoint(x: 20, y: 0), width: 6)])
+        let pieces = InkGeometry.dashed(line, dash: 5, gap: 5)
+        XCTAssertEqual(pieces.count, 2)
+        XCTAssertEqual(pieces[0].points.last!.width, 3, accuracy: 0.001, "切點的粗細照比例")
+        XCTAssertEqual(pieces[1].points.first!.width, 4, accuracy: 0.001)
+    }
 }
 
 /// 在真的筆記本裡用自製筆刷寫一筆：存進頁面、PencilKit 不受影響、可以復原、可以擦掉
@@ -534,6 +555,33 @@ final class InkEngineFlowTests: XCTestCase {
         XCTAssertTrue(editor.gestureRecognizer(editor.inkRecognizer, shouldReceive: pencil))
         // 只有手指沒有交給自製筆刷時，捲動等它失敗這條規則才不會卡住
         XCTAssertTrue(editor.gestureRecognizer(editor.inkRecognizer, shouldBeRequiredToFailBy: editor.canvas.panGestureRecognizer))
+    }
+
+    /// 自製筆刷也可以畫虛線：放開後切成一段一段，一次上一步全部拿掉
+    func testDashedCustomPen() {
+        let saved = BrushStore.shared.current
+        var p = saved
+        p.style = .pen
+        p.width = 2
+        p.dashed = true
+        p.dashLength = 10
+        p.gapLength = 5
+        BrushStore.shared.update(p)
+        defer { BrushStore.shared.update(saved) }
+
+        write(from: docPoint(100, 200), to: docPoint(400, 200))
+        let ink = editor.pages[0].ink
+        XCTAssertEqual(ink.count, 20, "300pt 每 15pt 一段")
+        for s in ink {
+            XCTAssertEqual(hypot(s.points.last!.point.x - s.points.first!.point.x, s.points.last!.point.y - s.points.first!.point.y), 10, accuracy: 0.01)
+        }
+        editor.undoTapped()
+        XCTAssertTrue(editor.pages[0].ink.isEmpty, "一次上一步拿掉整條虛線")
+
+        p.dashed = false
+        BrushStore.shared.update(p)
+        write(from: docPoint(100, 300), to: docPoint(400, 300))
+        XCTAssertEqual(editor.pages[0].ink.count, 1, "實線還是一筆")
     }
 }
 

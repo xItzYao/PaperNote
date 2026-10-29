@@ -787,7 +787,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         var changed = false
         let area = rect.insetBy(dx: -2, dy: -2)
         for i in d.strokes.indices where area.contains(d.strokes[i].renderBounds) {
-            d.strokes[i].transform = d.strokes[i].transform.concatenating(CGAffineTransform(translationX: delta.x, y: delta.y))
+            d.strokes[i] = d.strokes[i].moved(by: CGAffineTransform(translationX: delta.x, y: delta.y))
             changed = true
         }
         if changed { setDrawing(d) }

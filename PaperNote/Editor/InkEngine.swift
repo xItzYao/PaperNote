@@ -185,6 +185,43 @@ enum InkGeometry {
         return pieces
     }
 
+    /// 切成虛線：沿著線畫 dash 長、空 gap 長，重複到底。切點落在兩點中間就在那裡補一點（粗細照比例）
+    static func dashed(_ s: InkStroke, dash: CGFloat, gap: CGFloat) -> [InkStroke] {
+        guard s.points.count > 1, dash > 0, gap > 0 else { return [s] }
+        var pieces: [InkStroke] = []
+        var run: [InkPoint] = [s.points[0]]
+        var drawing = true
+        // 目前這一段（實線或空白）還剩多長
+        var left = dash
+        func emit() {
+            if run.count > 1 { pieces.append(InkStroke(colorHex: s.colorHex, points: run)) }
+            run = []
+        }
+        for (a, b) in zip(s.points, s.points.dropFirst()) {
+            let len = hypot(b.point.x - a.point.x, b.point.y - a.point.y)
+            // 這兩點之間已經走過的長度
+            var done: CGFloat = 0
+            while len - done >= left {
+                done += left
+                let f = done / len
+                let q = InkPoint(CGPoint(x: a.point.x + (b.point.x - a.point.x) * f, y: a.point.y + (b.point.y - a.point.y) * f),
+                                 width: a.width + (b.width - a.width) * f)
+                if drawing {
+                    run.append(q)
+                    emit()
+                } else {
+                    run = [q]
+                }
+                drawing.toggle()
+                left = drawing ? dash : gap
+            }
+            left -= len - done
+            if drawing { run.append(b) }
+        }
+        if drawing { emit() }
+        return pieces.isEmpty ? [s] : pieces
+    }
+
     /// 套索：筆跡有任何一點在範圍內就算圈到
     static func circled(_ s: InkStroke, offset o: CGPoint, path: UIBezierPath) -> Bool {
         s.points.contains { path.contains(CGPoint(x: $0.point.x + o.x, y: $0.point.y + o.y)) }
@@ -766,6 +803,8 @@ struct InkDraft {
     var colorHex: String
     var baseWidth: CGFloat
     var pressure: Bool
+    /// 虛線的筆：放開後依它的虛線設定切成一段一段（nil＝實線）
+    var dashPreset: BrushPreset?
     /// 還會補上準確值的取樣點：編號 → points 的索引
     var pendingUpdates: [NSNumber: Int] = [:]
     /// 停住後認出的圖形（之後筆尖移動是在調整它，不是繼續寫）
@@ -806,7 +845,7 @@ extension NotebookViewController {
         if let p = paletteOverlay, p.mode == .launcher { dismissPalette() }
         let preset = BrushStore.shared.current
         var d = InkDraft(points: [], colorHex: preset.colorHex, baseWidth: max(preset.width, 0.1),
-                         pressure: preset.style == .fountainPen)
+                         pressure: preset.style == .fountainPen, dashPreset: preset.isDashed ? preset : nil)
         let w = inkWidth(d, force: s.force)
         d.points = [InkPoint(s.point, width: w)]
         if let u = s.updateIndex { d.pendingUpdates[u] = 0 }
@@ -909,8 +948,13 @@ extension NotebookViewController {
         guard pages.indices.contains(pi) else { liveInkView.clear(); return }
         let o = contentOrigin(pi)
         let stroke = InkGeometry.offset(InkStroke(colorHex: d.colorHex, points: d.points), by: CGPoint(x: -o.x, y: -o.y))
+        // 虛線：照這一筆中間的粗細切成一段一段（寫的時候還是實線，和 PencilKit 的筆一樣）
+        let pieces = d.dashPreset.map { preset -> [InkStroke] in
+            let p = preset.dashPattern(lineWidth: shapeWidth(d))
+            return InkGeometry.dashed(stroke, dash: p.dash, gap: p.gap)
+        } ?? [stroke]
         // 存進頁面，同時拿掉寫的時候的筆跡（同一個畫面更新裡換過去）
-        updatePage(pi) { $0.ink.append(stroke) }
+        updatePage(pi) { $0.ink.append(contentsOf: pieces) }
         liveInkView.clear()
         DebugLog.add("custom ink end points=\(d.points.count) cancelled=\(cancelled) pkStrokes=\(canvas.drawing.strokes.count)")
     }
