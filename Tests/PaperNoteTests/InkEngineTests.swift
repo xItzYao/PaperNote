@@ -104,6 +104,25 @@ final class InkEngineTests: XCTestCase {
         XCTAssertEqual(inkAlpha(v, 150, 110), 0, "套索移動中藏起來的筆跡不畫")
     }
 
+    /// 回報的問題：套索移動自製筆刷的字，舊的位置留下殘影（放大縮小才消失）。
+    /// 移動後同一筆（id 不變）換了位置：舊的位置也要清掉，不能只重畫新的位置
+    func testMovedStrokeLeavesNothingAtItsOldPlace() {
+        let v = PageInkView(frame: CGRect(x: 0, y: 0, width: 600, height: 850))
+        let a = stroke([(100, 100), (200, 100)], width: 4), b = stroke([(100, 300), (200, 300)], width: 4)
+        v.set(strokes: [a, b], offset: .zero)
+        waitUntilBuilt(v)
+        let renders = v.fullRenders
+        // 套索移動：拖的時候藏起來，放開後放回來、再換到新的位置（和編輯器的順序一樣）
+        v.setHidden([a.id])
+        v.setHidden([])
+        let moved = InkGeometry.offset(a, by: CGPoint(x: 0, y: 400))
+        v.set(strokes: [moved, b], offset: .zero)
+        XCTAssertEqual(v.fullRenders, renders, "移動一筆不能整頁重畫")
+        XCTAssertGreaterThan(inkAlpha(v, 150, 500), 200, "新的位置要畫出來")
+        XCTAssertEqual(inkAlpha(v, 150, 100), 0, "舊的位置不能留下殘影")
+        XCTAssertGreaterThan(inkAlpha(v, 150, 300), 200, "沒動的筆跡還在")
+    }
+
     /// 放大很多時點陣圖會太大：改用向量，放大也清楚
     func testZoomedFarInUsesVector() {
         let v = PageInkView(frame: CGRect(x: 0, y: 0, width: 600, height: 850))

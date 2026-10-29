@@ -230,8 +230,6 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var lassoSel: LassoSelection?
     var lassoMoveStart: CGPoint?
     var lassoMoveOriginal: PKDrawing?
-    /// 除錯：PencilKit 的 view 結構記過了沒（RedrawProbe）
-    var didLogPencilKitViews = false
     var lassoMoveStrokes: [PKStroke] = []
     var lassoMoveElementFrames: [ElementRef: CGRect] = [:]
     var lassoClipboard: LassoClipboard?

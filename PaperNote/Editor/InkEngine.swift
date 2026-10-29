@@ -623,7 +623,10 @@ final class PageInkView: UIView {
         var changed = 0
         for s in new {
             newIDs.insert(s.id)
-            if oldByID[s.id] != s {
+            let before = oldByID[s.id]
+            if before != s {
+                // 同一筆改了（例如套索移動）：原本的位置也要清掉
+                if let before { dirty = dirty.union(InkGeometry.bounds(of: before)) }
                 dirty = dirty.union(InkGeometry.bounds(of: s))
                 changed += 1
             }
