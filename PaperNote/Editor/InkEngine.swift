@@ -194,7 +194,9 @@ enum InkGeometry {
         // 目前這一段（實線或空白）還剩多長
         var left = dash
         func emit() {
-            if run.count > 1 { pieces.append(InkStroke(colorHex: s.colorHex, points: run)) }
+            // 空白剛好在一點結束時，留下的是長度 0 的一段：不算
+            let length = zip(run, run.dropFirst()).reduce(0) { $0 + hypot($1.1.point.x - $1.0.point.x, $1.1.point.y - $1.0.point.y) }
+            if length > 0.01 { pieces.append(InkStroke(colorHex: s.colorHex, points: run)) }
             run = []
         }
         for (a, b) in zip(s.points, s.points.dropFirst()) {

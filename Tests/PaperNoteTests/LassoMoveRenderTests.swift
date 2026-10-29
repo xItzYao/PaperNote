@@ -79,6 +79,25 @@ final class LassoMoveRenderTests: XCTestCase {
         spin(0.2)
     }
 
+    /// 讀身分的方法本身要可靠：同一筆讀兩次一樣、畫布沒改的時候也一樣，不然下面的檢查都沒有意義
+    func testIdentityProbeIsStable() throws {
+        writeLine()
+        let s = editor.canvas.drawing.strokes[0]
+        let a = try identity(s), b = try identity(s)
+        let c = try identity(editor.canvas.drawing.strokes[0])
+        editor.setDrawing(editor.canvas.drawing)
+        let d = try identity(editor.canvas.drawing.strokes[0])
+        var copy = s
+        copy.transform = copy.transform.concatenating(CGAffineTransform(translationX: 10, y: 0))
+        let e = try identity(copy)
+        print("IDPROBE same value=\(a == b) canvas read again=\(a == c) after set=\(a == d) after transform=\(a == e) moved()=\(a == (try identity(s.moved(by: .identity))))")
+        XCTAssertEqual(a, b, "同一筆讀兩次")
+        XCTAssertEqual(a, c, "從畫布再讀一次")
+        XCTAssertEqual(a, d, "放回畫布再讀")
+        XCTAssertEqual(a, e, "只改 transform 還是同一筆（殘影的原因）")
+        XCTAssertNotEqual(a, try identity(s.moved(by: .identity)), "moved(by:) 是新的一筆")
+    }
+
     func testLassoMovePutsBackNewStrokes() throws {
         writeLine()
         editor.setTool(.lasso)
