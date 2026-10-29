@@ -28,7 +28,9 @@ struct PendingLiveStroke {
     /// 這支筆是虛線：換上去時切成一段一段
     var dashed = false
     var preset: BrushPreset? = nil
-    var undoRegistered = false
+    /// 這一筆的下筆：PencilKit 收尾手繪那一筆時可能已經登記過上一步
+    var gesture: StrokeGesture
+    var undoRegistered: Bool { gesture.step != nil }
 }
 
 /// 停住變直線／圖形用到的計算（不碰畫面，可以單獨測試）
@@ -150,9 +152,10 @@ final class HoldToShapeController {
         let stroke = ShapeRecognizer.makeStroke(points: ls.points, preset: ls.preset, sample: samples[ls.preset.id])
         let now = CACurrentMediaTime()
         pendingPresetID = ls.preset.id
+        let before = PKDrawing(strokes: Array(editor.canvas.drawing.strokes.prefix(ls.countBefore)))
         pending = PendingLiveStroke(stroke: stroke, countBefore: ls.countBefore, until: now + 1.5, endedAt: now,
-                                    before: PKDrawing(strokes: Array(editor.canvas.drawing.strokes.prefix(ls.countBefore))),
-                                    dashed: ls.preset.isDashed, preset: ls.preset)
+                                    before: before, dashed: ls.preset.isDashed, preset: ls.preset,
+                                    gesture: editor.strokeGesture ?? StrokeGesture(before: before, mark: editor.history.recordCount))
         ensureLine()
         for delay in [0.05, 0.15, 0.3, 0.6, 1.0, 1.6] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.ensureLine() }
@@ -244,18 +247,16 @@ final class HoldToShapeController {
         } else {
             clearPreview()
         }
-        // PencilKit 收尾完（手繪那一筆已經被換掉）才登記上一步，排在它自己的紀錄之後
+        // 手繪那一筆換掉了：登記上一步（PencilKit 收尾時已經登記過就不再登記）
         if handIndex != nil { registerUndo() }
         if CACurrentMediaTime() > p.until { finishPending() }
     }
 
     /// 直線的上一步：回到畫這條線之前的筆跡
     private func registerUndo() {
-        guard var p = pending, !p.undoRegistered else { return }
+        guard let p = pending, !p.undoRegistered else { return }
         DebugLog.add("undo registered")
-        editor?.registerCompositeUndo(drawing: p.before, pageIDs: [])
-        p.undoRegistered = true
-        pending = p
+        editor?.recordStrokeGesture(p.gesture)
     }
 
     /// 不再補直線；還沒登記上一步就現在登記

@@ -1069,7 +1069,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             return
         }
         let z = canvas.zoomScale
-        let tv = UITextView(frame: pagesContainer.convert(rect, to: canvas))
+        let tv = EditorTextView(frame: pagesContainer.convert(rect, to: canvas))
         tv.font = .systemFont(ofSize: fontSize * z)
         tv.text = text
         tv.backgroundColor = UIColor.white.withAlphaComponent(0.97)

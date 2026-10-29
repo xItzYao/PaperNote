@@ -130,7 +130,18 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     let onClose: () -> Void
     let settings = EditorSettings.shared
 
-    let canvas = PKCanvasView()
+    let canvas = EditorCanvasView()
+    /// 上一步／下一步（自己的堆疊，最多 40 步）
+    let history = EditHistory()
+    private(set) lazy var editorUndo: EditorUndoManager = {
+        let u = EditorUndoManager()
+        u.editor = self
+        return u
+    }()
+    /// 系統的上一步手勢也走自己的堆疊
+    override var undoManager: UndoManager? { editorUndo }
+    /// 這一次用 PencilKit 下筆（寫字、擦除）
+    var strokeGesture: StrokeGesture?
     let pagesContainer = UIView()
     let overlay = OverlayView()
     let pinOverlay = PinOverlayView()
@@ -354,6 +365,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     private func setupCanvas() {
         canvas.translatesAutoresizingMaskIntoConstraints = false
         canvas.delegate = self
+        canvas.editorUndoManager = editorUndo
         canvas.backgroundColor = .clear
         canvas.isOpaque = false
         canvas.alwaysBounceVertical = true
@@ -709,7 +721,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         isApplyingDrawing = true
         canvas.drawing = assembleDrawing()
         isApplyingDrawing = false
-        canvas.undoManager?.removeAllActions()
+        history.removeAll()
         for v in pageViews.values { v.removeFromSuperview() }
         pageViews = [:]
         updateZoomLimits(resetZoom: false)
@@ -766,42 +778,74 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         let new = pages[i]
         guard old != new else { return }
         if undoable {
-            registerUndo(pageID: old.id, restore: PageContentSnapshot(old))
+            history.record(.init(drawing: nil, pages: [old.id: PageContentSnapshot(old)]))
         }
         refreshPage(i)
         scheduleSave()
     }
 
-    private func registerUndo(pageID: UUID, restore: PageContentSnapshot) {
-        canvas.undoManager?.registerUndo(withTarget: self) { vc in
-            guard let i = vc.pageIndex(of: pageID) else { return }
-            let current = vc.pages[i]
-            vc.registerUndo(pageID: pageID, restore: PageContentSnapshot(current))
-            vc.session.document.pages[i].elements = restore.elements
-            vc.session.document.pages[i].highlights = restore.highlights
-            vc.session.document.pages[i].ink = restore.ink
-            if let sel = vc.selected, vc.locate(sel) == nil { vc.select(nil) }
-            vc.refreshPage(i)
-            vc.scheduleSave()
+    /// 記下一步：筆跡回到 drawing（nil＝沒動到筆跡）、這些頁面回到現在的樣子。在改動之前呼叫
+    func recordEdit(drawing: PKDrawing?, pageIDs: [UUID]) {
+        var snaps: [UUID: PageContentSnapshot] = [:]
+        for id in pageIDs {
+            if let i = pageIndex(of: id) { snaps[id] = PageContentSnapshot(pages[i]) }
         }
+        history.record(.init(drawing: drawing, pages: snaps))
+    }
+
+    /// 同一步範圍內的目前狀態（按上一步時記下來，給下一步用）
+    private func currentEditState(like s: EditHistory.State) -> EditHistory.State {
+        var snaps: [UUID: PageContentSnapshot] = [:]
+        for id in s.pages.keys {
+            if let i = pageIndex(of: id) { snaps[id] = PageContentSnapshot(pages[i]) }
+        }
+        return .init(drawing: s.drawing == nil ? nil : canvas.drawing, pages: snaps)
+    }
+
+    /// 回到記下的狀態
+    private func restoreEditState(_ s: EditHistory.State) {
+        if let d = s.drawing {
+            setDrawing(d)
+            clearLassoSelection()
+        }
+        for (id, snap) in s.pages {
+            guard let i = pageIndex(of: id) else { continue }
+            session.document.pages[i].elements = snap.elements
+            session.document.pages[i].highlights = snap.highlights
+            session.document.pages[i].ink = snap.ink
+            refreshPage(i)
+        }
+        if let sel = selected, locate(sel) == nil { select(nil) }
+        scheduleSave()
     }
 
     @objc func undoTapped() {
         endTextEditing()
         if holdToShape.undo() { return }
-        canvas.undoManager?.undo()
+        _ = history.undo(capture: currentEditState, apply: restoreEditState)
     }
 
     @objc func redoTapped() {
         endTextEditing()
         holdToShape.redo()
-        canvas.undoManager?.redo()
+        _ = history.redo(capture: currentEditState, apply: restoreEditState)
+    }
+
+    /// PencilKit 改了筆跡（寫了一筆、擦掉幾筆）：這次下筆第一次改到時登記一步，回到下筆之前
+    @discardableResult
+    func recordStrokeGesture(_ g: StrokeGesture?) -> Int? {
+        guard let g else { return nil }
+        if g.step == nil, history.recordCount == g.mark {
+            g.step = history.record(.init(drawing: g.before, pages: [:]), newStep: true)
+        }
+        return g.step
     }
 
     // MARK: - PKCanvasViewDelegate
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
         guard !isApplyingDrawing else { return }
+        recordStrokeGesture(strokeGesture)
         holdToShape.drawingChanged()
         scheduleSave()
     }
@@ -809,6 +853,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
         pkUsingSince = CACurrentMediaTime()
         holdToShape.pencilKitBegan()
+        strokeGesture = StrokeGesture(before: canvas.drawing, mark: history.recordCount)
         // 下筆就關掉工具列的小視窗（粗細、虛線、筆刷設定）
         dismissToolPopover()
         // 開始寫字 → 收起還沒點的調色盤小圖示
@@ -821,9 +866,10 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         pkUsingSince = nil
         // 停住變直線的那一筆：交給 holdToShape 換成直線，不當成新筆跡處理
         if holdToShape.pencilKitEnded() { return }
+        let gesture = strokeGesture
         if !tool.isDrawing {
             let before = strokeCountAtBegin
-            DispatchQueue.main.async { [weak self] in self?.absorbStrayStroke(countBefore: before) }
+            DispatchQueue.main.async { [weak self] in self?.absorbStrayStroke(countBefore: before, gesture: gesture) }
             return
         }
         if tool == .eraser && settings.eraserAutoReturn {
@@ -837,28 +883,24 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         let duration = CACurrentMediaTime() - toolBeganAt
         let before = strokeCountAtBegin
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-            self?.processNewStroke(duration: duration, countBefore: before)
+            // 畫完之後的整理（拉直、遮掉頁面外、對齊 PDF 文字）和寫這一筆算同一步
+            self?.history.merging(into: gesture?.step) {
+                self?.processNewStroke(duration: duration, countBefore: before)
+            }
         }
     }
 
     private func processNewStroke(duration: TimeInterval, countBefore: Int) {
         var drawing = canvas.drawing
         guard drawing.strokes.count == countBefore + 1, var stroke = drawing.strokes.last else { return }
-        // 這一筆被換掉（遮掉頁面外、拉直）之後，PencilKit 自己的上一步找不到原本那一筆、按了沒反應：
-        // 換掉就自己登記一步，回到寫這一筆之前
-        var before = drawing
-        before.strokes.removeLast()
-        var replaced = false
-        defer { if replaced { registerCompositeUndo(drawing: before, pageIDs: []) } }
         // 不畫到頁面外：超出這一筆所在那一頁的部分遮掉
         if let masked = maskedToPage(stroke) {
             stroke = masked
             drawing.strokes[drawing.strokes.count - 1] = masked
             setDrawing(drawing)
-            replaced = true
         }
         holdToShape.recordSample(of: stroke, presetID: BrushStore.shared.current.id)
-        // 虛線：筆放開後把這一筆切成一段一段（上一步回到寫這一筆之前）
+        // 虛線：筆放開後把這一筆切成一段一段
         let preset = BrushStore.shared.current
         if tool == .pen, preset.isDashed {
             let width = ShapeRecognizer.samplePoint(of: stroke)?.size.width ?? preset.tool.width
@@ -866,12 +908,10 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             drawing.strokes.removeLast()
             drawing.strokes += pieces
             setDrawingAddingStrokes(drawing, added: pieces.count)
-            replaced = true
             return
         }
-        // 對齊 PDF 文字：筆跡拿掉、改成螢光標示（加標示的那一步會一起復原）
+        // 對齊 PDF 文字：筆跡拿掉、改成螢光標示
         if BrushStore.shared.current.style == .marker && settings.smartHighlight && snapHighlightToText(stroke) {
-            replaced = false
             drawing.strokes.removeLast()
             setDrawing(drawing)
             return
@@ -881,7 +921,6 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
            let straight = ShapeRecognizer.straightenIfNearlyStraight(stroke, preset: BrushStore.shared.current) {
             drawing.strokes[drawing.strokes.count - 1] = straight
             setDrawing(drawing)
-            replaced = true
         }
     }
 
@@ -896,11 +935,13 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     }
 
     /// 不該畫出筆跡的工具卻被 PencilKit 畫了一筆 → 刪掉；手繪格線模式下改當成格線
-    private func absorbStrayStroke(countBefore: Int) {
+    private func absorbStrayStroke(countBefore: Int, gesture: StrokeGesture?) {
         var d = canvas.drawing
         guard d.strokes.count > countBefore, let stroke = d.strokes.last else { return }
         d.strokes.removeSubrange(countBefore...)
         setDrawing(d)
+        // 這一筆不算：拿掉它登記的那一步，不留下按了沒反應的上一步
+        if let id = gesture?.step { history.remove(id) }
         guard tool == .tableDraw, let target = tableDrawTarget else { return }
         let pts = stroke.path.map { $0.location.applying(stroke.transform) }
         applyTableStroke(target, points: pts)

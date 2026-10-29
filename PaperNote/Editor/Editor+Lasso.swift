@@ -225,7 +225,7 @@ extension NotebookViewController {
         overlay.showLassoPreview(nil, frame: .zero)
         // 一次復原整個移動（筆跡可能移到別頁，那一頁也要能復原）
         let inkTargets = inkStrokes(sel.ink).map { pages[inkPageIndex(for: InkGeometry.offset($0, by: d))].id }
-        registerCompositeUndo(drawing: original, pageIDs: Array(Set(affectedPageIDs(sel) + inkTargets)))
+        recordEdit(drawing: original, pageIDs: Array(Set(affectedPageIDs(sel) + inkTargets)))
         setInkHidden([])
 
         var drawing = canvas.drawing
@@ -321,32 +321,6 @@ extension NotebookViewController {
         }
     }
 
-    // MARK: 復原（筆跡＋物件一起）
-
-    func registerCompositeUndo(drawing: PKDrawing, pageIDs: [UUID]) {
-        var snaps: [UUID: PageContentSnapshot] = [:]
-        for id in pageIDs {
-            if let i = pageIndex(of: id) { snaps[id] = PageContentSnapshot(pages[i]) }
-        }
-        registerCompositeUndo(drawing: drawing, snapshots: snaps)
-    }
-
-    private func registerCompositeUndo(drawing: PKDrawing, snapshots: [UUID: PageContentSnapshot]) {
-        canvas.undoManager?.registerUndo(withTarget: self) { vc in
-            vc.registerCompositeUndo(drawing: vc.canvas.drawing, pageIDs: Array(snapshots.keys))
-            vc.setDrawing(drawing)
-            for (id, s) in snapshots {
-                guard let i = vc.pageIndex(of: id) else { continue }
-                vc.session.document.pages[i].elements = s.elements
-                vc.session.document.pages[i].highlights = s.highlights
-                vc.session.document.pages[i].ink = s.ink
-                vc.refreshPage(i)
-            }
-            vc.clearLassoSelection()
-            vc.scheduleSave()
-        }
-    }
-
     // MARK: 選單：拷貝、剪下、刪除、複製一份
 
     func presentLassoMenu() {
@@ -404,7 +378,7 @@ extension NotebookViewController {
     /// 圈到的筆跡換成這個顏色（螢光筆保留原本的透明度）
     func recolorLasso(_ color: UIColor) {
         guard let sel = lassoSel, sel.hasInk else { return }
-        registerCompositeUndo(drawing: canvas.drawing, pageIDs: Array(Set(sel.ink.map(\.pageID))))
+        recordEdit(drawing: canvas.drawing, pageIDs: Array(Set(sel.ink.map(\.pageID))))
         let hex = color.withAlphaComponent(1).hexString
         for r in sel.ink {
             guard let pi = pageIndex(of: r.pageID) else { continue }
@@ -475,7 +449,7 @@ extension NotebookViewController {
     private func deleteLasso() {
         guard let sel = lassoSel else { return }
         DebugLog.add("lasso delete strokes=\(sel.strokeIndices.count) elements=\(sel.elements.count) highlights=\(sel.highlights.count)")
-        registerCompositeUndo(drawing: canvas.drawing, pageIDs: affectedPageIDs(sel))
+        recordEdit(drawing: canvas.drawing, pageIDs: affectedPageIDs(sel))
         var drawing = canvas.drawing
         for i in sel.strokeIndices.sorted(by: >) where drawing.strokes.indices.contains(i) {
             drawing.strokes.remove(at: i)
@@ -507,7 +481,7 @@ extension NotebookViewController {
         let d = CGPoint(x: center.x - clip.bounds.midX, y: center.y - clip.bounds.midY)
         let target = pageIndex(containing: center) ?? nearestPageIndex(to: center)
         guard pages.indices.contains(target) else { return }
-        registerCompositeUndo(drawing: canvas.drawing, pageIDs: [pages[target].id])
+        recordEdit(drawing: canvas.drawing, pageIDs: [pages[target].id])
 
         var drawing = canvas.drawing
         let base = drawing.strokes.count
