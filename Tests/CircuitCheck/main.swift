@@ -262,5 +262,16 @@ atPin.wires = [CircuitWire(points: [P(pinPoint.x, pinPoint.y - 50), pinPoint]), 
 atPin.joinStraightRuns()
 check("wires meeting on a pin are not joined", atPin.wires.count == 2)
 
+// 20. 回報：直線接在橫線中間（T 字接點、有打點），再從同一點往下接一段直線，存檔時兩段直線被接成一條，
+// 接點變成跨線（沒接上）。端點在別條線的線段中間也是接點，不能接
+var teeJoin = CircuitData()
+teeJoin.wires = [CircuitWire(points: [P(0, 100), P(200, 100)]),
+                 CircuitWire(points: [P(50, 0), P(50, 100)]),
+                 CircuitWire(points: [P(50, 100), P(50, 200)])]
+check("before saving, the meeting point on the horizontal wire has a dot", teeJoin.junctions().map(PointKey.init) == [PointKey(P(50, 100))])
+teeJoin.joinStraightRuns()
+check("wires meeting in the middle of another wire are not joined", teeJoin.wires.count == 3)
+check("the meeting point still has a dot, not a hop", teeJoin.junctions().map(PointKey.init) == [PointKey(P(50, 100))] && teeJoin.crossings().isEmpty)
+
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)
