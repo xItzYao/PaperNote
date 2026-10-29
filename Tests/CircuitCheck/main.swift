@@ -195,17 +195,17 @@ pin2.components = nand.components
 pin2.wires = [CircuitWire(points: [src, P(110, 200)]), CircuitWire(points: [src, P(160, 130)])]
 check("pin branching two ways gets a dot", pin2.junctions().map(PointKey.init) == [PointKey(src)])
 
-// 直線分兩筆畫、接在另一條線經過的地方：仍然是跨線
+// 兩條線的線頭停在另一條線中間（剛好接成一直線也一樣）：線頭停下來就是接上，要打點、不畫跨線
 var twoStrokes = CircuitData()
 twoStrokes.wires = [CircuitWire(points: [P(50, 0), P(50, 100)]), CircuitWire(points: [P(50, 100), P(50, 200)]),
                     CircuitWire(points: [P(0, 100), P(100, 100)])]
-check("straight line in two strokes crossing a wire gets no dot", twoStrokes.junctions().isEmpty)
-check("horizontal wire hops over the two-stroke line", twoStrokes.crossings().count == 1 && twoStrokes.crossings()[0].wire == 2 && twoStrokes.crossings()[0].at == 50)
+check("two wire ends on the middle of a wire get a dot", twoStrokes.junctions().map(PointKey.init) == [PointKey(P(50, 100))])
+check("two wire ends on the middle of a wire do not hop", twoStrokes.crossings().isEmpty)
 var twoH = CircuitData()
 twoH.wires = [CircuitWire(points: [P(0, 100), P(50, 100)]), CircuitWire(points: [P(50, 100), P(100, 100)]),
               CircuitWire(points: [P(50, 0), P(50, 200)])]
-check("horizontal line in two strokes gets no dot", twoH.junctions().isEmpty)
-check("vertical wire hops over the two-stroke line", twoH.crossings().count == 1 && twoH.crossings()[0].wire == 2 && twoH.crossings()[0].at == 100)
+check("horizontal wire ends on a vertical wire get a dot", twoH.junctions().map(PointKey.init) == [PointKey(P(50, 100))])
+check("horizontal wire ends on a vertical wire do not hop", twoH.crossings().isEmpty)
 // 三條線的頭尾在同一點：真的接在一起
 var bend = CircuitData()
 bend.wires = [CircuitWire(points: [P(50, 0), P(50, 100)]), CircuitWire(points: [P(50, 100), P(50, 150), P(100, 150)]),
@@ -236,14 +236,18 @@ var pmR = pm
 pmR.rotation = 90
 check("rotated PMOS leads rotate too", CircuitGeometry.pinLeads(pmR) == [P(0, 1), P(-1, 0), P(1, 0)])
 
-// 19. 回報：橫線分兩筆畫、接在直線上，結果是直線被畫成半圓。存檔時兩筆接成一條，跨線回到橫線上
+// 19. 一直線分兩筆畫（那點沒有別的線）：存檔時接成一條
+var freeTwo = CircuitData()
+freeTwo.wires = [CircuitWire(points: [P(0, 100), P(50, 100)]), CircuitWire(points: [P(50, 100), P(100, 100)])]
+var freeJoined = freeTwo
+freeJoined.joinStraightRuns()
+check("two strokes in a straight line become one wire", freeJoined.wires.count == 1 && freeJoined.wires[0].points == [P(0, 100), P(100, 100)])
+var joinKeep = freeTwo
+joinKeep.joinStraightRuns(keeping: freeTwo.wires[1].id)
+check("joined wire keeps the selected wire's id", joinKeep.wires[0].id == freeTwo.wires[1].id)
 var twoHJoined = twoH
 twoHJoined.joinStraightRuns()
-check("two strokes in a straight line become one wire", twoHJoined.wires.count == 2 && twoHJoined.wires[0].points == [P(0, 100), P(100, 100)])
-check("after joining, the horizontal wire hops", twoHJoined.crossings().count == 1 && twoHJoined.crossings()[0].wire == 0 && twoHJoined.crossings()[0].at == 50)
-var joinKeep = twoH
-joinKeep.joinStraightRuns(keeping: twoH.wires[1].id)
-check("joined wire keeps the selected wire's id", joinKeep.wires[0].id == twoH.wires[1].id)
+check("ends meeting on another wire are not joined", twoHJoined.wires.count == 3 && twoHJoined.crossings().isEmpty)
 var towardEachOther = CircuitData()
 towardEachOther.wires = [CircuitWire(points: [P(50, 0), P(50, 100)]), CircuitWire(points: [P(50, 200), P(50, 100)])]
 towardEachOther.joinStraightRuns()

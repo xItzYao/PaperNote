@@ -111,14 +111,22 @@ final class CircuitScaleTests: XCTestCase {
     func testStraightLineDrawnInTwoStrokesIsJoinedOnSave() throws {
         var d = CircuitData()
         d.wires = [CircuitWire(points: [CGPoint(x: 30, y: 130), CGPoint(x: 80, y: 130)]),
-                   CircuitWire(points: [CGPoint(x: 80, y: 130), CGPoint(x: 130, y: 130)]),
-                   CircuitWire(points: [CGPoint(x: 80, y: 30), CGPoint(x: 80, y: 230)])]
+                   CircuitWire(points: [CGPoint(x: 80, y: 130), CGPoint(x: 130, y: 130)])]
         let e = editor.normalizedCircuit(PageElement(frame: CGRect(x: 100, y: 100, width: 200, height: 300), content: .circuit(d)))
         guard case let .circuit(out) = e.content else { return XCTFail() }
-        XCTAssertEqual(out.wires.count, 2, "一直線的兩筆接成一條")
-        let hops = out.crossings()
-        XCTAssertEqual(hops.count, 1)
-        let hopWire = out.wires[hops[0].wire].points
-        XCTAssertEqual(hopWire.first?.y, hopWire.last?.y, "跨線半圓畫在橫線上，不是直線")
+        XCTAssertEqual(out.wires.count, 1, "一直線的兩筆接成一條")
+    }
+
+    /// 回報：直線接在橫線中間（有打點），再從那個點往下接一段，存檔後兩段被接成一條，打點變成跨線
+    func testWireContinuedFromAJunctionKeepsTheDotOnSave() throws {
+        var d = CircuitData()
+        d.wires = [CircuitWire(points: [CGPoint(x: 0, y: 130), CGPoint(x: 160, y: 130)]),
+                   CircuitWire(points: [CGPoint(x: 80, y: 30), CGPoint(x: 80, y: 130)]),
+                   CircuitWire(points: [CGPoint(x: 80, y: 130), CGPoint(x: 80, y: 230)])]
+        let e = editor.normalizedCircuit(PageElement(frame: CGRect(x: 100, y: 100, width: 200, height: 300), content: .circuit(d)))
+        guard case let .circuit(out) = e.content else { return XCTFail() }
+        XCTAssertEqual(out.wires.count, 3, "接在別條線上的兩段不接成一條")
+        XCTAssertEqual(out.junctions().count, 1, "還是打點")
+        XCTAssertTrue(out.crossings().isEmpty, "沒有跨線")
     }
 }

@@ -361,8 +361,8 @@ extension CircuitData {
         return simplified
     }
 
-    /// 兩條線的線頭接在同一點、剛好接成一直線，那點又沒有接腳或別的線頭、轉角：其實是同一條線，接成一條。
-    /// 不然從中間橫越的線會被當成「直直經過」，跨線半圓反而畫到那條橫越的線上。
+    /// 兩條線的線頭接在同一點、剛好接成一直線，那點又沒有接腳、也沒有別的線碰到（線頭、轉角或從中間經過）：
+    /// 其實是同一條線，接成一條。有別的線碰到的話，線頭停在那裡就是接點，接起來會變成跨線，所以不接
     /// 接起來的線沿用 keep 的 id（是其中一條的話），否則沿用前面那條的
     mutating func joinStraightRuns(keeping keep: UUID? = nil) {
         let pins = Set(allPins.map(PointKey.init))
@@ -376,7 +376,7 @@ extension CircuitData {
                             guard a.count >= 2, b.count >= 2, let p = a.last, p == b[0],
                                   Self.direction(a[a.count - 2], p) == Self.direction(p, b[1]),
                                   !pins.contains(PointKey(p)),
-                                  !wires.indices.contains(where: { $0 != i && $0 != j && wires[$0].points.contains(p) }) else { continue }
+                                  !wires.indices.contains(where: { $0 != i && $0 != j && Self.polyline(wires[$0].points, contains: p) }) else { continue }
                             var w = wires[wires[j].id == keep ? j : i]
                             w.points = Self.orthogonalize(a + b.dropFirst())
                             wires[i] = w
@@ -488,8 +488,7 @@ extension CircuitData {
 
     /// 接上的規則（只看導線的頭尾）：
     /// - 兩條線重疊走同一個方向：接上
-    /// - 線頭停在這點：和這點的線都接上；但這點是接腳時，從中間經過的線不算，
-    ///   兩筆線頭剛好接成一直線時，從中間橫越的線也不算（都是跨線）
+    /// - 線頭停在這點：和這點的線都接上（包括從中間經過的線）；但這點是接腳時，從中間經過的線不算（跨線）
     private func node(at p: CGPoint, pins: [(point: CGPoint, lead: CGPoint)]) -> Node {
         var n = Node()
         var ends: [Int] = []
@@ -525,9 +524,6 @@ extension CircuitData {
         }
         if !pinIDs.isEmpty {
             for x in ends + pinIDs.dropFirst() { union(x, pinIDs[0]) }
-        } else if ends.count == 2, let d0 = n.wireDirs[ends[0]], let d1 = n.wireDirs[ends[1]],
-                  d0.count == 1, d1.count == 1, let a = d0.first, let b = d1.first, a.x == -b.x, a.y == -b.y {
-            union(ends[0], ends[1])
         } else if let e = ends.first {
             for x in ids { union(x, e) }
         }
