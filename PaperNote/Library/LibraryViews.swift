@@ -180,6 +180,7 @@ struct FolderView: View {
     @State private var showBatchMove = false
     @State private var confirmBatchDelete = false
     @Environment(\.dismiss) private var dismissFolder
+    @Environment(\.horizontalSizeClass) private var hSize
     @AppStorage("library.viewMode") private var viewMode = "grid"
     @AppStorage("library.sort") private var sortMode = "modified"
 
@@ -228,21 +229,21 @@ struct FolderView: View {
                 }
                 .fontWeight(selecting ? .semibold : .regular)
                 Menu {
-                    Section("顯示方式") {
-                        Picker("顯示方式", selection: $viewMode) {
+                    Section("檢視方式") {
+                        Picker("檢視方式", selection: $viewMode) {
                             Label("大圖", systemImage: "square.grid.2x2").tag("grid")
                             Label("詳細資料", systemImage: "list.bullet").tag("list")
                         }
                     }
-                    Section("排序") {
-                        Picker("排序", selection: $sortMode) {
+                    Section("排序方式") {
+                        Picker("排序方式", selection: $sortMode) {
                             Label("修改日期", systemImage: "clock").tag("modified")
                             Label("建立日期", systemImage: "calendar").tag("created")
                             Label("名稱", systemImage: "textformat").tag("name")
                         }
                     }
                 } label: {
-                    Label("顯示方式", systemImage: viewMode == "list" ? "list.bullet" : "square.grid.2x2")
+                    Label("檢視方式", systemImage: viewMode == "list" ? "list.bullet" : "square.grid.2x2")
                 }
                 if let active = TabStore.shared.state.active {
                     Button { open(active, nil) } label: {
@@ -347,19 +348,16 @@ struct FolderView: View {
         }
     }
 
-    /// 詳細資料的一列：左邊點了打開（選取模式是勾選），右邊是選單 ⌄（item 是 nil：「上一層」，沒有選單）
+    /// 詳細資料的一列：整列點了打開（選取模式是勾選）；選單 ⌄ 疊在修改日期左邊預留的位置（item 是 nil：「上一層」，沒有選單）
     private func detailLine<Main: View>(dropID: UUID?, item: LibraryItem?, @ViewBuilder _ main: () -> Main) -> some View {
-        HStack(spacing: 0) {
-            main().buttonStyle(.plain)
-            Group {
+        main()
+            .buttonStyle(.plain)
+            .overlay(alignment: .trailing) {
                 if let item, !selecting {
                     itemMenuButton(item)
-                } else {
-                    Color.clear
+                        .padding(.trailing, hSize == .regular ? DetailColumns.modified + DetailColumns.spacing : 0)
                 }
             }
-            .frame(width: DetailColumns.menu, height: 44)
-        }
         .padding(.horizontal, DetailColumns.inset)
         .background(dropID != nil && dropTarget == dropID ? Color.accentColor.opacity(0.15) : Color.clear)
         .overlay(alignment: .bottom) { Divider().padding(.leading, DetailColumns.inset) }
@@ -372,7 +370,7 @@ struct FolderView: View {
             Image(systemName: "chevron.down")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
-                .frame(width: DetailColumns.menu, height: 30)
+                .frame(width: DetailColumns.menu, height: 36)
                 .contentShape(Rectangle())
         }
         .accessibilityLabel("「\(item.name)」的選單")
@@ -424,7 +422,7 @@ struct FolderView: View {
                                 }
                         }
                         .buttonStyle(.plain)
-                        gridCaption("\(nb.pageCount) 頁 · \(nb.modified.formatted(date: .abbreviated, time: .omitted))", .notebook(nb))
+                        gridCaption("\(nb.pageCount) 頁 · \(LibraryDate.day(nb.modified))", .notebook(nb))
                     }
                     .draggable(dragPayload(nb.id, "nb")) {
                         dragPreview(nb.title, symbol: "book.closed.fill", id: nb.id)
@@ -435,11 +433,11 @@ struct FolderView: View {
         }
     }
 
-    /// 大圖底下那行小字，旁邊是選單 ⌄
+    /// 大圖底下那行小字，左邊是選單 ⌄
     private func gridCaption(_ text: String, _ item: LibraryItem) -> some View {
         HStack(spacing: 0) {
-            Text(text).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             if !selecting { itemMenuButton(item).frame(height: GridCaption.height) }
+            Text(text).font(.caption).foregroundStyle(.secondary).lineLimit(1)
         }
         .frame(maxWidth: .infinity)
         .frame(height: GridCaption.height)
@@ -1052,10 +1050,26 @@ struct ActivityView: UIViewControllerRepresentable {
 enum DetailColumns {
     static let inset: CGFloat = 20
     static let check: CGFloat = 30
-    static let icon: CGFloat = 36
-    static let modified: CGFloat = 150
+    static let icon: CGFloat = 50
+    static let iconHeight: CGFloat = 66
+    static let modified: CGFloat = 170
     static let menu: CGFloat = 36
     static let spacing: CGFloat = 12
+}
+
+/// 資料庫的日期：24 小時制、固定格式（一行放得下，不會換行）
+enum LibraryDate {
+    private static func formatter(_ format: String) -> DateFormatter {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = format
+        return f
+    }
+    private static let dayFormatter = formatter("yyyy/MM/dd")
+    private static let dateTimeFormatter = formatter("yyyy/MM/dd HH:mm")
+
+    static func day(_ d: Date) -> String { dayFormatter.string(from: d) }
+    static func dateTime(_ d: Date) -> String { dateTimeFormatter.string(from: d) }
 }
 
 struct DetailHeader: View {
@@ -1068,13 +1082,13 @@ struct DetailHeader: View {
             Color.clear.frame(width: DetailColumns.icon, height: 1)
             Text("名稱")
             Spacer(minLength: 8)
+            // 選單 ⌄ 那一欄（在修改日期左邊）
+            Color.clear.frame(width: DetailColumns.menu, height: 1)
             if hSize == .regular {
                 Text("修改日期").frame(width: DetailColumns.modified, alignment: .leading)
             }
-            // 選單 ⌄ 那一欄
-            Color.clear.frame(width: DetailColumns.menu - DetailColumns.spacing, height: 1)
         }
-        .font(.caption.weight(.semibold))
+        .font(.subheadline.weight(.semibold))
         .foregroundStyle(.secondary)
     }
 }
@@ -1090,7 +1104,7 @@ struct DetailRow: View {
     var checked: Bool? = nil
     @Environment(\.horizontalSizeClass) private var hSize
 
-    private var modifiedText: String { modified?.formatted(date: .numeric, time: .shortened) ?? "—" }
+    private var modifiedText: String { modified.map(LibraryDate.dateTime) ?? "—" }
 
     var body: some View {
         HStack(spacing: DetailColumns.spacing) {
@@ -1101,25 +1115,29 @@ struct DetailRow: View {
                     .frame(width: DetailColumns.check)
                     .opacity(isParent ? 0 : 1)
             }
-            icon.frame(width: DetailColumns.icon, height: 46)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(name).font(.body.weight(.medium)).lineLimit(1)
+            icon.frame(width: DetailColumns.icon, height: DetailColumns.iconHeight)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(name).font(.title3.weight(.medium)).lineLimit(1)
                 if hSize != .regular, modified != nil {
-                    Text(modifiedText).font(.caption).foregroundStyle(.secondary)
+                    Text(modifiedText).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
             Spacer(minLength: 8)
+            // 選單 ⌄ 的位置（⌄ 疊在上面，不放在按鈕裡）
+            Color.clear.frame(width: DetailColumns.menu, height: 1)
             if hSize == .regular {
                 Text(isParent ? "" : modifiedText)
                     .monospacedDigit()
+                    .lineLimit(1)
+                    .fixedSize()
                     .foregroundStyle(modified == nil ? Color.secondary : Color.primary)
                     .frame(width: DetailColumns.modified, alignment: .leading)
             }
         }
-        .font(.subheadline)
+        .font(.body)
         .foregroundStyle(.primary)
         .contentShape(Rectangle())
-        .padding(.vertical, 4)
+        .padding(.vertical, 10)
     }
 
     @ViewBuilder
@@ -1140,7 +1158,7 @@ struct DetailRow: View {
             Image(uiImage: img)
                 .resizable()
                 .scaledToFill()
-                .frame(width: 36, height: 46)
+                .frame(width: DetailColumns.icon, height: DetailColumns.iconHeight)
                 .clipShape(RoundedRectangle(cornerRadius: 3))
                 .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.gray.opacity(0.3)))
         } else {

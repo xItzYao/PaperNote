@@ -180,6 +180,8 @@ extension NotebookViewController {
         NSLayoutConstraint.activate([
             subBarStack.centerYAnchor.constraint(equalTo: subBar.centerYAnchor),
             pageLabel.centerYAnchor.constraint(equalTo: subBar.centerYAnchor),
+            // 頁碼固定留到 5 位數（99999 / 99999）的寬度：工具列可以一直延伸到這裡，頁數變多也不會跳動
+            pageLabel.widthAnchor.constraint(equalToConstant: Self.pageLabelWidth),
         ])
         subBarLeftLayout = [
             subBarStack.leadingAnchor.constraint(equalTo: subBar.leadingAnchor, constant: 12),
@@ -192,6 +194,11 @@ extension NotebookViewController {
             pageLabel.leadingAnchor.constraint(equalTo: subBar.leadingAnchor, constant: 16),
         ]
         applyPresetAlignment()
+    }
+
+    static var pageLabelWidth: CGFloat {
+        let font = UIFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+        return ceil(("99999 / 99999" as NSString).size(withAttributes: [.font: font]).width)
     }
 
     func makeButton(symbol: String, title: String?, action: Selector?) -> UIButton {
@@ -862,6 +869,8 @@ extension NotebookViewController {
     func applyPresetAlignment() {
         NSLayoutConstraint.deactivate(subBarLeftLayout + subBarRightLayout)
         NSLayoutConstraint.activate(settings.presetsOnRight ? subBarRightLayout : subBarLeftLayout)
+        // 頁碼靠外側（工具列在左邊時靠右）
+        pageLabel.textAlignment = settings.presetsOnRight ? .left : .right
     }
 
     func makeSettingsMenuItems() -> [UIMenuElement] {

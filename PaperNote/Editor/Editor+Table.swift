@@ -89,7 +89,7 @@ extension NotebookViewController {
     }
 
     /// 表格工具列：一整排有字的按鈕（放不下可以左右捲）
-    /// 合併、分割、取消合併、手繪格線、刪除列、刪除欄｜底色、字色、⊖ 字級 ⊕｜重複、平均分配、鎖定欄寬列高｜格線、⊖ 線寬 ⊕｜刪除表格。
+    /// 重複、合併、分割、取消合併、手繪格線、刪除列、刪除欄｜底色、字色、⊖ 字級 ⊕｜平均分配、鎖定（點了選欄寬或列高）｜格線、⊖ 線寬 ⊕｜刪除表格。
     /// 插入列欄：點標頭（兩側的 ＋，再點一下標頭打開選單）；打字：點兩下格子；固定位置：左上角的鎖頭
     func buildTableRibbon() -> [UIView] {
         guard let s = selectedTable() else { return [] }
@@ -113,16 +113,17 @@ extension NotebookViewController {
         row.append(ribbonColorButton("字色", hex: s.table.textColor(a.row, a.col) ?? TableData.defaultTextColor, clear: nil) { [weak self] hex in
             self?.tableAction { t, r in t.setTextColor(r, hex: hex) }
         })
-        row.append(ribbonStepper("字級", minus: { $0.fontSize = max($0.fontSize - 2, 8) },
+        row.append(ribbonStepper("字級", value: \.fontSize, minus: { $0.fontSize = max($0.fontSize - 2, 8) },
                                  plus: { $0.fontSize = min($0.fontSize + 2, 48) }))
         row.append(toolbarSeparator())
-        row += actions.layout.map(ribbonButton)
+        row.append(ribbonMenuButton("平均分配", symbol: "arrow.left.and.right.square") { [weak self] in self?.tableDistributeItems() ?? [] })
+        row.append(ribbonMenuButton("鎖定", symbol: "lock.rectangle") { [weak self] in self?.tableLockItems() ?? [] })
         row.append(toolbarSeparator())
         row.append(ribbonColorButton("格線", hex: s.table.lineColorHex, clear: nil) { [weak self] hex in
             guard let self, let s = self.selectedTable(), let hex else { return }
             self.modifyTable(s.ref) { $0.lineColorHex = hex }
         })
-        row.append(ribbonStepper("線寬", minus: { $0.lineWidth = max($0.lineWidth - 0.5, 0.5) },
+        row.append(ribbonStepper("線寬", value: \.lineWidth, minus: { $0.lineWidth = max($0.lineWidth - 0.5, 0.5) },
                                  plus: { $0.lineWidth = min($0.lineWidth + 0.5, 5) }))
         row.append(toolbarSeparator())
         row.append(ribbonButton(actions.deleteTable))
@@ -156,7 +157,6 @@ extension NotebookViewController {
             row.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
             row.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
             scroll.heightAnchor.constraint(equalToConstant: 40),
-            scroll.widthAnchor.constraint(lessThanOrEqualToConstant: max(240, view.bounds.width - 380)),
             fit,
         ])
         return scroll
@@ -199,24 +199,43 @@ extension NotebookViewController {
         }.withRenderingMode(.alwaysOriginal)
     }
 
-    /// ⊖ 名稱 ⊕（和邏輯閘調整輸入數量一樣）：調整整個表格
-    func ribbonStepper(_ title: String, minus: @escaping (inout TableData) -> Void, plus: @escaping (inout TableData) -> Void) -> UIView {
+    /// ⊖ 名稱 數值 ⊕（和邏輯閘調整輸入數量一樣）：調整整個表格，中間顯示目前的數值
+    func ribbonStepper(_ title: String, value: KeyPath<TableData, CGFloat>, minus: @escaping (inout TableData) -> Void,
+                       plus: @escaping (inout TableData) -> Void) -> UIView {
+        let l = UILabel()
+        l.font = .monospacedDigitSystemFont(ofSize: 14, weight: .regular)
+        let text = { [weak self] () -> String in
+            guard let t = self?.selectedTable()?.table else { return title }
+            return "\(title) \(Self.stepperNumber(t[keyPath: value]))"
+        }
+        l.text = text()
         func button(_ symbol: String, _ label: String, _ change: @escaping (inout TableData) -> Void) -> UIButton {
             let b = makeButton(symbol: symbol, title: nil, action: nil)
             b.accessibilityLabel = label
-            b.addAction(UIAction { [weak self] _ in
+            b.addAction(UIAction { [weak self, weak l] _ in
                 guard let self, let s = self.selectedTable() else { return }
                 self.modifyTable(s.ref, change)
+                l?.text = text()
             }, for: .touchUpInside)
             return b
         }
-        let l = UILabel()
-        l.text = title
-        l.font = .systemFont(ofSize: 14)
         let stack = UIStackView(arrangedSubviews: [button("minus.circle", "減少\(title)", minus), l, button("plus.circle", "增加\(title)", plus)])
         stack.axis = .horizontal
         stack.alignment = .center
         return stack
+    }
+
+    /// 16、1.5（整數不寫小數點）
+    static func stepperNumber(_ v: CGFloat) -> String {
+        v == v.rounded() ? "\(Int(v))" : String(format: "%.1f", Double(v))
+    }
+
+    /// 有字的按鈕，點了打開選單（選單打開時才照當下的選取範圍做項目）
+    func ribbonMenuButton(_ title: String, symbol: String, _ items: @escaping () -> [UIMenuElement]) -> UIButton {
+        let b = ribbonButton(UIAction(title: title, image: UIImage(systemName: symbol)) { _ in })
+        b.menu = UIMenu(children: [UIDeferredMenuElement.uncached { done in done(items()) }])
+        b.showsMenuAsPrimaryAction = true
+        return b
     }
 
     /// 工具列上有圖示、有字的按鈕

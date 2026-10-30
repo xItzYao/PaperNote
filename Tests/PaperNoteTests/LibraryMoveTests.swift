@@ -69,6 +69,13 @@ final class LibraryMoveTests: XCTestCase {
         XCTAssertEqual(store.notebook(a)?.title, "講義 (1)", "放回同一個資料夾：不會再加號碼")
     }
 
+    /// 回報的需求：日期一行放得下、24 小時制
+    func testDatesAreOneLineAnd24Hour() throws {
+        let d = try XCTUnwrap(Calendar.current.date(from: DateComponents(year: 2026, month: 10, day: 30, hour: 23, minute: 5)))
+        XCTAssertEqual(LibraryDate.dateTime(d), "2026/10/30 23:05")
+        XCTAssertEqual(LibraryDate.day(d), "2026/10/30")
+    }
+
     func testMovingAFolderWithTheSameNameAddsANumber() throws {
         let dest = folder("LibraryMoveTests 目的地 \(UUID().uuidString.prefix(6))", in: nil)
         _ = folder("期中考", in: dest)

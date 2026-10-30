@@ -210,9 +210,12 @@ extension NotebookViewController {
     }
 
     /// 工具列的按鈕（先做好，按的時候才看選取範圍）：
-    /// edit＝合併、分割、取消合併、手繪格線、刪除列、刪除欄；layout＝重複、平均分配、鎖定欄寬列高；deleteTable 放在最右邊
-    func tableRibbonActions() -> (edit: [UIAction], layout: [UIAction], deleteTable: UIAction) {
+    /// edit＝重複、合併、分割、取消合併、手繪格線、刪除列、刪除欄；deleteTable 放在最右邊
+    func tableRibbonActions() -> (edit: [UIAction], deleteTable: UIAction) {
         let edit = [
+            UIAction(title: "重複…", image: UIImage(systemName: "square.stack.3d.down.right")) { [weak self] _ in
+                self?.presentRepeatPanel(anchor: .selection)
+            },
             UIAction(title: "合併", image: TableIcons.merge) { [weak self] _ in self?.tableAction { t, r in t.mergeCells(r) } },
             UIAction(title: "分割…", image: TableIcons.split) { [weak self] _ in self?.presentSplitPanel(anchor: .selection) },
             tableAct("取消合併", "square.split.2x2") { t, r in t.unmerge(r.r0, r.c0) },
@@ -226,22 +229,47 @@ extension NotebookViewController {
             tableAct("刪除列", "minus.rectangle", attributes: .destructive) { t, r in for row in (r.r0...r.r1).reversed() { t.removeRow(row) } },
             tableAct("刪除欄", "minus.rectangle.portrait", attributes: .destructive) { t, r in for col in (r.c0...r.c1).reversed() { t.removeColumn(col) } },
         ]
-        let layout = [
-            UIAction(title: "重複…", image: UIImage(systemName: "square.stack.3d.down.right")) { [weak self] _ in
-                self?.presentRepeatPanel(anchor: .selection)
-            },
-            tableAct("平均分配欄寬", "arrow.left.and.right") { t, r in t.distributeColumns(r.c1 > r.c0 ? r.c0...r.c1 : nil) },
-            tableAct("平均分配列高", "arrow.up.and.down") { t, r in t.distributeRows(r.r1 > r.r0 ? r.r0...r.r1 : nil) },
-            // 鎖定：再按一次解除（標頭上看得到哪幾欄、列鎖住了）
-            tableAct("鎖定欄寬", "lock.rectangle") { t, r in t.setColsLocked(r.c0...r.c1, !(r.c0...r.c1).allSatisfy(t.lockedCols.contains)) },
-            tableAct("鎖定列高", "lock.rectangle") { t, r in t.setRowsLocked(r.r0...r.r1, !(r.r0...r.r1).allSatisfy(t.lockedRows.contains)) },
-        ]
         let deleteTable = UIAction(title: "刪除表格", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
             guard let self, let s = self.selectedTable() else { return }
             self.deleteElement(s.ref)
             self.showToast("已刪除表格（可以按復原）")
         }
-        return (edit, layout, deleteTable)
+        return (edit, deleteTable)
+    }
+
+    /// 工具列「平均分配」的選單：選取範圍的欄寬或列高（只選一欄、一列時是整個表格）
+    func tableDistributeItems() -> [UIMenuElement] {
+        [
+            tableAct("平均分配欄寬", "arrow.left.and.right") { t, r in t.distributeColumns(r.c1 > r.c0 ? r.c0...r.c1 : nil) },
+            tableAct("平均分配列高", "arrow.up.and.down") { t, r in t.distributeRows(r.r1 > r.r0 ? r.r0...r.r1 : nil) },
+        ]
+    }
+
+    /// 工具列「鎖定」的選單：打勾＝選取範圍的欄寬（列高）已經鎖住，再選一次解除
+    func tableLockItems() -> [UIMenuElement] {
+        guard let s = selectedTable() else { return [] }
+        let r = tableCellSel ?? CellRange((0, 0), (0, 0))
+        let cols = (r.c0...r.c1).allSatisfy(s.table.lockedCols.contains)
+        let rows = (r.r0...r.r1).allSatisfy(s.table.lockedRows.contains)
+        return [
+            UIAction(title: "鎖定欄寬", image: UIImage(systemName: "arrow.left.and.right"), state: cols ? .on : .off) { [weak self] _ in
+                self?.toggleTableLock(columns: true)
+            },
+            UIAction(title: "鎖定列高", image: UIImage(systemName: "arrow.up.and.down"), state: rows ? .on : .off) { [weak self] _ in
+                self?.toggleTableLock(columns: false)
+            },
+        ]
+    }
+
+    /// 選取範圍的欄寬（列高）全部鎖住了就解除，否則鎖住
+    func toggleTableLock(columns: Bool) {
+        tableAction { t, r in
+            if columns {
+                t.setColsLocked(r.c0...r.c1, !(r.c0...r.c1).allSatisfy(t.lockedCols.contains))
+            } else {
+                t.setRowsLocked(r.r0...r.r1, !(r.r0...r.r1).allSatisfy(t.lockedRows.contains))
+            }
+        }
     }
 
     /// 列與欄：插入、刪除（點選起來的標頭、長按標頭的選單；其他功能在工具列）

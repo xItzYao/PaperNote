@@ -314,16 +314,23 @@ final class TableEditorUXTests: XCTestCase {
         let views = editor.buildTableRibbon()
         XCTAssertTrue(views.compactMap { $0 as? UISegmentedControl }.isEmpty, "沒有分頁")
         let bs = ribbonButtons()
-        XCTAssertTrue(bs.allSatisfy { $0.menu == nil && !$0.showsMenuAsPrimaryAction }, "沒有要再點開的選單")
+        // 回報的需求：平均分配、鎖定各一個按鈕，點了選欄寬或列高；其他按鈕按了就做
+        let menus = bs.filter { $0.menu != nil }.compactMap { $0.configuration?.title }
+        XCTAssertEqual(menus, ["平均分配", "鎖定"])
+        XCTAssertTrue(bs.filter { $0.menu != nil }.allSatisfy(\.showsMenuAsPrimaryAction), "點一下就打開選單")
         let titles = bs.compactMap { $0.configuration?.title }
-        for t in ["合併", "分割…", "取消合併", "手繪格線", "刪除列", "刪除欄", "底色", "字色", "重複…",
-                  "平均分配欄寬", "平均分配列高", "鎖定欄寬", "鎖定列高", "格線", "刪除表格"] {
+        for t in ["重複…", "合併", "分割…", "取消合併", "手繪格線", "刪除列", "刪除欄", "底色", "字色",
+                  "平均分配", "鎖定", "格線", "刪除表格"] {
             XCTAssertTrue(titles.contains(t), "工具列要有「\(t)」")
         }
-        for t in ["固定位置", "解除固定", "左上到右下", "在上方插入列", "黃色", "黑色", "加粗", "字放大", "編輯文字"] {
+        for t in ["固定位置", "解除固定", "左上到右下", "在上方插入列", "黃色", "黑色", "加粗", "字放大", "編輯文字",
+                  "平均分配欄寬", "平均分配列高", "鎖定欄寬", "鎖定列高"] {
             XCTAssertFalse(titles.contains(t), "工具列不要「\(t)」")
         }
+        XCTAssertEqual(titles.first, "重複…", "重複在最前面")
         XCTAssertEqual(titles.last, "刪除表格", "刪除表格在最右邊")
+        XCTAssertEqual(editor.tableDistributeItems().map(\.title), ["平均分配欄寬", "平均分配列高"])
+        XCTAssertEqual(editor.tableLockItems().map(\.title), ["鎖定欄寬", "鎖定列高"])
         // 依序看工具列：底色、字色、⊖ 字級 ⊕ 排在一起
         func walk(_ v: UIView) -> [String] {
             if let b = v as? UIButton { return [b.configuration?.title ?? b.accessibilityLabel ?? ""] }
@@ -331,16 +338,40 @@ final class TableEditorUXTests: XCTestCase {
             return v.subviews.flatMap(walk)
         }
         let order = views.flatMap(walk)
-        XCTAssertTrue(order.contains("線寬"))
+        // 回報的需求：字級、線寬顯示目前的數值
+        XCTAssertTrue(order.contains("線寬 2"), "線寬旁邊顯示數值：\(order)")
         let fill = try XCTUnwrap(order.firstIndex(of: "底色"))
-        XCTAssertEqual(Array(order[fill...].prefix(5)), ["底色", "字色", "減少字級", "字級", "增加字級"], "字級、字色在底色旁邊")
+        XCTAssertEqual(Array(order[fill...].prefix(5)), ["底色", "字色", "減少字級", "字級 16", "增加字級"], "字級、字色在底色旁邊")
 
-        // ⊖ 線寬 ⊕、⊖ 字級 ⊕
-        let width0 = table.lineWidth, font0 = table.fontSize
+        // ⊖ 線寬 ⊕、⊖ 字級 ⊕：按了數值跟著變
+        func label(_ prefix: String) -> String? { views.flatMap(walk).first { $0.hasPrefix(prefix) } }
         try XCTUnwrap(bs.first { $0.accessibilityLabel == "增加線寬" }).sendActions(for: .touchUpInside)
-        XCTAssertEqual(table.lineWidth, width0 + 0.5, accuracy: 0.001)
+        XCTAssertEqual(table.lineWidth, 2.5, accuracy: 0.001)
+        XCTAssertEqual(label("線寬 "), "線寬 2.5")
         try XCTUnwrap(bs.first { $0.accessibilityLabel == "減少字級" }).sendActions(for: .touchUpInside)
-        XCTAssertEqual(table.fontSize, font0 - 2, accuracy: 0.001)
+        XCTAssertEqual(table.fontSize, 14, accuracy: 0.001)
+        XCTAssertEqual(label("字級 "), "字級 14")
+    }
+
+    /// 回報的需求：第二排工具列不用為頁數留那麼多空間（頁數當作最多 5 位數）
+    func testRibbonReachesThePageNumber() throws {
+        editor.rebuildSubBar()
+        editor.view.layoutIfNeeded()
+        let label = editor.pageLabel
+        XCTAssertEqual(label.bounds.width, NotebookViewController.pageLabelWidth, accuracy: 0.5)
+        let five = ("99999 / 99999" as NSString).size(withAttributes: [.font: label.font!]).width
+        XCTAssertLessThanOrEqual(label.bounds.width, ceil(five) + 0.5, "只留 5 位數的寬度")
+        func find(_ v: UIView) -> UIScrollView? {
+            if let s = v as? UIScrollView, s.accessibilityIdentifier == "ribbonRow" { return s }
+            return v.subviews.lazy.compactMap(find).first
+        }
+        let row = try XCTUnwrap(find(editor.subBarStack))
+        let rowFrame = row.convert(row.bounds, to: label.superview)
+        // 放得下就全部顯示，放不下就一直延伸到頁碼旁邊（不額外留空）
+        try XCTSkipIf(editor.settings.presetsOnRight, "預設是筆刷列靠左、頁碼在右邊")
+        let available = label.frame.minX - 12 - rowFrame.minX
+        XCTAssertEqual(rowFrame.width, min(row.contentSize.width, available), accuracy: 1,
+                       "工具列寬 \(rowFrame.width)、內容 \(row.contentSize.width)、到頁碼的空間 \(available)")
     }
 
     private func tapRibbon(_ title: String) throws {
@@ -350,12 +381,14 @@ final class TableEditorUXTests: XCTestCase {
 
     func testRibbonLocksAndDeletesTheSelection() throws {
         editor.updateCellSelection(from: CGPoint(x: origin.x + 50, y: origin.y + 60), to: CGPoint(x: origin.x + 150, y: origin.y + 60))
-        try tapRibbon("鎖定欄寬")
+        editor.toggleTableLock(columns: true)
         XCTAssertEqual(table.lockedCols, [0, 1])
-        try tapRibbon("鎖定列高")
+        XCTAssertEqual((editor.tableLockItems().first as? UIAction)?.state, .on, "選單上打勾：已經鎖住")
+        editor.toggleTableLock(columns: false)
         XCTAssertEqual(table.lockedRows, [1])
-        try tapRibbon("鎖定欄寬")
-        XCTAssertEqual(table.lockedCols, [], "都鎖住了再按一次：解除")
+        editor.toggleTableLock(columns: true)
+        XCTAssertEqual(table.lockedCols, [], "都鎖住了再選一次：解除")
+        XCTAssertEqual((editor.tableLockItems().first as? UIAction)?.state, .off)
         try tapRibbon("刪除列")
         XCTAssertEqual(table.rows, 2)
         let c1 = CGPoint(x: origin.x + 250, y: origin.y + 20)

@@ -6,7 +6,7 @@ enum CircuitPart: String, Codable, CaseIterable, Identifiable {
     case resistor, capacitor, inductor, voltageSource, currentSource, ground, vdd
     case nmos, pmos
     case andGate, orGate, nandGate, norGate, xorGate, xnorGate, notGate, bufferGate
-    case dFlipFlop, dLatch, mux, decoder, encoder
+    case dFlipFlop, dLatch, mux, decoder, encoder, alu
 
     var id: String { rawValue }
 
@@ -34,13 +34,14 @@ enum CircuitPart: String, Codable, CaseIterable, Identifiable {
         case .mux: return "多工器"
         case .decoder: return "解碼器"
         case .encoder: return "編碼器"
+        case .alu: return "ALU"
         }
     }
 
-    /// 方塊元件（正反器、閂鎖、多工器、解碼器、編碼器）
+    /// 方塊元件（正反器、閂鎖、多工器、解碼器、編碼器、ALU）
     var isBlock: Bool {
         switch self {
-        case .dFlipFlop, .dLatch, .mux, .decoder, .encoder: return true
+        case .dFlipFlop, .dLatch, .mux, .decoder, .encoder, .alu: return true
         default: return false
         }
     }
@@ -187,9 +188,11 @@ struct CircuitBlockLayout: Equatable {
     var spacing: CGFloat = 20
     /// 多工器：畫成梯形（左邊寬、右邊窄）
     var trapezoid = false
+    /// ALU：梯形的左邊（兩個輸入中間）有一個往內的 V 形缺口，標題寫在裡面
+    var notch = false
 
     /// 梯形右邊比左邊每側縮進多少
-    var trapezoidInset: CGFloat { trapezoid ? min(height / 2 * 0.4, 40) : 0 }
+    var trapezoidInset: CGFloat { notch ? height / 4 : trapezoid ? min(height / 2 * 0.4, 40) : 0 }
 
     /// 下緣在 x 處的 y（梯形的下緣是斜的）
     func bottomEdge(at x: CGFloat) -> CGFloat { height / 2 - trapezoidInset * (x + halfWidth) / (2 * halfWidth) }
@@ -224,6 +227,9 @@ enum CircuitGeometry {
             let n = min(max(c.inputs, 1), 4)
             return CircuitBlockLayout(title: "ENC", left: (0..<(1 << n)).map { "I\($0)" }, bottom: [],
                                       right: (0..<n).map { "Y\($0)" }, clock: nil)
+        case .alu:
+            return CircuitBlockLayout(title: "ALU", left: ["A", "B"], bottom: ["OP"], right: ["Y"], clock: nil,
+                                      halfWidth: 30, pinX: 50, spacing: 60, trapezoid: true, notch: true)
         default:
             return nil
         }

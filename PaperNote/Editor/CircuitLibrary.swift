@@ -14,7 +14,7 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
         ("電源", [.voltageSource, .currentSource, .ground, .vdd]),
         ("電晶體", [.nmos, .pmos]),
         ("邏輯閘", [.andGate, .orGate, .notGate, .bufferGate, .nandGate, .norGate, .xorGate, .xnorGate]),
-        ("其他", [.dFlipFlop, .dLatch, .mux, .decoder, .encoder]),
+        ("其他", [.dFlipFlop, .dLatch, .mux, .decoder, .encoder, .alu]),
     ]
     /// 收起來的分類（記在本機）
     private static let collapsedKey = "circuitLibrary.collapsedSections"

@@ -165,10 +165,15 @@ let dec3 = CircuitComponent(part: .decoder, position: P(0, 0), inputs: 3)
 check("3-bit decoder has 3 inputs and 8 outputs", CircuitGeometry.pins(dec3).count == 11)
 let enc2 = CircuitComponent(part: .encoder, position: P(0, 0), inputs: 2)
 check("2-bit encoder has 4 inputs and 2 outputs", CircuitGeometry.pinNames(enc2) == ["I0", "I1", "I2", "I3", "Y0", "Y1"])
+// ALU：A、B 在左邊（缺口上下）、OP 在下面、Y 在右邊
+let alu = CircuitComponent(part: .alu, position: P(0, 0))
+check("ALU pins", CircuitGeometry.pinNames(alu) == ["A", "B", "OP", "Y"])
+check("ALU pin positions", CircuitGeometry.pins(alu) == [P(-50, -30), P(-50, 30), P(0, 80), P(50, 0)])
+check("ALU is a fixed-size block", CircuitPart.alu.isBlock && CircuitPart.alu.sizeRange == 1...1)
 let dff = CircuitComponent(part: .dFlipFlop, position: P(0, 0))
 check("D flip-flop pins", CircuitGeometry.pinNames(dff) == ["D", "CLK", "Q", "~Q"])
 var allBlocksOK = true
-for part in [CircuitPart.dFlipFlop, .dLatch, .mux, .decoder, .encoder] {
+for part in [CircuitPart.dFlipFlop, .dLatch, .mux, .decoder, .encoder, .alu] {
     for n in part.sizeRange {
         for rot in [0, 90, 180, 270] {
             let c = CircuitComponent(part: part, position: P(100, 100), rotation: rot, inputs: n)

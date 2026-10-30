@@ -74,7 +74,8 @@ enum CircuitRenderer {
         }
         for (name, y) in zip(b.right, b.sideOffsets(b.right.count)) { text(name, at: CGPoint(x: inner, y: y), size: 8) }
         for (name, x) in zip(b.bottom, CircuitGeometry.spread(b.bottom.count)) { text(name, at: CGPoint(x: x, y: b.bottomEdge(at: x) - 7), size: 8) }
-        text(b.title, at: CGPoint(x: 0, y: -b.height / 2 - 7), size: 9, bold: true)
+        // ALU 的標題寫在本體裡（缺口右邊）；其他寫在上面
+        text(b.title, at: b.notch ? CGPoint(x: 2, y: 0) : CGPoint(x: 0, y: -b.height / 2 - 7), size: 9, bold: true)
         return out
     }
 
@@ -227,7 +228,7 @@ enum CircuitRenderer {
             } else {
                 line(s, pt(15, 0), pt(30, 0))
             }
-        case .dFlipFlop, .dLatch, .mux, .decoder, .encoder:
+        case .dFlipFlop, .dLatch, .mux, .decoder, .encoder, .alu:
             if let b = CircuitGeometry.blockLayout(c) { blockSymbol(b, s) }
         default:
             gateSymbol(c, s)
@@ -245,6 +246,12 @@ enum CircuitRenderer {
             s.addLine(to: pt(w, -h + k))
             s.addLine(to: pt(w, h - k))
             s.addLine(to: pt(-w, h))
+            if b.notch {
+                // ALU：左邊中間往內凹的 V 形缺口（兩個輸入分在缺口上下）
+                s.addLine(to: pt(-w, h / 4))
+                s.addLine(to: pt(-w + h / 5, 0))
+                s.addLine(to: pt(-w, -h / 4))
+            }
             s.close()
         } else {
             s.append(UIBezierPath(rect: CGRect(x: -w, y: -h, width: w * 2, height: h * 2)))
