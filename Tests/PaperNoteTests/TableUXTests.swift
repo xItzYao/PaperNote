@@ -328,10 +328,18 @@ final class TableEditorUXTests: XCTestCase {
     func testFillAndLineColorOpenAColorPicker() throws {
         let cell = CGPoint(x: origin.x + 150, y: origin.y + 60)
         editor.updateCellSelection(from: cell, to: cell)
+        func buttons(_ v: UIView) -> [UIButton] { (v as? UIButton).map { [$0] } ?? v.subviews.flatMap(buttons) }
         func pick(_ title: String, _ color: UIColor) throws {
-            let b = try XCTUnwrap(ribbonButtons().first { $0.configuration?.title == title })
+            // 用畫面上真的工具列按鈕（顏色選擇器從按鈕跳出，按鈕要在畫面上）
+            editor.rebuildSubBar()
+            editor.view.layoutIfNeeded()
+            let b = try XCTUnwrap(editor.subBarStack.arrangedSubviews.flatMap(buttons).first { $0.configuration?.title == title })
+            XCTAssertNotNil(b.window)
             b.sendActions(for: .primaryActionTriggered)
-            RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+            let deadline = Date().addingTimeInterval(3)
+            while !(editor.presentedViewController is UIColorPickerViewController), Date() < deadline {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            }
             let picker = try XCTUnwrap(editor.presentedViewController as? UIColorPickerViewController, "按「\(title)」打開顏色選擇器")
             picker.delegate?.colorPickerViewController?(picker, didSelect: color, continuously: false)
             editor.dismiss(animated: false)
