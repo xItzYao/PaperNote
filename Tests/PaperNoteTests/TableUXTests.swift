@@ -336,14 +336,16 @@ final class TableEditorUXTests: XCTestCase {
             let b = try XCTUnwrap(editor.subBarStack.arrangedSubviews.flatMap(buttons).first { $0.configuration?.title == title })
             XCTAssertNotNil(b.window)
             b.sendActions(for: .primaryActionTriggered)
-            let deadline = Date().addingTimeInterval(3)
-            while !(editor.presentedViewController is UIColorPickerViewController), Date() < deadline {
-                RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            // 顏色選擇器是系統的遠端畫面：等它真的跳出來（關掉時也要等關好，才能打開下一個）
+            func wait(until done: () -> Bool) {
+                let deadline = Date().addingTimeInterval(5)
+                while !done(), Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.1)) }
             }
+            wait { (editor.presentedViewController as? UIColorPickerViewController).map { !$0.isBeingPresented } ?? false }
             let picker = try XCTUnwrap(editor.presentedViewController as? UIColorPickerViewController, "按「\(title)」打開顏色選擇器")
             picker.delegate?.colorPickerViewController?(picker, didSelect: color, continuously: false)
             editor.dismiss(animated: false)
-            RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+            wait { editor.presentedViewController == nil }
         }
         try pick("底色", UIColor(red: 0, green: 0.5, blue: 0, alpha: 1))
         XCTAssertEqual(table.fills, [CellFill(row: 1, col: 1, hex: "#008000FF")], "選的顏色套用到選取的格子")
