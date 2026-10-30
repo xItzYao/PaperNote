@@ -23,6 +23,19 @@ enum LassoGeometry {
         }
         return false
     }
+
+    /// 矩形整個在套索裡面。邊緣留一點寬容：手畫的圈稍微切到角落也算
+    static func encloses(_ r: CGRect, path: UIBezierPath) -> Bool {
+        let inset = min(12, r.width * 0.05, r.height * 0.05)
+        let b = r.insetBy(dx: inset, dy: inset)
+        let n = 6
+        return (0...n).allSatisfy { i in
+            let f = CGFloat(i) / CGFloat(n)
+            let x = b.minX + b.width * f, y = b.minY + b.height * f
+            return [CGPoint(x: x, y: b.minY), CGPoint(x: x, y: b.maxY), CGPoint(x: b.minX, y: y), CGPoint(x: b.maxX, y: y)]
+                .allSatisfy { path.contains($0) }
+        }
+    }
 }
 
 /// 自訂套索圈到的內容：筆跡（canvas.drawing 的索引）、物件、螢光標示
@@ -138,7 +151,8 @@ extension NotebookViewController {
             }
             for e in page.elements where !e.locked {
                 let f = docFrame(of: e, pageIndex: pi)
-                if touches(f) {
+                // 表格要整個圈到才算：圈表格上的字時，不會連表格一起拿走
+                if e.isTable ? LassoGeometry.encloses(f, path: path) : touches(f) {
                     elements.append(ElementRef(pageID: page.id, elementID: e.id))
                     bounds = bounds.union(f)
                 }
@@ -183,18 +197,7 @@ extension NotebookViewController {
         // 自製筆刷的筆跡也先藏起來，一起放進預覽圖
         let movingInk = inkStrokes(sel.ink)
         setInkHidden(sel.ink)
-        if !lassoMoveStrokes.isEmpty || !movingInk.isEmpty {
-            let scale = min(3, max(1, canvas.zoomScale * traitCollection.displayScale))
-            let pk = lassoMoveStrokes.isEmpty ? nil : PageRenderer.inkImage(PKDrawing(strokes: lassoMoveStrokes), rect: sel.bounds, scale: scale)
-            let fmt = UIGraphicsImageRendererFormat()
-            fmt.scale = scale
-            fmt.opaque = false
-            let img = UIGraphicsImageRenderer(size: sel.bounds.size, format: fmt).image { rc in
-                let ctx = rc.cgContext
-                ctx.translateBy(x: -sel.bounds.minX, y: -sel.bounds.minY)
-                InkRenderer.draw(movingInk, in: ctx)
-                pk?.draw(in: sel.bounds)
-            }
+        if let img = inkPreviewImage(lassoMoveStrokes, movingInk, rect: sel.bounds) {
             overlay.showLassoPreview(img, frame: sel.bounds)
         }
         lassoMoveElementFrames = [:]
@@ -314,10 +317,26 @@ extension NotebookViewController {
         return pageIndex(containing: c) ?? nearestPageIndex(to: c)
     }
 
-    /// 套索移動中先把圈到的筆跡藏起來（空陣列＝全部顯示）
-    private func setInkHidden(_ refs: [InkRef]) {
+    /// 套索（或表格）移動中先把要移動的筆跡藏起來（空陣列＝全部顯示）
+    func setInkHidden(_ refs: [InkRef]) {
         for (id, v) in pageViews {
             v.inkView.setHidden(Set(refs.filter { $0.pageID == id }.map(\.id)))
+        }
+    }
+
+    /// 移動中的預覽圖：PencilKit 筆跡和自製筆刷的筆跡畫在一起（rect 是文件座標）；沒有筆跡回傳 nil
+    func inkPreviewImage(_ pk: [PKStroke], _ ink: [InkStroke], rect: CGRect) -> UIImage? {
+        guard !pk.isEmpty || !ink.isEmpty, !rect.isNull, rect.width > 0, rect.height > 0 else { return nil }
+        let scale = min(3, max(1, canvas.zoomScale * traitCollection.displayScale))
+        let pkImage = pk.isEmpty ? nil : PageRenderer.inkImage(PKDrawing(strokes: pk), rect: rect, scale: scale)
+        let fmt = UIGraphicsImageRendererFormat()
+        fmt.scale = scale
+        fmt.opaque = false
+        return UIGraphicsImageRenderer(size: rect.size, format: fmt).image { rc in
+            let ctx = rc.cgContext
+            ctx.translateBy(x: -rect.minX, y: -rect.minY)
+            InkRenderer.draw(ink, in: ctx)
+            pkImage?.draw(in: rect)
         }
     }
 

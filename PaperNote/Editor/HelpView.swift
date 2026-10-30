@@ -19,7 +19,7 @@ struct HelpView: View {
         Item(symbol: "eraser", title: "橡皮擦",
              detail: "整筆擦除／局部擦除；也能擦掉 PDF 上的螢光標示。表格、圖片、文字框不會被擦掉。Apple Pencil 筆身點兩下可以切換橡皮擦。"),
         Item(symbol: "lasso", title: "套索",
-             detail: "用 Pencil 圈選筆跡、表格、圖片、文字框、螢光標示，拖曳可以一起移動；點一下選取範圍打開選單：改顏色、拷貝、剪下、複製一份、刪除。圈到一部分就會選到。表格（右上角）與圖片（左上角）的鎖頭可以鎖定位置，鎖定後不會被圈到。"),
+             detail: "用 Pencil 圈選筆跡、表格、圖片、文字框、螢光標示，拖曳可以一起移動；點一下選取範圍打開選單：改顏色、拷貝、剪下、複製一份、刪除。圈到一部分就會選到；表格要整個圈起來才會選到，只圈表格上的字不會連表格一起拿走。表格（右上角）與圖片（左上角）的鎖頭可以鎖定位置，鎖定後不會被圈到。"),
         Item(symbol: "camera.viewfinder", title: "截圖",
              detail: "用 Pencil 框選範圍（開啟「用手指書寫」時手指也可以），可以釘選在畫面上、拷貝、翻譯圖中文字、存到照片。釘選的圖片換頁、換筆記本都會留著，拖右下角可以調整大小。"),
         Item(symbol: "hand.point.up.left", title: "選取",
@@ -37,10 +37,10 @@ struct HelpView: View {
     ]
 
     private let table: [Item] = [
-        Item(symbol: "hand.tap", title: "選取儲存格", detail: "點一格選取；在表格裡拖曳可以選取多格。"),
-        Item(symbol: "arrow.up.and.down.and.arrow.left.and.right", title: "移動、刪除表格", detail: "拖曳左上角的青綠色按鈕或表格外框移動；上方的紅色 ✕ 刪除整個表格（可以復原）。"),
-        Item(symbol: "plus.circle", title: "＋ 插入列／欄", detail: "表格上緣與左緣的 ＋ 會在那個位置插入一欄或一列。"),
-        Item(symbol: "circle.fill", title: "調整欄寬／列高", detail: "拖曳下緣、右緣的藍色小圓點，或直接拖格線。"),
+        Item(symbol: "hand.tap", title: "選取儲存格", detail: "點一格選取，在表格裡拖曳可以選取多格；再點一下選起來的格子打開選單。"),
+        Item(symbol: "arrow.up.and.down.and.arrow.left.and.right", title: "移動、刪除表格", detail: "拖曳左上角的青綠色按鈕或表格外框移動，表格上的手寫字會一起移動；表格工具列的垃圾桶刪除整個表格（可以復原）。"),
+        Item(symbol: "plus.circle", title: "＋ 插入列／欄", detail: "點標頭選整欄（整列）後，兩側會出現 ＋，點了在那一邊插入一欄（列）。"),
+        Item(symbol: "arrow.left.and.right", title: "調整欄寬／列高", detail: "拖曳標頭之間的分界，或直接拖格線。"),
         Item(symbol: "rectangle.compress.vertical", title: "合併／分割", detail: "選取多格後按合併；分割可以把一格切成左右或上下兩格。"),
         Item(symbol: "pencil.and.outline", title: "手繪格線", detail: "在表格上畫橫線、直線會切開儲存格，畫斜線會加上斜線。"),
         Item(symbol: "keyboard", title: "輸入文字", detail: "點兩下儲存格，或按鍵盤按鈕。"),
@@ -53,7 +53,7 @@ struct HelpView: View {
                     ForEach(tools) { row($0) }
                 }
                 Section("表格（選取表格後第二列會出現表格工具）") {
-                    row(Item(symbol: "hand.tap", title: "不用找按鈕", detail: "點兩下格子打字；點表格上方、左邊的標頭選整欄整列（拖曳選好幾欄），長按標頭插入、刪除、平均分配、鎖定；長按格子合併、分割、底色。拖選取範圍右下角的藍點往下或往右重複，做大表格。"))
+                    row(Item(symbol: "hand.tap", title: "不用找按鈕", detail: "點兩下格子打字；點表格上方、左邊的標頭選整欄整列（拖曳選好幾欄），再點一下（或長按）標頭插入、刪除、平均分配、鎖定；再點一下選起來的格子（或長按）合併、分割、底色。拖選取範圍右下角的藍點往下或往右重複，做大表格。"))
                     row(Item(symbol: "pencil.and.outline", title: "用筆改表格", detail: "按「手繪格線」後：在格子裡畫線切開、畫斜線；在格線上來回塗掉、或切到「擦線」沿著格線擦（會擦掉的線先變淡；Pencil 筆身點兩下切換畫線／擦線）＝合併兩邊的格子；在合併的格子上沿著原本的格線畫＝把那條線接回去；在表格外面靠近邊的地方畫一條線＝在那裡加一列或一欄。"))
                     ForEach(table) { row($0) }
                 }

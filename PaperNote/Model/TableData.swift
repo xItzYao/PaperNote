@@ -85,6 +85,13 @@ struct TableData: Codable, Equatable {
     var cols: Int { colWidths.count }
     var size: CGSize { CGSize(width: colWidths.reduce(0, +), height: rowHeights.reduce(0, +)) }
 
+    /// 插入新表格：格子照頁面大小縮，欄、列很多也盡量放得進頁面（但不小於 minCell）
+    static func fitted(rows: Int, cols: Int, page: CGSize) -> TableData {
+        let w = min(140, max(minCell, (page.width * 0.85 / CGFloat(max(cols, 1))).rounded()))
+        let h = min(44, max(minCell, (page.height * 0.8 / CGFloat(max(rows, 1))).rounded()))
+        return make(rows: rows, cols: cols, cellWidth: w, cellHeight: h)
+    }
+
     static func make(rows: Int, cols: Int, cellWidth: CGFloat = 120, cellHeight: CGFloat = 48) -> TableData {
         TableData(colWidths: Array(repeating: cellWidth, count: cols),
                   rowHeights: Array(repeating: cellHeight, count: rows),
@@ -827,56 +834,5 @@ extension TableData {
             }
         }
         return nil
-    }
-}
-
-// MARK: - 範本
-
-enum TableTemplate: String, CaseIterable, Identifiable {
-    case timetable, lab, week, compare
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .timetable: return "課表"
-        case .lab: return "實驗紀錄"
-        case .week: return "週計畫"
-        case .compare: return "比較表"
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .timetable: return "calendar"
-        case .lab: return "flask"
-        case .week: return "checklist"
-        case .compare: return "rectangle.split.3x1"
-        }
-    }
-
-    /// 第一列（和第一欄）是標題，淡灰底
-    var table: TableData {
-        func make(_ header: [String], firstColumn: [String], widths: [CGFloat], height: CGFloat) -> TableData {
-            var t = TableData.make(rows: firstColumn.count + 1, cols: header.count, cellHeight: height)
-            t.colWidths = widths
-            for (c, s) in header.enumerated() { t.setText(s, row: 0, col: c) }
-            for (r, s) in firstColumn.enumerated() { t.setText(s, row: r + 1, col: 0) }
-            t.setFill(CellRange((0, 0), (0, header.count - 1)), hex: "#EEEEEEFF")
-            return t
-        }
-        switch self {
-        case .timetable:
-            return make(["", "一", "二", "三", "四", "五"], firstColumn: (1...8).map { "\($0)" },
-                        widths: [44] + Array(repeating: 92, count: 5), height: 44)
-        case .lab:
-            return make(["次數", "測量 1", "測量 2", "測量 3", "平均"], firstColumn: (1...5).map { "\($0)" },
-                        widths: [64, 100, 100, 100, 100], height: 40)
-        case .week:
-            return make(["星期", "待辦"], firstColumn: ["一", "二", "三", "四", "五", "六", "日"],
-                        widths: [64, 380], height: 48)
-        case .compare:
-            return make(["項目", "A", "B"], firstColumn: ["", "", "", ""], widths: [120, 160, 160], height: 44)
-        }
     }
 }

@@ -184,7 +184,6 @@ final class OverlayView: UIView {
     let captureLayer = CAShapeLayer()
     let tablePlusCircles = CAShapeLayer()
     let tablePlusMarks = CAShapeLayer()
-    let gripLayer = CAShapeLayer()
     let pageContentLayer = CAShapeLayer()
     let pageOutlineLayer = CAShapeLayer()
     let pageHandleLayer = CAShapeLayer()
@@ -204,7 +203,6 @@ final class OverlayView: UIView {
     /// 青綠色圓形控制點（和浮動圖片的縮放點同一風格）
     let moveHandleImage = CALayer()
     let resizeHandleImage = CALayer()
-    let deleteHandleImage = CALayer()
     /// 電路元件旁的旋轉、水平翻轉按鈕
     let circuitRotateHandle = CALayer()
     let circuitFlipHandle = CALayer()
@@ -332,7 +330,6 @@ final class OverlayView: UIView {
         layer.addSublayer(moveHandleMarks)
         for (l, symbol, color) in [(moveHandleImage, "arrow.up.and.down.and.arrow.left.and.right", UIColor.systemTeal),
                                    (resizeHandleImage, "arrow.up.left.and.arrow.down.right", UIColor.systemTeal),
-                                   (deleteHandleImage, "xmark", UIColor.systemRed),
                                    (circuitRotateHandle, "rotate.right", UIColor.systemBlue),
                                    (circuitFlipHandle, "arrow.left.and.right", UIColor.systemBlue),
                                    (circuitDeleteHandle, "trash", UIColor.systemRed)] {
@@ -358,10 +355,6 @@ final class OverlayView: UIView {
         captureLayer.strokeColor = UIColor.systemTeal.cgColor
         captureLayer.lineDashPattern = [8, 5]
         layer.addSublayer(captureLayer)
-
-        gripLayer.fillColor = UIColor.systemBlue.cgColor
-        gripLayer.strokeColor = UIColor.white.cgColor
-        layer.addSublayer(gripLayer)
 
         tablePlusCircles.fillColor = UIColor.white.cgColor
         tablePlusCircles.strokeColor = UIColor.systemBlue.cgColor
@@ -439,7 +432,6 @@ final class OverlayView: UIView {
         handleLayer.lineWidth = 2 * lineScale
         captureLayer.lineWidth = 2 * lineScale
         captureLayer.lineDashPattern = [NSNumber(value: Double(8 * lineScale)), NSNumber(value: Double(5 * lineScale))]
-        gripLayer.lineWidth = 1.5 * lineScale
         tablePlusCircles.lineWidth = 1.5 * lineScale
         tablePlusMarks.lineWidth = 2 * lineScale
         pageContentLayer.lineWidth = 1 * lineScale
@@ -527,20 +519,6 @@ final class OverlayView: UIView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         lassoPreviewLayer.frame = frame
-        CATransaction.commit()
-    }
-
-    /// 表格左上角的刪除鈕
-    func showDeleteHandle(_ p: CGPoint?) {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        if let p {
-            let s = Self.handleSize * lineScale
-            deleteHandleImage.frame = CGRect(x: p.x - s / 2, y: p.y - s / 2, width: s, height: s)
-            deleteHandleImage.isHidden = false
-        } else {
-            deleteHandleImage.isHidden = true
-        }
         CATransaction.commit()
     }
 
@@ -665,7 +643,6 @@ final class OverlayView: UIView {
         CATransaction.commit()
     }
 
-    /// 表格選取時的「＋」（插入列／欄）與格線拖拉點
     /// 電路元件旁的旋轉、翻轉按鈕（文件座標的中心點；nil 隱藏）
     func showCircuitPartHandles(rotate: CGPoint?, flip: CGPoint?, delete: CGPoint?) {
         CATransaction.begin()
@@ -682,7 +659,8 @@ final class OverlayView: UIView {
         CATransaction.commit()
     }
 
-    func showTableHandles(plus: [CGPoint], grips: [CGPoint]) {
+    /// 選了整欄（整列）時兩側的「＋」（插入欄／列）
+    func showTablePlus(_ plus: [CGPoint]) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         let r = 11 * lineScale
@@ -698,12 +676,6 @@ final class OverlayView: UIView {
         }
         tablePlusCircles.path = plus.isEmpty ? nil : circles.cgPath
         tablePlusMarks.path = plus.isEmpty ? nil : marks.cgPath
-        let g = UIBezierPath()
-        let gr = 7 * lineScale
-        for p in grips {
-            g.append(UIBezierPath(ovalIn: CGRect(x: p.x - gr, y: p.y - gr, width: gr * 2, height: gr * 2)))
-        }
-        gripLayer.path = grips.isEmpty ? nil : g.cgPath
         CATransaction.commit()
     }
 

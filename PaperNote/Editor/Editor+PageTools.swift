@@ -8,70 +8,68 @@ struct IndexedPoint {
 struct TableHandles {
     var plusCols: [IndexedPoint] = []   // 點了在第 index 欄的位置插入一欄
     var plusRows: [IndexedPoint] = []
-    var colGrips: [IndexedPoint] = []   // 拖曳調整第 index 條直線
-    var rowGrips: [IndexedPoint] = []
 }
 
-// MARK: - 表格：＋插入列欄、格線拖拉點
+// MARK: - 表格：選了整欄（整列）時兩側的＋、拖標頭的分界調整欄寬（列高）
 
 extension NotebookViewController {
-    func tableHandles(_ e: PageElement, docRect r: CGRect) -> TableHandles? {
-        guard case let .table(t) = e.content, t.size.width > 0, t.size.height > 0 else { return nil }
-        let off = 24 / canvas.zoomScale
-        let sx = r.width / t.size.width, sy = r.height / t.size.height
+    /// 選了整欄：那幾欄左右兩側各一個 ＋；選了整列：上下兩側各一個。
+    /// 放在標頭外面，不會擋到 A、B、1、2；沒選整欄整列就不顯示
+    func tableHandles(_ t: TableData, docRect r: CGRect, selection sel: CellRange?) -> TableHandles {
         var h = TableHandles()
-        // 被合併格整條蓋住的格線不顯示 ＋ 和拖拉點
-        h.plusCols = (0...t.cols).filter { t.colLineVisibleAnywhere($0) }
-            .map { IndexedPoint(index: $0, point: CGPoint(x: r.minX + t.colX($0) * sx, y: r.minY - off)) }
-        h.plusRows = (0...t.rows).filter { t.rowLineVisibleAnywhere($0) }
-            .map { IndexedPoint(index: $0, point: CGPoint(x: r.minX - off, y: r.minY + t.rowY($0) * sy)) }
-        if !e.locked {
-            h.colGrips = (1...t.cols).filter { t.colLineVisibleAnywhere($0) }
-                .map { IndexedPoint(index: $0, point: CGPoint(x: r.minX + t.colX($0) * sx, y: r.maxY + off)) }
-            h.rowGrips = (1...t.rows).filter { t.rowLineVisibleAnywhere($0) }
-                .map { IndexedPoint(index: $0, point: CGPoint(x: r.maxX + off, y: r.minY + t.rowY($0) * sy)) }
-            // 右下角是縮放控制點，最後一條直線／橫線的拖拉點仍保留在外側
+        guard let sel, t.rows > 0, t.cols > 0 else { return h }
+        let off = (Self.tableHeaderGap + Self.tableHeaderSize + 16) / canvas.zoomScale
+        if sel.r0 == 0 && sel.r1 == t.rows - 1 {
+            h.plusCols = [sel.c0, sel.c1 + 1].map { IndexedPoint(index: $0, point: CGPoint(x: r.minX + t.colX($0), y: r.minY - off)) }
+        }
+        if sel.c0 == 0 && sel.c1 == t.cols - 1 {
+            h.plusRows = [sel.r0, sel.r1 + 1].map { IndexedPoint(index: $0, point: CGPoint(x: r.minX - off, y: r.minY + t.rowY($0))) }
         }
         return h
     }
 
     func selectedTableHandles() -> (ref: ElementRef, handles: TableHandles)? {
-        guard editingTextView == nil, let ref = selected, case let (pi, ei)? = locate(ref) else { return nil }
-        let e = pages[pi].elements[ei]
-        guard let h = tableHandles(e, docRect: docFrame(of: e, pageIndex: pi)) else { return nil }
-        return (ref, h)
+        guard tool == .select, editingTextView == nil, let s = selectedTable() else { return nil }
+        return (s.ref, tableHandles(s.table, docRect: s.docRect, selection: tableCellSel))
     }
 
     func updateTableHandlesChrome() {
-        if tool == .select, let s = selectedTableHandles() {
-            overlay.showTableHandles(plus: (s.handles.plusCols + s.handles.plusRows).map(\.point),
-                                     grips: (s.handles.colGrips + s.handles.rowGrips).map(\.point))
-        } else {
-            overlay.showTableHandles(plus: [], grips: [])
-        }
+        overlay.showTablePlus(selectedTableHandles().map { ($0.handles.plusCols + $0.handles.plusRows).map(\.point) } ?? [])
     }
 
-    /// 點到「＋」→ 插入欄或列
+    /// 點到「＋」→ 插入一欄（列），並選起新的那一欄（列），可以接著再按
     func handleTablePlusTap(at p: CGPoint) -> Bool {
         guard let s = selectedTableHandles() else { return false }
         let tol = 18 / canvas.zoomScale
         if let c = s.handles.plusCols.first(where: { $0.point.distance(to: p) < tol }) {
             modifyTable(s.ref) { $0.insertColumn(at: c.index) }
+            selectTableHeaders(TableHeaderHit(columns: true, index: c.index))
             return true
         }
         if let r = s.handles.plusRows.first(where: { $0.point.distance(to: p) < tol }) {
             modifyTable(s.ref) { $0.insertRow(at: r.index) }
+            selectTableHeaders(TableHeaderHit(columns: false, index: r.index))
             return true
         }
         return false
     }
 
-    /// 拖到格線拖拉點 → 調整那條線
-    func tableGripTarget(at p: CGPoint) -> DragKind? {
-        guard let s = selectedTableHandles() else { return nil }
-        let tol = 18 / canvas.zoomScale
-        if let c = s.handles.colGrips.first(where: { $0.point.distance(to: p) < tol }) { return .colLine(c.index) }
-        if let r = s.handles.rowGrips.first(where: { $0.point.distance(to: p) < tol }) { return .rowLine(r.index) }
+    /// 按在兩個欄標頭（列標頭）的分界上：拖曳調整那條線。第 c 條直線＝第 c 欄的右邊（最後一條是表格右緣）
+    func tableHeaderBoundary(at p: CGPoint) -> DragKind? {
+        guard let s = selectedTable(), !s.element.locked, let r = tableHeaderRects(),
+              let firstCol = r.cols.first, let lastCol = r.cols.last, let firstRow = r.rows.first, let lastRow = r.rows.last else { return nil }
+        let t = s.table, o = s.docRect.origin
+        let tol = 8 / canvas.zoomScale, slop = 6 / canvas.zoomScale
+        if firstCol.union(lastCol).insetBy(dx: -tol, dy: -slop).contains(p),
+           let c = (1...t.cols).min(by: { abs(o.x + t.colX($0) - p.x) < abs(o.x + t.colX($1) - p.x) }),
+           abs(o.x + t.colX(c) - p.x) < tol {
+            return .colLine(c)
+        }
+        if firstRow.union(lastRow).insetBy(dx: -slop, dy: -tol).contains(p),
+           let row = (1...t.rows).min(by: { abs(o.y + t.rowY($0) - p.y) < abs(o.y + t.rowY($1) - p.y) }),
+           abs(o.y + t.rowY(row) - p.y) < tol {
+            return .rowLine(row)
+        }
         return nil
     }
 }

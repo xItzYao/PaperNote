@@ -344,26 +344,30 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
                 if case let (pi, ei)? = locate(hit), pages[pi].elements[ei].isTable { updateCellSelection(from: p, to: p) }
             }
         case .select:
-            // 點標頭：選整欄（整列）
+            if handleTablePlusTap(at: p) { return }
+            // 點標頭：選整欄（整列）；已經選起來的再點一下，打開列與欄的選單
             if let h = tableHeaderHit(at: p) {
-                selectTableHeaders(h)
+                if isTableHeaderSelected(h) {
+                    presentTableHeaderMenu(h, at: p)
+                } else {
+                    selectTableHeaders(h)
+                }
                 return
             }
             if handleImageDeleteTap(at: p) { return }
-            if let del = tableDeleteHandlePoint(), p.distance(to: del) < 20 / canvas.zoomScale, let s = selectedTable() {
-                deleteElement(s.ref)
-                showToast("已刪除表格（可以按復原）")
-                return
-            }
             if let ref = lockIconHit(at: p) {
                 toggleLock(ref)
                 return
             }
-            if handleTablePlusTap(at: p) { return }
             if let hit = hitElement(at: p) {
                 if case let (pi, ei)? = locate(hit), pages[pi].elements[ei].isTable {
-                    if hit != selected { select(hit) }
-                    updateCellSelection(from: p, to: p)
+                    // 點在選起來的格子上：打開選單（和套索一樣）；點別格：改選那一格。打字是點兩下
+                    if hit == selected, tableCellSel != nil, let sel = tableSelectionDocRect(), sel.contains(p) {
+                        presentMenu(elementMenu(hit, at: p), atDocPoint: p, avoiding: sel)
+                    } else {
+                        if hit != selected { select(hit) }
+                        updateCellSelection(from: p, to: p)
+                    }
                 } else if hit == selected {
                     presentMenu(elementMenu(hit, at: p), atDocPoint: p)
                 } else {
@@ -473,13 +477,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         let p = g.location(in: pagesContainer)
         // 長按標頭：選整欄（整列，已經選了好幾欄就不變），跳出列與欄的選單
         if let h = tableHeaderHit(at: p) {
-            let sel = tableCellSel
-            let inside = sel.map { h.columns ? (h.index >= $0.c0 && h.index <= $0.c1) : (h.index >= $0.r0 && h.index <= $0.r1) } ?? false
-            let full = sel.map { h.columns ? ($0.r0 == 0 && $0.r1 == (selectedTable()?.table.rows ?? 1) - 1)
-                : ($0.c0 == 0 && $0.c1 == (selectedTable()?.table.cols ?? 1) - 1) } ?? false
-            if !(inside && full) { selectTableHeaders(h) }
-            let anchor = tableHeaderRects().map { h.columns ? $0.cols[h.index] : $0.rows[h.index] } ?? CGRect(origin: p, size: .zero)
-            presentMenu(UIMenu(children: tableRowColItems(anchor: .doc(anchor))), atDocPoint: p, avoiding: anchor)
+            presentTableHeaderMenu(h, at: p)
             return
         }
         if let hit = hitElement(at: p) {
@@ -580,12 +578,12 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         let r = docFrame(of: e, pageIndex: pi)
         let tol = 16 / canvas.zoomScale
         if case let .table(t) = e.content, t.size.width > 0, t.size.height > 0 {
-            // 上方、左邊的標頭：拖曳選好幾欄（列）
+            // 上方、左邊的標頭：拖兩個標頭的分界＝調整欄寬（列高），拖標頭本身＝選好幾欄（列）
+            if let line = tableHeaderBoundary(at: p) { return (ref, line) }
             if let h = tableHeaderHit(at: p) { return (ref, h.columns ? .colHeaders(h.index) : .rowHeaders(h.index)) }
             if !e.locked, let f = tableFillHandlePoint(), p.distance(to: f) < tol * 1.3 { return (ref, .fill) }
             if !e.locked {
                 if p.distance(to: CGPoint(x: r.maxX, y: r.maxY)) < tol * 1.5 { return (ref, .resize) }
-                if let grip = tableGripTarget(at: p) { return (ref, grip) }
                 if let m = tableMoveHandlePoint(), p.distance(to: m) < tol * 1.4 { return (ref, .move) }
                 // 外框邊緣也能拖動整個表格
                 let outer = r.insetBy(dx: -tol, dy: -tol), innerArea = r.insetBy(dx: tol * 0.6, dy: tol * 0.6)
@@ -620,6 +618,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         case .began:
             guard case let (ref, kind)? = dragTarget(at: p), case let (pi, ei)? = locate(ref) else { return }
             dragState = DragState(ref: ref, kind: kind, start: p, original: pages[pi].elements[ei])
+            if case .move = kind, pages[pi].elements[ei].isTable { beginTableCarry(ref) }
         case .changed:
             guard let d = dragState, case let (pi, ei)? = locate(d.ref) else { return }
             if case .cells = d.kind {
@@ -641,6 +640,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             let e = draggedElement(d, to: p)
             session.document.pages[pi].elements[ei] = e
             pageViews[pages[pi].id]?.liveUpdate(e)
+            moveTableCarry(by: e.frame.origin - d.original.frame.origin)
             updateSelectionChrome()
         case .ended:
             if let d = dragState, case .cells = d.kind {
@@ -673,6 +673,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
                 session.document.pages[pi].elements[ei] = d.original
                 pageViews[pages[pi].id]?.liveUpdate(d.original)
             }
+            cancelTableCarry()
             dragState = nil
             updateSelectionChrome()
         }
@@ -762,35 +763,34 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         var target = pi
         if case .move = d.kind, let j = pageIndex(containing: toFrame.center), j != pi { target = j }
 
-        // 表格移動時，格子裡的手寫字一起移動
-        if case .move = d.kind, e.isTable {
-            moveStrokes(inside: fromFrame, by: CGPoint(x: toFrame.minX - fromFrame.minX, y: toFrame.minY - fromFrame.minY))
+        // 表格移動時，表格上的手寫字（兩種筆）一起移動；表格和字算同一步，復原一次就全部回去
+        var movingTable = false
+        if case .move = d.kind, e.isTable { movingTable = true }
+        if movingTable {
+            let delta = toFrame.origin - fromFrame.origin
+            if delta == .zero && target == pi {
+                cancelTableCarry()
+            } else {
+                let carry = tableCarry
+                tableCarry = nil
+                let pageIDs = [pages[pi].id, pages[target].id] + (carry?.ink.map(\.pageID) ?? [])
+                recordEdit(drawing: carry.flatMap { $0.strokeIndices.isEmpty ? nil : $0.original }, pageIDs: Array(Set(pageIDs)))
+                if let carry { finishTableCarry(carry, by: delta, toPage: target) }
+            }
         }
 
         if target == pi {
-            updatePage(pi) { $0.elements[ei] = e }
+            updatePage(pi, undoable: !movingTable) { $0.elements[ei] = e }
         } else {
             let no = contentOrigin(target)
             e.frame.origin = CGPoint(x: toFrame.minX - no.x, y: toFrame.minY - no.y)
             e.snapCircuitToGrid()
             let moved = e
-            updatePage(pi) { $0.elements.removeAll { $0.id == moved.id } }
-            updatePage(target) { $0.elements.append(moved) }
+            updatePage(pi, undoable: !movingTable) { $0.elements.removeAll { $0.id == moved.id } }
+            updatePage(target, undoable: !movingTable) { $0.elements.append(moved) }
             selected = ElementRef(pageID: pages[target].id, elementID: e.id)
         }
         updateSelectionChrome()
-    }
-
-    func moveStrokes(inside rect: CGRect, by delta: CGPoint) {
-        guard delta != .zero else { return }
-        var d = canvas.drawing
-        var changed = false
-        let area = rect.insetBy(dx: -2, dy: -2)
-        for i in d.strokes.indices where area.contains(d.strokes[i].renderBounds) {
-            d.strokes[i].transform = d.strokes[i].transform.concatenating(CGAffineTransform(translationX: delta.x, y: delta.y))
-            changed = true
-        }
-        if changed { setDrawing(d) }
     }
 
     // MARK: Menus

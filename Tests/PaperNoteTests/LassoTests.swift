@@ -34,6 +34,14 @@ final class LassoTests: XCTestCase {
         XCTAssertTrue(LassoGeometry.circles(word, path: path, area: area))
     }
 
+    /// 表格要整個圈到才算
+    func testEnclosesNeedsTheWholeRect() {
+        let r = CGRect(x: 100, y: 100, width: 200, height: 100)
+        XCTAssertTrue(LassoGeometry.encloses(r, path: UIBezierPath(rect: r.insetBy(dx: -10, dy: -10))))
+        XCTAssertTrue(LassoGeometry.encloses(r, path: UIBezierPath(rect: r.insetBy(dx: 3, dy: 3))), "手畫的圈稍微切到邊也算")
+        XCTAssertFalse(LassoGeometry.encloses(r, path: UIBezierPath(rect: CGRect(x: 90, y: 90, width: 120, height: 120))), "只圈到一半不算")
+    }
+
     func testMovedStrokeUsesItsTransform() {
         var line = stroke(ShapeRecognizer.segment(CGPoint(x: 0, y: 50), CGPoint(x: 100, y: 50)))
         line.transform = CGAffineTransform(translationX: 500, y: 0)

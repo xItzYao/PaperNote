@@ -98,13 +98,26 @@ final class TableGestureTests: XCTestCase {
         XCTAssertEqual(m.span(1, 0).colSpan, 2, "下面那塊沒畫到，維持合併")
     }
 
-    func testTemplatesHaveHeaders() {
-        let tt = TableTemplate.timetable.table
-        XCTAssertEqual(tt.cols, 6)
-        XCTAssertEqual(tt.rows, 9)
-        XCTAssertEqual(tt.text(row: 0, col: 1), "一")
-        XCTAssertEqual(tt.text(row: 8, col: 0), "8")
-        XCTAssertEqual(TableTemplate.week.table.text(row: 7, col: 0), "日")
+    /// 回報的需求：要能插入超過 10 × 10 的表格，而且放得進頁面
+    func testBigInsertedTablesFitThePage() {
+        let a4 = CGSize(width: 595, height: 842)
+        let big = TableData.fitted(rows: 20, cols: 15, page: a4)
+        XCTAssertEqual(big.cols, 15)
+        XCTAssertEqual(big.rows, 20)
+        XCTAssertLessThanOrEqual(big.size.width, a4.width)
+        XCTAssertLessThanOrEqual(big.size.height, a4.height)
+        let small = TableData.fitted(rows: 3, cols: 3, page: a4)
+        XCTAssertEqual(small.colWidths[0], 140, "小表格的格子不會變得很大")
+        XCTAssertEqual(small.rowHeights[0], 44)
+    }
+
+    /// 移動表格時哪些字跟著走
+    func testWhichStrokesBelongToTheTable() {
+        let table = CGRect(x: 0, y: 0, width: 300, height: 120)
+        XCTAssertTrue(TableCarry.isOnTable(CGRect(x: 20, y: 10, width: 60, height: 20), table: table))
+        XCTAssertTrue(TableCarry.isOnTable(CGRect(x: 20, y: 100, width: 60, height: 26), table: table), "字的尾巴稍微超出表格也算")
+        XCTAssertFalse(TableCarry.isOnTable(CGRect(x: -40, y: -40, width: 380, height: 200), table: table), "圈住整個表格的大圈不算")
+        XCTAssertFalse(TableCarry.isOnTable(CGRect(x: 320, y: 10, width: 40, height: 20), table: table), "表格外面的字不算")
     }
 }
 
@@ -303,22 +316,136 @@ final class TableEditorUXTests: XCTestCase {
         editor.presentInsertTablePanel(anchor: .doc(CGRect(origin: p, size: CGSize(width: 1, height: 1))), at: p)
         RunLoop.main.run(until: Date().addingTimeInterval(0.4))
         let host = try XCTUnwrap(editor.presentedViewController as? UIHostingController<TableInsertPanel>, "要跳出插入表格的小視窗")
-        XCTAssertEqual(host.sizingOptions, .preferredContentSize, "小視窗大小跟著內容，標題、範本不會被切掉")
-        host.rootView.onInsert(.size(cols: 4, rows: 2))
+        XCTAssertEqual(host.sizingOptions, .preferredContentSize, "小視窗大小跟著內容，不會被切掉")
+        host.rootView.onInsert(4, 2)
         RunLoop.main.run(until: Date().addingTimeInterval(0.4))
         XCTAssertEqual(table.cols, 4)
         XCTAssertEqual(table.rows, 2)
     }
 
-    func testInsertTemplate() throws {
+    /// 回報的需求：除了拖格子，也要能自訂數字（超過 10 × 10）
+    func testInsertTablePanelTakesNumbersBeyondTheGrid() throws {
+        XCTAssertGreaterThanOrEqual(TableInsertPanel.maxCount, 30)
         editor.select(nil)
         let o = editor.contentOrigin(0)
-        let p = CGPoint(x: o.x + 250, y: o.y + 600)
+        let p = CGPoint(x: o.x + 40, y: o.y + 40)
         editor.presentInsertTablePanel(anchor: .doc(CGRect(origin: p, size: CGSize(width: 1, height: 1))), at: p)
         RunLoop.main.run(until: Date().addingTimeInterval(0.4))
         let host = try XCTUnwrap(editor.presentedViewController as? UIHostingController<TableInsertPanel>)
-        host.rootView.onInsert(.template(.lab))
+        host.rootView.onInsert(12, 15)
         RunLoop.main.run(until: Date().addingTimeInterval(0.4))
-        XCTAssertEqual(table.text(row: 0, col: 0), "次數")
+        XCTAssertEqual(table.cols, 12)
+        XCTAssertEqual(table.rows, 15)
+    }
+
+    // MARK: 重新設計：＋ 只在選整欄整列時出現、拖標頭分界、再點一下打開選單
+
+    /// 回報的問題：行列編號擋到 ＋。＋ 只在選了整欄（整列）時出現在兩側，不和標頭重疊
+    func testPlusOnlyBesideASelectedColumnAndNotOnTheHeaders() throws {
+        let cell = CGPoint(x: origin.x + 150, y: origin.y + 60)
+        editor.updateCellSelection(from: cell, to: cell)
+        let none = try XCTUnwrap(editor.selectedTableHandles()).handles
+        XCTAssertTrue(none.plusCols.isEmpty && none.plusRows.isEmpty, "只選一格：不顯示 ＋")
+        let headers = try XCTUnwrap(editor.tableHeaderRects())
+        editor.handleTap(FakeTap(headers.cols[1].center))
+        let h = try XCTUnwrap(editor.selectedTableHandles()).handles
+        XCTAssertEqual(h.plusCols.map(\.index), [1, 2], "B 欄左右兩側各一個 ＋")
+        XCTAssertTrue(h.plusRows.isEmpty)
+        let r = 11 / editor.canvas.zoomScale
+        for plus in h.plusCols {
+            let circle = CGRect(x: plus.point.x - r, y: plus.point.y - r, width: 2 * r, height: 2 * r)
+            XCTAssertFalse((headers.cols + headers.rows).contains { $0.intersects(circle) }, "＋ 不能疊在標頭上")
+        }
+        editor.handleTap(FakeTap(h.plusCols[1].point))
+        XCTAssertEqual(table.cols, 4, "按右邊的 ＋ 插入一欄")
+        XCTAssertEqual(editor.tableCellSel, CellRange((0, 2), (2, 2)), "選起新的那一欄，可以接著再按")
+    }
+
+    func testTappingASelectedHeaderAgainOpensTheRowColumnMenu() throws {
+        let headers = try XCTUnwrap(editor.tableHeaderRects())
+        editor.handleTap(FakeTap(headers.rows[0].center))
+        XCTAssertNil(editor.pendingMenu, "第一下只選整列")
+        editor.handleTap(FakeTap(headers.rows[0].center))
+        let t = titles(try XCTUnwrap(editor.pendingMenu, "再點一下打開列與欄的選單").children)
+        XCTAssertTrue(t.contains("插入"))
+        XCTAssertEqual(editor.tableCellSel, CellRange((0, 0), (0, 2)))
+    }
+
+    func testTappingTheSelectedCellAgainOpensTheCellMenu() throws {
+        let p = CGPoint(x: origin.x + 150, y: origin.y + 60)
+        editor.handleTap(FakeTap(p))
+        XCTAssertEqual(editor.tableCellSel, CellRange((1, 1), (1, 1)))
+        XCTAssertNil(editor.pendingMenu, "第一下只選格子")
+        editor.handleTap(FakeTap(p))
+        let t = titles(try XCTUnwrap(editor.pendingMenu, "再點一下選起來的格子打開選單").children)
+        XCTAssertTrue(t.contains("合併"))
+        editor.handleTap(FakeTap(CGPoint(x: origin.x + 50, y: origin.y + 100)))
+        XCTAssertEqual(editor.tableCellSel, CellRange((2, 0), (2, 0)), "點別格：改選那一格")
+    }
+
+    func testDraggingBetweenTwoHeadersResizesTheColumn() throws {
+        let headers = try XCTUnwrap(editor.tableHeaderRects())
+        let edge = CGPoint(x: headers.cols[0].maxX, y: headers.cols[0].midY)
+        guard case .colLine(1)? = editor.dragTarget(at: edge)?.1 else { return XCTFail("按在 A、B 標頭的分界：拖曳調整欄寬") }
+        let g = FakePan(target: nil, action: nil)
+        for (i, p) in [edge, CGPoint(x: edge.x + 15, y: edge.y), CGPoint(x: edge.x + 30, y: edge.y)].enumerated() {
+            g.fake = i == 0 ? .began : (i == 2 ? .ended : .changed)
+            editor.handleElementPan(g, p)
+        }
+        XCTAssertEqual(table.colWidths[0], 130, accuracy: 0.5)
+        XCTAssertEqual(table.colWidths[1], 70, accuracy: 0.5)
+        guard case .colHeaders(1)? = editor.dragTarget(at: headers.cols[1].center)?.1 else { return XCTFail("標頭中間還是拖曳選欄") }
+    }
+
+    // MARK: 移動表格、套索
+
+    private func word(at p: CGPoint) -> InkStroke {
+        let page = editor.contentOrigin(0)
+        return InkStroke(colorHex: "#1A1A1AFF", points: (0...5).map { InkPoint(CGPoint(x: p.x - page.x + CGFloat($0) * 10, y: p.y - page.y), width: 2) })
+    }
+
+    /// 回報的問題：移動表格時，用自製筆刷寫在格子裡的字留在原地
+    func testMovingTheTableCarriesTheHandwriting() throws {
+        let o = origin
+        let inCell = word(at: CGPoint(x: o.x + 120, y: o.y + 60))
+        let outside = word(at: CGPoint(x: o.x - 200, y: o.y - 100))
+        editor.updatePage(0) { $0.ink = [inCell, outside] }
+        let grab = try XCTUnwrap(editor.tableMoveHandlePoint())
+        guard case .move? = editor.dragTarget(at: grab)?.1 else { return XCTFail("左上角的按鈕可以拖") }
+        let g = FakePan(target: nil, action: nil)
+        for (i, p) in [grab, CGPoint(x: grab.x, y: grab.y + 40), CGPoint(x: grab.x, y: grab.y + 80)].enumerated() {
+            g.fake = i == 0 ? .began : (i == 2 ? .ended : .changed)
+            editor.handleElementPan(g, p)
+        }
+        XCTAssertEqual(origin.y - o.y, 80, accuracy: 0.5, "表格移動了")
+        let ink = editor.pages[0].ink
+        XCTAssertEqual(ink.first { $0.id == inCell.id }?.points[0].point.y ?? 0, inCell.points[0].point.y + 80, accuracy: 0.01, "格子裡的字跟著表格走")
+        XCTAssertEqual(ink.first { $0.id == outside.id }?.points[0].point, outside.points[0].point, "表格外面的字不動")
+        editor.undoTapped()
+        XCTAssertEqual(origin.y, o.y, accuracy: 0.5, "復原一次：表格回去")
+        XCTAssertEqual(editor.pages[0].ink.first { $0.id == inCell.id }?.points[0].point, inCell.points[0].point, "同一次復原：字也回去")
+    }
+
+    /// 回報的需求：套索要把整個表格圈起來才選到表格；只圈表格上的字，表格不會被拿走
+    func testLassoTakesTheTableOnlyWhenItIsFullyCircled() {
+        let o = origin
+        let w = word(at: CGPoint(x: o.x + 120, y: o.y + 60))
+        editor.updatePage(0) { $0.ink = [w] }
+        editor.setTool(.lasso)
+        func lasso(_ r: CGRect) {
+            let g = FakePan(target: nil, action: nil)
+            let pts = [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY), CGPoint(x: r.maxX, y: r.maxY),
+                       CGPoint(x: r.minX, y: r.maxY), CGPoint(x: r.minX, y: r.minY + 2), CGPoint(x: r.minX + 1, y: r.minY + 1)]
+            for (i, p) in pts.enumerated() {
+                g.fake = i == 0 ? .began : (i == pts.count - 1 ? .ended : .changed)
+                editor.handleLassoPan(g, p)
+            }
+        }
+        lasso(CGRect(x: o.x + 110, y: o.y + 45, width: 80, height: 30))
+        XCTAssertEqual(editor.lassoSel?.ink.count, 1, "圈到表格上的字")
+        XCTAssertEqual(editor.lassoSel?.elements.count, 0, "只圈到表格的一部分：不選表格")
+        editor.clearLassoSelection()
+        lasso(CGRect(x: o.x - 20, y: o.y - 20, width: 340, height: 160))
+        XCTAssertEqual(editor.lassoSel?.elements, [ref], "整個表格圈起來才選到")
     }
 }

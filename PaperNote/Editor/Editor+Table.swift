@@ -1,5 +1,6 @@
 import UIKit
 import SwiftUI
+import PencilKit
 
 // MARK: - 表格：儲存格選取
 
@@ -15,12 +16,6 @@ extension NotebookViewController {
         guard let s = selectedTable(), !s.element.locked else { return nil }
         let off = 36 / canvas.zoomScale
         return CGPoint(x: s.docRect.minX - off, y: s.docRect.minY - off)
-    }
-
-    /// 刪除鈕：在移動按鈕上方（鎖定的表格不顯示）
-    func tableDeleteHandlePoint() -> CGPoint? {
-        guard let move = tableMoveHandlePoint() else { return nil }
-        return CGPoint(x: move.x, y: move.y - 42 / canvas.zoomScale)
     }
 
     private func clampedRange(_ r: CellRange, in t: TableData) -> CellRange {
@@ -48,16 +43,16 @@ extension NotebookViewController {
         guard tool == .select, editingTextView == nil, let s = selectedTable(), s.table.rows > 0, s.table.cols > 0 else {
             overlay.showCellSelection(nil)
             overlay.showMoveHandle(nil)
-            overlay.showDeleteHandle(nil)
             overlay.showFillHandle(nil)
             overlay.showTableHeaders([])
+            updateTableHandlesChrome()
             return
         }
         overlay.showMoveHandle(tableMoveHandlePoint())
-        overlay.showDeleteHandle(tableDeleteHandlePoint())
         defer {
             overlay.showFillHandle(tableFillHandlePoint())
             updateTableHeadersChrome()
+            updateTableHandlesChrome()
         }
         if let sel = tableCellSel {
             let r = clampedRange(sel, in: s.table)
@@ -146,6 +141,16 @@ extension NotebookViewController {
             self.rebuildSubBar()
         }, for: .touchUpInside)
         views.append(lock)
+
+        let trash = makeButton(symbol: "trash", title: nil, action: nil)
+        trash.accessibilityLabel = "刪除表格"
+        trash.configuration?.baseForegroundColor = .systemRed
+        trash.addAction(UIAction { [weak self] _ in
+            guard let self, let s = self.selectedTable() else { return }
+            self.deleteElement(s.ref)
+            self.showToast("已刪除表格（可以按復原）")
+        }, for: .touchUpInside)
+        views.append(trash)
         return views
     }
 
@@ -260,6 +265,93 @@ extension NotebookViewController {
         dismissToolPopover()
         showToast(count > 0 ? "已重複 \(count) 組" : "已移除重複的組")
         updateTableCellChrome()
+    }
+
+    // MARK: - 移動表格時，表格上的手寫字一起移動
+
+    /// 開始拖曳移動表格：表格上的字先拿出來，換成跟著表格走的預覽圖（和套索移動一樣）
+    func beginTableCarry(_ ref: ElementRef) {
+        tableCarry = nil
+        guard case let (pi, ei)? = locate(ref) else { return }
+        let rect = docFrame(of: pages[pi].elements[ei], pageIndex: pi)
+        let drawing = canvas.drawing
+        let indices = drawing.strokes.indices.filter { TableCarry.isOnTable(drawing.strokes[$0].renderBounds, table: rect) }
+        var ink: [InkRef] = []
+        for (i, page) in pages.enumerated() where pageFrames[i].intersects(rect) {
+            let o = contentOrigin(i)
+            for s in page.ink where TableCarry.isOnTable(InkGeometry.bounds(of: s).offsetBy(dx: o.x, dy: o.y), table: rect) {
+                ink.append(InkRef(pageID: page.id, id: s.id))
+            }
+        }
+        guard !indices.isEmpty || !ink.isEmpty else { return }
+        let pk = indices.map { drawing.strokes[$0] }
+        let movingInk = inkStrokes(ink)
+        var frame = CGRect.null
+        for s in pk { frame = frame.union(s.renderBounds) }
+        for s in movingInk { frame = frame.union(InkGeometry.bounds(of: s)) }
+        if !pk.isEmpty {
+            let keep = Set(indices)
+            var rest = drawing
+            rest.strokes = drawing.strokes.enumerated().filter { !keep.contains($0.offset) }.map(\.element)
+            isApplyingDrawing = true
+            canvas.drawing = rest
+            isApplyingDrawing = false
+        }
+        setInkHidden(ink)
+        overlay.showLassoPreview(inkPreviewImage(pk, movingInk, rect: frame), frame: frame)
+        tableCarry = TableCarry(original: drawing, strokeIndices: indices, ink: ink, previewFrame: frame)
+    }
+
+    /// 拖曳中：預覽圖跟著表格移動 d
+    func moveTableCarry(by d: CGPoint) {
+        guard let c = tableCarry else { return }
+        overlay.moveLassoPreview(to: c.previewFrame.offsetBy(dx: d.x, dy: d.y))
+    }
+
+    /// 放開：字放回去並平移 d；自製筆刷的筆跡放到表格所在的第 target 頁。不另外登記復原（和表格算同一步，由呼叫端登記）
+    func finishTableCarry(_ c: TableCarry, by d: CGPoint, toPage target: Int) {
+        overlay.showLassoPreview(nil, frame: .zero)
+        setInkHidden([])
+        if !c.strokeIndices.isEmpty {
+            var drawing = c.original
+            let t = CGAffineTransform(translationX: d.x, y: d.y)
+            for i in c.strokeIndices { drawing.strokes[i].transform = drawing.strokes[i].transform.concatenating(t) }
+            setDrawing(drawing)
+        }
+        moveInk(c.ink, by: d, toPage: target)
+    }
+
+    /// 沒有移動或拖曳取消：字放回原位
+    func cancelTableCarry() {
+        guard let c = tableCarry else { return }
+        tableCarry = nil
+        overlay.showLassoPreview(nil, frame: .zero)
+        setInkHidden([])
+        if !c.strokeIndices.isEmpty { setDrawing(c.original) }
+    }
+
+    /// 自製筆刷的筆跡平移 d，全部放到第 target 頁（原本就在那一頁的原地換掉，順序不變）
+    private func moveInk(_ refs: [InkRef], by d: CGPoint, toPage target: Int) {
+        guard !refs.isEmpty, pages.indices.contains(target) else { return }
+        let ids = Set(refs.map(\.id))
+        let to = contentOrigin(target)
+        var moved: [UUID: InkStroke] = [:]
+        var order: [UUID] = []
+        for pid in Set(refs.map(\.pageID)) {
+            guard let pi = pageIndex(of: pid) else { continue }
+            let o = contentOrigin(pi)
+            let shift = CGPoint(x: o.x - to.x + d.x, y: o.y - to.y + d.y)
+            for s in pages[pi].ink where ids.contains(s.id) {
+                moved[s.id] = InkGeometry.offset(s, by: shift)
+                order.append(s.id)
+            }
+            if pi != target { updatePage(pi, undoable: false) { $0.ink.removeAll { ids.contains($0.id) } } }
+        }
+        updatePage(target, undoable: false) { page in
+            let here = Set(page.ink.map(\.id))
+            page.ink = page.ink.map { moved[$0.id] ?? $0 }
+            page.ink += order.filter { !here.contains($0) }.compactMap { moved[$0] }
+        }
     }
 
     // MARK: - 在已有的表格上手繪格線
@@ -481,5 +573,20 @@ enum TableIcons {
         box.lineWidth = 1.5
         blue.setStroke()
         box.stroke()
+    }
+}
+
+/// 拖曳移動表格時一起帶走的字：PencilKit 筆跡（canvas.drawing 的索引）、自製筆刷的筆跡
+struct TableCarry {
+    /// 開始拖之前的 PencilKit 筆跡（移動中先拿掉表格上的字，用圖片預覽）
+    var original: PKDrawing
+    var strokeIndices: [Int]
+    var ink: [InkRef]
+    /// 預覽圖一開始的位置（文件座標）
+    var previewFrame: CGRect
+
+    /// 這筆字算不算寫在表格上：中心在表格裡，而且沒有超出表格太多（圈住整個表格的大圈不算）
+    static func isOnTable(_ bounds: CGRect, table: CGRect) -> Bool {
+        table.contains(CGPoint(x: bounds.midX, y: bounds.midY)) && table.insetBy(dx: -12, dy: -12).contains(bounds)
     }
 }

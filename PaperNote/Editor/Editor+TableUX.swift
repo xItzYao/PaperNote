@@ -85,11 +85,15 @@ extension NotebookViewController {
 
     // MARK: - 欄、列標頭
 
+    /// 標頭的粗細、離表格多遠（螢幕上的大小）
+    static let tableHeaderSize: CGFloat = 20
+    static let tableHeaderGap: CGFloat = 4
+
     /// 選到表格時，上方的欄標頭、左邊的列標頭（文件座標）
     func tableHeaderRects() -> (cols: [CGRect], rows: [CGRect])? {
         guard tool == .select, editingTextView == nil, let s = selectedTable(), s.table.rows > 0, s.table.cols > 0 else { return nil }
         let t = s.table, o = s.docRect.origin
-        let h = 20 / canvas.zoomScale, gap = 4 / canvas.zoomScale
+        let h = Self.tableHeaderSize / canvas.zoomScale, gap = Self.tableHeaderGap / canvas.zoomScale
         let cols = (0..<t.cols).map { CGRect(x: o.x + t.colX($0), y: o.y - gap - h, width: t.colWidths[$0], height: h) }
         let rows = (0..<t.rows).map { CGRect(x: o.x - gap - h, y: o.y + t.rowY($0), width: h, height: t.rowHeights[$0]) }
         return (cols, rows)
@@ -124,6 +128,20 @@ extension NotebookViewController {
             i = local <= 0 ? 0 : (t.rowIndex(at: local) ?? t.rows - 1)
         }
         selectTableHeaders(TableHeaderHit(columns: columns, index: i), from: start)
+    }
+
+    /// 這個標頭的整欄（整列）已經選起來了
+    func isTableHeaderSelected(_ h: TableHeaderHit) -> Bool {
+        guard let t = selectedTable()?.table, let sel = tableCellSel else { return false }
+        return h.columns ? (h.index >= sel.c0 && h.index <= sel.c1 && sel.r0 == 0 && sel.r1 == t.rows - 1)
+            : (h.index >= sel.r0 && h.index <= sel.r1 && sel.c0 == 0 && sel.c1 == t.cols - 1)
+    }
+
+    /// 列與欄的選單，指著這個標頭（還沒選起來就先選整欄、整列；已經選了好幾欄就不變）
+    func presentTableHeaderMenu(_ h: TableHeaderHit, at p: CGPoint) {
+        if !isTableHeaderSelected(h) { selectTableHeaders(h) }
+        let anchor = tableHeaderRects().map { h.columns ? $0.cols[h.index] : $0.rows[h.index] } ?? CGRect(origin: p, size: .zero)
+        presentMenu(UIMenu(children: tableRowColItems(anchor: .doc(anchor))), atDocPoint: p, avoiding: anchor)
     }
 
     func updateTableHeadersChrome() {
@@ -287,24 +305,17 @@ extension NotebookViewController {
         presentTablePanel(hosting(panel), anchor: anchor, size: CGSize(width: 320, height: 340))
     }
 
-    // MARK: - 插入表格（拖格子選大小，或用範本）
+    // MARK: - 插入表格（拖格子選大小，或直接打數字）
 
     func presentInsertTablePanel(anchor: TablePanelAnchor, at p: CGPoint? = nil) {
-        let pageW = pages.isEmpty ? 595 : session.baseSize(of: pages[currentPageIndex]).width
-        let panel = TableInsertPanel { [weak self] choice in
+        let page = pages.isEmpty ? CGSize(width: 595, height: 842) : session.baseSize(of: pages[currentPageIndex])
+        let panel = TableInsertPanel { [weak self] cols, rows in
             guard let self else { return }
             self.dismissToolPopover()
-            let t: TableData
-            switch choice {
-            case let .size(cols, rows):
-                let cellW = min(140, max(40, (pageW * 0.85) / CGFloat(cols)))
-                t = TableData.make(rows: rows, cols: cols, cellWidth: cellW.rounded(), cellHeight: 44)
-            case let .template(k):
-                t = k.table
-            }
+            let t = TableData.fitted(rows: rows, cols: cols, page: page)
             _ = self.insertElement(.table(t), size: t.size, at: p)
         }
-        presentTablePanel(hosting(panel), anchor: anchor, size: CGSize(width: 340, height: 520))
+        presentTablePanel(hosting(panel), anchor: anchor, size: CGSize(width: 320, height: 440))
     }
 }
 
@@ -348,26 +359,22 @@ struct TableSplitPanel: View {
     }
 }
 
-/// 插入表格：在格子上拖曳選大小（不用打數字），或選一個範本
+/// 插入表格：在格子上拖曳選大小（不用打數字），比格子大的表格直接打欄數、列數
 struct TableInsertPanel: View {
-    enum Choice {
-        case size(cols: Int, rows: Int)
-        case template(TableTemplate)
-    }
+    static let maxCount = 40
 
-    let onInsert: (Choice) -> Void
+    let onInsert: (_ cols: Int, _ rows: Int) -> Void
     @State private var cols = 3
     @State private var rows = 3
-    private let maxCols = 10, maxRows = 8, cell: CGFloat = 22, gap: CGFloat = 3
+    private let gridCols = 10, gridRows = 8, cell: CGFloat = 22, gap: CGFloat = 3
 
     var body: some View {
         VStack(spacing: 12) {
             Text("插入表格").font(.headline)
-            Text("\(cols) 欄 × \(rows) 列").font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
             VStack(spacing: gap) {
-                ForEach(0..<maxRows, id: \.self) { r in
+                ForEach(0..<gridRows, id: \.self) { r in
                     HStack(spacing: gap) {
-                        ForEach(0..<maxCols, id: \.self) { c in
+                        ForEach(0..<gridCols, id: \.self) { c in
                             RoundedRectangle(cornerRadius: 3)
                                 .fill(c < cols && r < rows ? Color.accentColor.opacity(0.75) : Color.gray.opacity(0.18))
                                 .frame(width: cell, height: cell)
@@ -377,26 +384,46 @@ struct TableInsertPanel: View {
             }
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0).onChanged { v in
-                cols = min(max(Int(v.location.x / (cell + gap)) + 1, 1), maxCols)
-                rows = min(max(Int(v.location.y / (cell + gap)) + 1, 1), maxRows)
+                cols = min(max(Int(v.location.x / (cell + gap)) + 1, 1), gridCols)
+                rows = min(max(Int(v.location.y / (cell + gap)) + 1, 1), gridRows)
             })
-            Button("插入 \(cols) × \(rows) 表格") { onInsert(.size(cols: cols, rows: rows)) }
+            CountField(label: "欄", value: $cols, range: 1...Self.maxCount)
+            CountField(label: "列", value: $rows, range: 1...Self.maxCount)
+            Button("插入 \(cols) × \(rows) 表格") { onInsert(cols, rows) }
                 .buttonStyle(.borderedProminent)
-            Divider()
-            Text("範本").font(.caption).foregroundStyle(.secondary)
-            HStack(spacing: 10) {
-                ForEach(TableTemplate.allCases) { k in
-                    Button { onInsert(.template(k)) } label: {
-                        VStack(spacing: 4) {
-                            Image(systemName: k.symbol).font(.title3)
-                            Text(k.title).font(.caption)
-                        }
-                        .frame(width: 64, height: 54)
-                    }
-                    .buttonStyle(.bordered)
-                }
-            }
         }
         .padding(16)
+    }
+}
+
+/// 打數字或按 ＋／−；打到一半（空白）不改，超出範圍就拉回來
+private struct CountField: View {
+    let label: String
+    @Binding var value: Int
+    let range: ClosedRange<Int>
+    @State private var text = ""
+
+    var body: some View {
+        HStack(spacing: 8) {
+            TextField(label, text: $text)
+                .keyboardType(.numberPad)
+                .multilineTextAlignment(.center)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 56)
+            Text(label)
+            Spacer(minLength: 8)
+            Stepper(label, value: $value, in: range).labelsHidden()
+        }
+        .frame(width: 240)
+        .onAppear { text = "\(value)" }
+        .onChange(of: value) { _, v in
+            if Int(text) != v { text = "\(v)" }
+        }
+        .onChange(of: text) { _, t in
+            guard let n = Int(t) else { return }
+            let clamped = min(max(n, range.lowerBound), range.upperBound)
+            if clamped != value { value = clamped }
+            if clamped != n { text = "\(clamped)" }
+        }
     }
 }

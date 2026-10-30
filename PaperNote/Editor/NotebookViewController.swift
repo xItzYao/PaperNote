@@ -252,6 +252,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var tableEraseLines = false
     /// 擦線中、放開就會擦掉的那幾段線（半透明顯示）
     var tableErasePreview: [ErasedLine] = []
+    /// 拖曳移動表格時，一起帶走的手寫字
+    var tableCarry: TableCarry?
     /// 工具列的＋（插入表格的小視窗指著它）
     weak var insertButton: UIButton?
     weak var tableCellLabel: UILabel?
