@@ -301,9 +301,9 @@ final class TableEditorUXTests: XCTestCase {
 
     // MARK: 工具列、長按
 
-    private func ribbonButtons() -> [UIButton] {
+    private func ribbonButtons(_ views: [UIView]? = nil) -> [UIButton] {
         func buttons(_ v: UIView) -> [UIButton] { (v as? UIButton).map { [$0] } ?? v.subviews.flatMap(buttons) }
-        return editor.buildTableRibbon().flatMap(buttons)
+        return (views ?? editor.buildTableRibbon()).flatMap(buttons)
     }
 
     /// 回報的需求：工具列不要分頁、不要選單，一排就好：斜線拿掉（用手繪）、插入列欄拿掉（點標頭的 ＋）；
@@ -313,7 +313,7 @@ final class TableEditorUXTests: XCTestCase {
         editor.updateCellSelection(from: cell, to: cell)
         let views = editor.buildTableRibbon()
         XCTAssertTrue(views.compactMap { $0 as? UISegmentedControl }.isEmpty, "沒有分頁")
-        let bs = ribbonButtons()
+        let bs = ribbonButtons(views)  // 同一排工具列：按的按鈕和看的數值要是同一個
         // 回報的需求：平均分配、鎖定各一個按鈕，點了選欄寬或列高；其他按鈕按了就做
         let menus = bs.filter { $0.menu != nil }.compactMap { $0.configuration?.title }
         XCTAssertEqual(menus, ["平均分配", "鎖定"])
