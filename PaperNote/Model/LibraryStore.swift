@@ -202,6 +202,30 @@ final class LibraryStore: ObservableObject {
         return result
     }
 
+    /// 選資料夾的清單：一開始只有最上層，展開（expanded）的資料夾才列出底下的子資料夾
+    func folderRows(expanded: Set<UUID>) -> [(folder: Folder, depth: Int, hasChildren: Bool)] {
+        var result: [(folder: Folder, depth: Int, hasChildren: Bool)] = []
+        func walk(_ parent: UUID?, _ depth: Int) {
+            for f in folders(in: parent) {
+                let children = !folders(in: f.id).isEmpty
+                result.append((folder: f, depth: depth, hasChildren: children))
+                if children && expanded.contains(f.id) { walk(f.id, depth + 1) }
+            }
+        }
+        walk(nil, 0)
+        return result
+    }
+
+    /// 放進 folder 時不和裡面同類的東西重名：重名就加上 (1)、(2)…（except：自己不算）
+    func availableName(_ name: String, forFolder: Bool, in folder: UUID?, except id: UUID? = nil) -> String {
+        let taken = Set(forFolder ? folders(in: folder).filter { $0.id != id }.map(\.name)
+                                  : notebooks(in: folder).filter { $0.id != id }.map(\.title))
+        guard taken.contains(name) else { return name }
+        var n = 1
+        while taken.contains("\(name) (\(n))") { n += 1 }
+        return "\(name) (\(n))"
+    }
+
     func itemCount(in folder: UUID) -> Int {
         folders(in: folder).count + notebooks(in: folder).count
     }
@@ -226,6 +250,8 @@ final class LibraryStore: ObservableObject {
     func moveFolder(_ id: UUID, to parent: UUID?) -> Bool {
         if let p = parent, isFolder(p, inside: id) { return false }
         guard let i = index.folders.firstIndex(where: { $0.id == id }) else { return false }
+        guard index.folders[i].parentId != parent else { return true }
+        index.folders[i].name = availableName(index.folders[i].name, forFolder: true, in: parent, except: id)
         index.folders[i].parentId = parent
         save()
         return true
@@ -466,8 +492,14 @@ final class LibraryStore: ObservableObject {
         updateMeta(id) { $0.title = title }
     }
 
+    /// 移到 folder；裡面已經有同名的筆記本就加上 (1)
     func moveNotebook(_ id: UUID, to folder: UUID?) {
-        updateMeta(id) { $0.folderId = folder }
+        guard let nb = notebook(id), nb.folderId != folder else { return }
+        let title = availableName(nb.title, forFolder: false, in: folder, except: id)
+        updateMeta(id) {
+            $0.folderId = folder
+            $0.title = title
+        }
     }
 
     func duplicateNotebook(_ id: UUID) {

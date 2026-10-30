@@ -30,6 +30,8 @@ struct RootView: View {
     @State private var showEditor = false
     @State private var importError: String?
     @State private var importSummary: String?
+    /// 從別的 App 分享進來、還沒選好要放哪個資料夾的檔案
+    @State private var pendingImport: ShareItem?
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -38,10 +40,13 @@ struct RootView: View {
                     FolderView(folderID: route.id, open: open)
                 }
         }
+        .sheet(isPresented: importPickerShown(inEditor: false)) { importPicker }
         .fullScreenCover(isPresented: $showEditor) {
             TabsHost { showEditor = false }
                 .ignoresSafeArea(.keyboard)
                 .ignoresSafeArea(.container, edges: .bottom)
+                // 筆記本開著的時候分享進來：選資料夾的視窗從筆記本上面跳出來
+                .sheet(isPresented: importPickerShown(inEditor: true)) { importPicker }
         }
         .onAppear {
             BackupManager.shared.start()
@@ -56,22 +61,9 @@ struct RootView: View {
             }
         }
         .onOpenURL { url in
-            do {
-                switch url.pathExtension.lowercased() {
-                case "pdf":
-                    let meta = try store.importPDF(from: url, folder: path.last?.id)
-                    open(meta.id, nil)
-                case "zip":
-                    importSummary = try store.importZip(from: url, folder: path.last?.id).summary
-                case "papernote":
-                    let meta = try store.importPaperNote(from: url, folder: path.last?.id)
-                    open(meta.id, nil)
-                default:
-                    break
-                }
-            } catch {
-                importError = error.localizedDescription
-            }
+            guard ["pdf", "zip", "papernote"].contains(url.pathExtension.lowercased()) else { return }
+            // 先讓使用者選要放在哪個資料夾，選好才匯入
+            pendingImport = ShareItem(url: url)
         }
         .alert("匯入完成", isPresented: Binding(get: { importSummary != nil }, set: { if !$0 { importSummary = nil } })) {
             Button("好", role: .cancel) {}
@@ -88,6 +80,39 @@ struct RootView: View {
     private func open(_ notebook: UUID, _ page: UUID?) {
         TabStore.shared.open(notebook, page: page)
         showEditor = true
+    }
+
+    private func importPickerShown(inEditor: Bool) -> Binding<Bool> {
+        Binding(get: { pendingImport != nil && showEditor == inEditor }, set: { if !$0 { pendingImport = nil } })
+    }
+
+    @ViewBuilder
+    private var importPicker: some View {
+        if let item = pendingImport {
+            FolderPickerSheet(title: "匯入「\(item.url.deletingPathExtension().lastPathComponent)」到…") { dest in
+                pendingImport = nil
+                // 等選資料夾的視窗收起來再打開筆記本
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { importShared(item.url, into: dest) }
+            } onCancel: {
+                pendingImport = nil
+            }
+            .environmentObject(store)
+        }
+    }
+
+    private func importShared(_ url: URL, into folder: UUID?) {
+        do {
+            switch url.pathExtension.lowercased() {
+            case "pdf":
+                open(try store.importPDF(from: url, folder: folder).id, nil)
+            case "zip":
+                importSummary = try store.importZip(from: url, folder: folder).summary
+            default:
+                open(try store.importPaperNote(from: url, folder: folder).id, nil)
+            }
+        } catch {
+            importError = error.localizedDescription
+        }
     }
 }
 
@@ -262,67 +287,95 @@ struct FolderView: View {
         }
     }
 
-    /// 詳細資料：由上到下的清單
+    /// 詳細資料：由上到下的清單（名稱、修改日期）。
+    /// 長按＝拖曳（拖到資料夾上放開＝移進去）；選單在修改日期旁邊的 ⌄。
+    /// 不用 List：List 的列接不到拖放，資料夾列還會多一個箭頭讓欄位對不齊
     private var detailsList: some View {
-        List {
-            Section {
-                if let parent = parentDropID {
-                    Button { dismissFolder() } label: {
-                        DetailRow(cover: nil, isFolder: true, name: "上一層", kind: "", size: "", favorites: nil,
-                                  modified: nil, created: Date(), isParent: true)
+        ScrollView {
+            LazyVStack(spacing: 0, pinnedViews: .sectionHeaders) {
+                Section {
+                    if let parent = parentDropID {
+                        detailLine(dropID: parent, item: nil) {
+                            Button { dismissFolder() } label: {
+                                DetailRow(cover: nil, isFolder: true, name: "上一層", modified: nil, isParent: true,
+                                          checked: selecting ? false : nil)
+                            }
+                        }
+                        .dropDestination(for: String.self) { items, _ in
+                            handleDrop(items, into: parentFolderID)
+                        } isTargeted: { setDropTarget(parent, $0) }
                     }
-                    .buttonStyle(.plain)
-                    .listRowBackground(dropTarget == parent ? Color.accentColor.opacity(0.15) : nil)
-                    .dropDestination(for: String.self) { items, _ in
-                        handleDrop(items, into: parentFolderID)
-                    } isTargeted: { setDropTarget(parent, $0) }
-                }
-                ForEach(folders) { folder in
-                    Group {
-                        if selecting {
-                            Button { toggleSelection(folder.id) } label: {
-                                HStack(spacing: 10) {
-                                    checkmark(folder.id)
-                                    DetailRow(cover: nil, isFolder: true, name: folder.name, kind: "資料夾",
-                                              size: "\(store.itemCount(in: folder.id)) 個項目", favorites: nil,
-                                              modified: nil, created: folder.created)
+                    ForEach(folders) { folder in
+                        detailLine(dropID: folder.id, item: .folder(folder)) {
+                            if selecting {
+                                Button { toggleSelection(folder.id) } label: {
+                                    DetailRow(cover: nil, isFolder: true, name: folder.name, modified: nil,
+                                              checked: selection.contains(folder.id))
+                                }
+                            } else {
+                                NavigationLink(value: FolderRoute(id: folder.id)) {
+                                    DetailRow(cover: nil, isFolder: true, name: folder.name, modified: nil)
                                 }
                             }
-                            .buttonStyle(.plain)
-                        } else {
-                            NavigationLink(value: FolderRoute(id: folder.id)) {
-                                DetailRow(cover: nil, isFolder: true, name: folder.name, kind: "資料夾",
-                                          size: "\(store.itemCount(in: folder.id)) 個項目", favorites: nil,
-                                          modified: nil, created: folder.created)
+                        }
+                        .draggable(dragPayload(folder.id, "fd")) {
+                            dragPreview(folder.name, symbol: "folder.fill", id: folder.id)
+                        }
+                        .dropDestination(for: String.self) { items, _ in
+                            handleDrop(items, into: folder.id)
+                        } isTargeted: { setDropTarget(folder.id, $0) }
+                    }
+                    ForEach(notebooks) { nb in
+                        detailLine(dropID: nil, item: .notebook(nb)) {
+                            Button { selecting ? toggleSelection(nb.id) : open(nb.id, nil) } label: {
+                                DetailRow(cover: nb, isFolder: false, name: nb.title, modified: nb.modified,
+                                          coverURL: store.coverImageURL(nb.id), checked: selecting ? selection.contains(nb.id) : nil)
                             }
                         }
-                    }
-                    .listRowBackground(dropTarget == folder.id ? Color.accentColor.opacity(0.15) : nil)
-                    .draggable(dragPayload(folder.id, "fd"))
-                    .dropDestination(for: String.self) { items, _ in
-                        handleDrop(items, into: folder.id)
-                    } isTargeted: { setDropTarget(folder.id, $0) }
-                    .contextMenu { itemMenu(.folder(folder)) }
-                }
-                ForEach(notebooks) { nb in
-                    Button { selecting ? toggleSelection(nb.id) : open(nb.id, nil) } label: {
-                        HStack(spacing: 10) {
-                            if selecting { checkmark(nb.id) }
-                            DetailRow(cover: nb, isFolder: false, name: nb.title, kind: "筆記本",
-                                      size: "\(nb.pageCount) 頁", favorites: nb.favorites.count,
-                                      modified: nb.modified, created: nb.created,
-                                      coverURL: store.coverImageURL(nb.id))
+                        .draggable(dragPayload(nb.id, "nb")) {
+                            dragPreview(nb.title, symbol: "book.closed.fill", id: nb.id)
                         }
                     }
-                    .buttonStyle(.plain)
-                    .draggable(dragPayload(nb.id, "nb"))
-                    .contextMenu { itemMenu(.notebook(nb)) }
+                } header: {
+                    DetailHeader(selecting: selecting)
+                        .padding(.horizontal, DetailColumns.inset)
+                        .padding(.vertical, 8)
+                        .background(Color(uiColor: .systemGroupedBackground))
+                        .overlay(alignment: .bottom) { Divider() }
                 }
-            } header: {
-                DetailHeader()
             }
         }
-        .listStyle(.plain)
+    }
+
+    /// 詳細資料的一列：左邊點了打開（選取模式是勾選），右邊是選單 ⌄（item 是 nil：「上一層」，沒有選單）
+    private func detailLine<Main: View>(dropID: UUID?, item: LibraryItem?, @ViewBuilder _ main: () -> Main) -> some View {
+        HStack(spacing: 0) {
+            main().buttonStyle(.plain)
+            Group {
+                if let item, !selecting {
+                    itemMenuButton(item)
+                } else {
+                    Color.clear
+                }
+            }
+            .frame(width: DetailColumns.menu, height: 44)
+        }
+        .padding(.horizontal, DetailColumns.inset)
+        .background(dropID != nil && dropTarget == dropID ? Color.accentColor.opacity(0.15) : Color.clear)
+        .overlay(alignment: .bottom) { Divider().padding(.leading, DetailColumns.inset) }
+        .contentShape(Rectangle())
+    }
+
+    /// ⌄：點一下打開選單（重新命名、複製、移動、匯出、刪除）
+    private func itemMenuButton(_ item: LibraryItem) -> some View {
+        Menu { itemMenu(item) } label: {
+            Image(systemName: "chevron.down")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: DetailColumns.menu, height: 30)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("「\(item.name)」的選單")
     }
 
     /// 大圖：封面網格
@@ -339,43 +392,57 @@ struct FolderView: View {
                     } isTargeted: { setDropTarget(parent, $0) }
                 }
                 ForEach(folders) { folder in
-                    Group {
-                        if selecting {
-                            Button { toggleSelection(folder.id) } label: {
-                                FolderCell(folder: folder, count: store.itemCount(in: folder.id), highlighted: dropTarget == folder.id)
-                                    .overlay(alignment: .topLeading) { checkmark(folder.id).padding(6) }
-                            }
-                        } else {
-                            NavigationLink(value: FolderRoute(id: folder.id)) {
-                                FolderCell(folder: folder, count: store.itemCount(in: folder.id), highlighted: dropTarget == folder.id)
+                    VStack(spacing: 8) {
+                        Group {
+                            if selecting {
+                                Button { toggleSelection(folder.id) } label: {
+                                    FolderCell(folder: folder, highlighted: dropTarget == folder.id)
+                                        .overlay(alignment: .topLeading) { checkmark(folder.id).padding(6) }
+                                }
+                            } else {
+                                NavigationLink(value: FolderRoute(id: folder.id)) {
+                                    FolderCell(folder: folder, highlighted: dropTarget == folder.id)
+                                }
                             }
                         }
+                        .buttonStyle(.plain)
+                        gridCaption("\(store.itemCount(in: folder.id)) 個項目", .folder(folder))
                     }
-                    .buttonStyle(.plain)
                     .draggable(dragPayload(folder.id, "fd")) {
                         dragPreview(folder.name, symbol: "folder.fill", id: folder.id)
                     }
                     .dropDestination(for: String.self) { items, _ in
                         handleDrop(items, into: folder.id)
                     } isTargeted: { setDropTarget(folder.id, $0) }
-                    .contextMenu { itemMenu(.folder(folder)) }
                 }
                 ForEach(notebooks) { nb in
-                    Button { selecting ? toggleSelection(nb.id) : open(nb.id, nil) } label: {
-                        NotebookCell(meta: nb, coverURL: store.coverImageURL(nb.id))
-                            .overlay(alignment: .topLeading) {
-                                if selecting { checkmark(nb.id).padding(6) }
-                            }
+                    VStack(spacing: 8) {
+                        Button { selecting ? toggleSelection(nb.id) : open(nb.id, nil) } label: {
+                            NotebookCell(meta: nb, coverURL: store.coverImageURL(nb.id))
+                                .overlay(alignment: .topLeading) {
+                                    if selecting { checkmark(nb.id).padding(6) }
+                                }
+                        }
+                        .buttonStyle(.plain)
+                        gridCaption("\(nb.pageCount) 頁 · \(nb.modified.formatted(date: .abbreviated, time: .omitted))", .notebook(nb))
                     }
-                    .buttonStyle(.plain)
                     .draggable(dragPayload(nb.id, "nb")) {
                         dragPreview(nb.title, symbol: "book.closed.fill", id: nb.id)
                     }
-                    .contextMenu { itemMenu(.notebook(nb)) }
                 }
             }
             .padding(28)
         }
+    }
+
+    /// 大圖底下那行小字，旁邊是選單 ⌄
+    private func gridCaption(_ text: String, _ item: LibraryItem) -> some View {
+        HStack(spacing: 0) {
+            Text(text).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            if !selecting { itemMenuButton(item).frame(height: GridCaption.height) }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: GridCaption.height)
     }
 
     /// 匯入 PDF 與 zip；只匯入一個 PDF 時直接打開它
@@ -734,14 +801,18 @@ struct ParentFolderCell: View {
                 .background(RoundedRectangle(cornerRadius: 12)
                     .fill(highlighted ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.08)))
             Text("上一層").font(.subheadline.weight(.semibold))
-            Text(" ").font(.caption)
+            Color.clear.frame(height: GridCaption.height)
         }
     }
 }
 
+/// 大圖底下那行小字（和選單 ⌄）的高度
+enum GridCaption {
+    static let height: CGFloat = 24
+}
+
 struct FolderCell: View {
     let folder: Folder
-    let count: Int
     var highlighted = false
 
     var body: some View {
@@ -754,7 +825,6 @@ struct FolderCell: View {
                 .frame(maxWidth: .infinity)
                 .background(RoundedRectangle(cornerRadius: 12).fill(highlighted ? Color.accentColor.opacity(0.15) : Color.clear))
             Text(folder.name).font(.subheadline.weight(.semibold)).lineLimit(2).multilineTextAlignment(.center)
-            Text("\(count) 個項目").font(.caption).foregroundStyle(.secondary)
         }
     }
 }
@@ -780,8 +850,6 @@ struct NotebookCell: View {
                 }
             }
             Text(meta.title).font(.subheadline.weight(.semibold)).lineLimit(2).multilineTextAlignment(.center)
-            Text("\(meta.pageCount) 頁 · \(meta.modified.formatted(date: .abbreviated, time: .omitted))")
-                .font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -812,32 +880,78 @@ struct MoveSheet: View {
     let onCancel: () -> Void
 
     var body: some View {
-        NavigationStack {
-            List {
-                Button { onPick(nil) } label: {
-                    Label("資料庫（最上層）", systemImage: "books.vertical")
-                }
-                ForEach(store.folderTree(), id: \.folder.id) { entry in
-                    let disabled = isDisabled(entry.folder)
-                    Button { onPick(entry.folder.id) } label: {
-                        Label(entry.folder.name, systemImage: "folder")
-                            .padding(.leading, CGFloat(entry.depth) * 20)
-                    }
-                    .disabled(disabled)
-                }
-            }
-            .navigationTitle(items.count == 1 ? "移動「\(items[0].name)」到…" : "移動 \(items.count) 個項目到…")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消", action: onCancel) }
-            }
-        }
+        FolderPickerSheet(title: items.count == 1 ? "移動「\(items[0].name)」到…" : "移動 \(items.count) 個項目到…",
+                          isDisabled: isDisabled, onPick: onPick, onCancel: onCancel)
     }
 
     private func isDisabled(_ f: Folder) -> Bool {
         items.contains { item in
             if case let .folder(moving) = item { return store.isFolder(f.id, inside: moving.id) }
             return false
+        }
+    }
+}
+
+/// 選資料夾（移動、匯入）：一開始只列出最上層，點最左邊的 ＞ 展開（展開後朝下），點名稱選這個資料夾
+struct FolderPickerSheet: View {
+    @EnvironmentObject var store: LibraryStore
+    let title: String
+    var isDisabled: (Folder) -> Bool = { _ in false }
+    let onPick: (UUID?) -> Void
+    let onCancel: () -> Void
+    @State var expanded: Set<UUID> = []
+
+    private static let chevronWidth: CGFloat = 28
+
+    var body: some View {
+        NavigationStack {
+            List {
+                HStack(spacing: 6) {
+                    Color.clear.frame(width: Self.chevronWidth)
+                    Button { onPick(nil) } label: {
+                        Label("資料庫（最上層）", systemImage: "books.vertical")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                }
+                ForEach(store.folderRows(expanded: expanded), id: \.folder.id) { row in
+                    HStack(spacing: 6) {
+                        if row.hasChildren {
+                            let open = expanded.contains(row.folder.id)
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    if open { expanded.remove(row.folder.id) } else { expanded.insert(row.folder.id) }
+                                }
+                            } label: {
+                                Image(systemName: "chevron.right")
+                                    .font(.subheadline.weight(.semibold))
+                                    .rotationEffect(.degrees(open ? 90 : 0))
+                                    .frame(width: Self.chevronWidth, height: 32)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel(open ? "收合「\(row.folder.name)」" : "展開「\(row.folder.name)」")
+                        } else {
+                            Color.clear.frame(width: Self.chevronWidth)
+                        }
+                        Button { onPick(row.folder.id) } label: {
+                            Label(row.folder.name, systemImage: "folder")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(isDisabled(row.folder))
+                    }
+                    .padding(.leading, CGFloat(row.depth) * 20)
+                }
+            }
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消", action: onCancel) }
+            }
         }
     }
 }
@@ -934,83 +1048,78 @@ struct ActivityView: UIViewControllerRepresentable {
 
 // MARK: - 詳細資料列
 
-private enum DetailColumns {
-    static let kind: CGFloat = 64
-    static let size: CGFloat = 84
-    static let favorites: CGFloat = 52
+/// 詳細資料的欄寬：表頭和每一列都用這些，欄位才對得齊
+enum DetailColumns {
+    static let inset: CGFloat = 20
+    static let check: CGFloat = 30
+    static let icon: CGFloat = 36
     static let modified: CGFloat = 150
-    static let created: CGFloat = 96
+    static let menu: CGFloat = 36
+    static let spacing: CGFloat = 12
 }
 
 struct DetailHeader: View {
+    var selecting = false
     @Environment(\.horizontalSizeClass) private var hSize
 
     var body: some View {
-        HStack(spacing: 12) {
-            Color.clear.frame(width: 36, height: 1)
+        HStack(spacing: DetailColumns.spacing) {
+            if selecting { Color.clear.frame(width: DetailColumns.check, height: 1) }
+            Color.clear.frame(width: DetailColumns.icon, height: 1)
             Text("名稱")
             Spacer(minLength: 8)
             if hSize == .regular {
-                Text("種類").frame(width: DetailColumns.kind, alignment: .leading)
-                Text("大小").frame(width: DetailColumns.size, alignment: .trailing)
-                Text("最愛").frame(width: DetailColumns.favorites, alignment: .center)
                 Text("修改日期").frame(width: DetailColumns.modified, alignment: .leading)
-                Text("建立日期").frame(width: DetailColumns.created, alignment: .leading)
             }
+            // 選單 ⌄ 那一欄
+            Color.clear.frame(width: DetailColumns.menu - DetailColumns.spacing, height: 1)
         }
         .font(.caption.weight(.semibold))
         .foregroundStyle(.secondary)
     }
 }
 
+/// 詳細資料的一列（不含右邊的選單 ⌄）。checked：選取模式的勾勾（nil＝不在選取模式）
 struct DetailRow: View {
     let cover: NotebookMeta?
     let isFolder: Bool
     let name: String
-    let kind: String
-    let size: String
-    let favorites: Int?
     let modified: Date?
-    let created: Date
     var coverURL: URL? = nil
     var isParent = false
+    var checked: Bool? = nil
     @Environment(\.horizontalSizeClass) private var hSize
 
-    private var favText: String {
-        guard let f = favorites, f > 0 else { return "—" }
-        return "★ \(f)"
-    }
+    private var modifiedText: String { modified?.formatted(date: .numeric, time: .shortened) ?? "—" }
 
     var body: some View {
-        HStack(spacing: 12) {
-            icon.frame(width: 36, height: 46)
+        HStack(spacing: DetailColumns.spacing) {
+            if let checked {
+                Image(systemName: checked ? "checkmark.circle.fill" : "circle")
+                    .font(.title2)
+                    .foregroundStyle(checked ? Color.accentColor : Color.secondary)
+                    .frame(width: DetailColumns.check)
+                    .opacity(isParent ? 0 : 1)
+            }
+            icon.frame(width: DetailColumns.icon, height: 46)
             VStack(alignment: .leading, spacing: 2) {
                 Text(name).font(.body.weight(.medium)).lineLimit(1)
-                if hSize != .regular {
-                    Text([kind, size, modified?.formatted(date: .numeric, time: .omitted)].compactMap { $0 }.joined(separator: " · "))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                if hSize != .regular, modified != nil {
+                    Text(modifiedText).font(.caption).foregroundStyle(.secondary)
                 }
             }
             Spacer(minLength: 8)
             if hSize == .regular {
-                Text(kind).frame(width: DetailColumns.kind, alignment: .leading)
-                Text(size).monospacedDigit().frame(width: DetailColumns.size, alignment: .trailing)
-                Text(favText)
-                    .foregroundStyle(favText == "—" ? Color.secondary : Color.orange)
-                    .frame(width: DetailColumns.favorites, alignment: .center)
-                Text(modified?.formatted(date: .numeric, time: .shortened) ?? "—")
+                Text(isParent ? "" : modifiedText)
                     .monospacedDigit()
+                    .foregroundStyle(modified == nil ? Color.secondary : Color.primary)
                     .frame(width: DetailColumns.modified, alignment: .leading)
-                Text(created.formatted(date: .numeric, time: .omitted))
-                    .monospacedDigit()
-                    .frame(width: DetailColumns.created, alignment: .leading)
             }
         }
         .font(.subheadline)
         .foregroundStyle(.primary)
         .contentShape(Rectangle())
-        .padding(.vertical, 2)
+        .padding(.vertical, 4)
     }
 
     @ViewBuilder
