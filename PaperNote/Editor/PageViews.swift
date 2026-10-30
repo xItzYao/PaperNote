@@ -184,6 +184,8 @@ final class OverlayView: UIView {
     let captureLayer = CAShapeLayer()
     let tablePlusCircles = CAShapeLayer()
     let tablePlusMarks = CAShapeLayer()
+    /// 表格外側拖曳格線的圓點
+    let gripLayer = CAShapeLayer()
     let pageContentLayer = CAShapeLayer()
     let pageOutlineLayer = CAShapeLayer()
     let pageHandleLayer = CAShapeLayer()
@@ -206,8 +208,12 @@ final class OverlayView: UIView {
     /// 電路元件旁的旋轉、水平翻轉按鈕
     let circuitRotateHandle = CALayer()
     let circuitFlipHandle = CALayer()
+    /// 選取導線名稱時右下角的縮放控制點
+    let circuitLabelResizeHandle = CALayer()
     let circuitDeleteHandle = CALayer()
     private static let handleSize: CGFloat = 30
+    /// 導線名稱的縮放控制點小一點（名稱本身不大）
+    static let labelResizeHandleScale: CGFloat = 0.8
     private var lockLayers: [CALayer] = []
     private static let lockedImage = lockImage(locked: true)
     private static let unlockedImage = lockImage(locked: false)
@@ -332,6 +338,7 @@ final class OverlayView: UIView {
                                    (resizeHandleImage, "arrow.up.left.and.arrow.down.right", UIColor.systemTeal),
                                    (circuitRotateHandle, "rotate.right", UIColor.systemBlue),
                                    (circuitFlipHandle, "arrow.left.and.right", UIColor.systemBlue),
+                                   (circuitLabelResizeHandle, "arrow.up.left.and.arrow.down.right", UIColor.systemBlue),
                                    (circuitDeleteHandle, "xmark", UIColor.systemRed)] {
             l.contents = Self.handleImage(symbol, color: color)
             l.contentsGravity = .resizeAspect
@@ -363,6 +370,9 @@ final class OverlayView: UIView {
         tablePlusMarks.strokeColor = UIColor.systemBlue.cgColor
         tablePlusMarks.lineCap = .round
         layer.addSublayer(tablePlusMarks)
+        gripLayer.fillColor = UIColor.systemBlue.cgColor
+        gripLayer.strokeColor = UIColor.white.cgColor
+        layer.addSublayer(gripLayer)
 
         pageContentLayer.fillColor = UIColor.clear.cgColor
         pageContentLayer.strokeColor = UIColor.systemGray.cgColor
@@ -434,6 +444,7 @@ final class OverlayView: UIView {
         captureLayer.lineDashPattern = [NSNumber(value: Double(8 * lineScale)), NSNumber(value: Double(5 * lineScale))]
         tablePlusCircles.lineWidth = 1.5 * lineScale
         tablePlusMarks.lineWidth = 2 * lineScale
+        gripLayer.lineWidth = 1.5 * lineScale
         pageContentLayer.lineWidth = 1 * lineScale
         pageContentLayer.lineDashPattern = [NSNumber(value: Double(4 * lineScale)), NSNumber(value: Double(4 * lineScale))]
         pageOutlineLayer.lineWidth = 2 * lineScale
@@ -644,13 +655,15 @@ final class OverlayView: UIView {
     }
 
     /// 電路元件旁的旋轉、翻轉按鈕（文件座標的中心點；nil 隱藏）
-    func showCircuitPartHandles(rotate: CGPoint?, flip: CGPoint?, delete: CGPoint?) {
+    func showCircuitPartHandles(rotate: CGPoint?, flip: CGPoint?, delete: CGPoint?, labelResize: CGPoint? = nil) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         let s = Self.handleSize * lineScale
-        for (l, p) in [(circuitRotateHandle, rotate), (circuitFlipHandle, flip), (circuitDeleteHandle, delete)] {
+        let items: [(CALayer, CGPoint?, CGFloat)] = [(circuitRotateHandle, rotate, 1), (circuitFlipHandle, flip, 1), (circuitDeleteHandle, delete, 1),
+                                                     (circuitLabelResizeHandle, labelResize, Self.labelResizeHandleScale)]
+        for (l, p, k) in items {
             if let p {
-                l.frame = CGRect(x: p.x - s / 2, y: p.y - s / 2, width: s, height: s)
+                l.frame = CGRect(x: p.x - s * k / 2, y: p.y - s * k / 2, width: s * k, height: s * k)
                 l.isHidden = false
             } else {
                 l.isHidden = true
@@ -660,7 +673,7 @@ final class OverlayView: UIView {
     }
 
     /// 選了整欄（整列）時兩側的「＋」（插入欄／列）
-    func showTablePlus(_ plus: [CGPoint]) {
+    func showTablePlus(_ plus: [CGPoint], grips: [CGPoint] = []) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         let r = 11 * lineScale
@@ -676,6 +689,12 @@ final class OverlayView: UIView {
         }
         tablePlusCircles.path = plus.isEmpty ? nil : circles.cgPath
         tablePlusMarks.path = plus.isEmpty ? nil : marks.cgPath
+        let g = UIBezierPath()
+        let gr = 7 * lineScale
+        for p in grips {
+            g.append(UIBezierPath(ovalIn: CGRect(x: p.x - gr, y: p.y - gr, width: gr * 2, height: gr * 2)))
+        }
+        gripLayer.path = grips.isEmpty ? nil : g.cgPath
         CATransaction.commit()
     }
 

@@ -294,5 +294,11 @@ check("content bounds include the name", far.contentBounds.maxY > 300)
 far.offset(by: P(10, -20))
 check("moving the circuit moves the name", far.wires[0].labelPosition == P(60, 280))
 
+// 22. 名稱的字級：外框跟著變大
+var sized = CircuitWire(points: [P(0, 100), P(100, 100)], label: "Vo", labelPosition: P(50, 80))
+let normalBox = sized.labelBounds!
+sized.labelSize = 32
+check("a bigger name has a bigger box around the same center", sized.labelBounds!.width == normalBox.width * 2 && sized.labelBounds!.midX == normalBox.midX && sized.labelBounds!.midY == normalBox.midY)
+
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

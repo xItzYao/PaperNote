@@ -289,37 +289,83 @@ final class TableEditorUXTests: XCTestCase {
 
     // MARK: 工具列、長按
 
-    private func ribbonButtons(tab: Int) -> [UIButton] {
-        editor.tableRibbonTab = tab
+    private func ribbonButtons() -> [UIButton] {
         func buttons(_ v: UIView) -> [UIButton] { (v as? UIButton).map { [$0] } ?? v.subviews.flatMap(buttons) }
         return editor.buildTableRibbon().flatMap(buttons)
     }
 
-    /// 回報的需求：樣式、列與欄不要藏在兩三層選單裡，直接攤平，每個按鈕都寫名稱（功能複雜，只有圖示看不懂）
-    func testRibbonIsFlatWithLabeledButtons() throws {
-        editor.tableRibbonTab = 0
-        let tabs = try XCTUnwrap(editor.buildTableRibbon().compactMap { $0 as? UISegmentedControl }.first, "分頁切換")
-        XCTAssertEqual((0..<tabs.numberOfSegments).compactMap { tabs.titleForSegment(at: $0) }, ["列與欄", "儲存格", "樣式"])
-        for tab in 0..<3 {
-            let bs = ribbonButtons(tab: tab)
-            XCTAssertFalse(bs.isEmpty)
-            XCTAssertTrue(bs.allSatisfy { $0.menu == nil && !$0.showsMenuAsPrimaryAction }, "分頁 \(tab)：沒有要再點開的選單")
-            XCTAssertTrue(bs.allSatisfy { !($0.configuration?.title ?? "").isEmpty }, "分頁 \(tab)：每個按鈕都寫名稱")
-        }
-        let rowCol = ribbonButtons(tab: 0).compactMap { $0.configuration?.title }
-        for t in ["在上方插入列", "在右側插入欄", "平均分配欄寬", "刪除選取的列", "手繪格線"] { XCTAssertTrue(rowCol.contains(t), "列與欄要直接看到「\(t)」") }
-        XCTAssertFalse(rowCol.contains("編輯文字"), "打字改成點兩下格子")
-        let cells = ribbonButtons(tab: 1).compactMap { $0.configuration?.title }
-        for t in ["合併", "取消合併", "黃色", "左上到右下"] { XCTAssertTrue(cells.contains(t), "儲存格要直接看到「\(t)」") }
-        let style = ribbonButtons(tab: 2).compactMap { $0.configuration?.title }
-        for t in ["黑色", "加粗", "變細", "字放大"] { XCTAssertTrue(style.contains(t), "樣式要直接看到「\(t)」") }
-
-        // 按鈕真的有作用
+    /// 回報的需求：工具列不要分頁、不要選單，一排就好：斜線拿掉（用手繪）、插入列欄拿掉（點標頭的 ＋）、
+    /// 「整個表格」的功能和合併、分割放一起（不寫組名）；底色、格線是顏色框框；線寬、字級是 ⊖ ⊕
+    func testRibbonIsOneShortRow() throws {
         let cell = CGPoint(x: origin.x + 150, y: origin.y + 60)
         editor.updateCellSelection(from: cell, to: cell)
-        let insert = try XCTUnwrap(ribbonButtons(tab: 0).first { $0.configuration?.title == "在右側插入欄" })
-        insert.sendActions(for: .primaryActionTriggered)
-        XCTAssertEqual(table.cols, 4)
+        let views = editor.buildTableRibbon()
+        XCTAssertTrue(views.compactMap { $0 as? UISegmentedControl }.isEmpty, "沒有分頁")
+        let bs = ribbonButtons()
+        XCTAssertTrue(bs.allSatisfy { $0.menu == nil && !$0.showsMenuAsPrimaryAction }, "沒有要再點開的選單")
+        let titles = bs.compactMap { $0.configuration?.title }
+        for t in ["合併", "分割…", "取消合併", "手繪格線", "固定位置", "刪除表格", "底色", "格線"] {
+            XCTAssertTrue(titles.contains(t), "工具列要有「\(t)」")
+        }
+        for t in ["左上到右下", "移除斜線", "在上方插入列", "在右側插入欄", "黃色", "黑色", "加粗", "字放大", "編輯文字"] {
+            XCTAssertFalse(titles.contains(t), "工具列不要「\(t)」")
+        }
+        func texts(_ v: UIView) -> [String] { ((v as? UILabel)?.text).map { [$0] } ?? v.subviews.flatMap(texts) }
+        let words = views.flatMap(texts)
+        XCTAssertFalse(words.contains("整個表格"), "不寫組名")
+        XCTAssertTrue(words.contains("線寬"))
+        XCTAssertTrue(words.contains("字級"))
+
+        // ⊖ 線寬 ⊕、⊖ 字級 ⊕
+        let width0 = table.lineWidth, font0 = table.fontSize
+        let plusWidth = try XCTUnwrap(bs.first { $0.accessibilityLabel == "增加線寬" })
+        plusWidth.sendActions(for: .touchUpInside)
+        XCTAssertEqual(table.lineWidth, width0 + 0.5, accuracy: 0.001)
+        try XCTUnwrap(bs.first { $0.accessibilityLabel == "減少字級" }).sendActions(for: .touchUpInside)
+        XCTAssertEqual(table.fontSize, font0 - 2, accuracy: 0.001)
+    }
+
+    func testFillAndLineColorOpenAColorPicker() throws {
+        let cell = CGPoint(x: origin.x + 150, y: origin.y + 60)
+        editor.updateCellSelection(from: cell, to: cell)
+        func pick(_ title: String, _ color: UIColor) throws {
+            let b = try XCTUnwrap(ribbonButtons().first { $0.configuration?.title == title })
+            b.sendActions(for: .primaryActionTriggered)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+            let picker = try XCTUnwrap(editor.presentedViewController as? UIColorPickerViewController, "按「\(title)」打開顏色選擇器")
+            picker.delegate?.colorPickerViewController?(picker, didSelect: color, continuously: false)
+            editor.dismiss(animated: false)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        }
+        try pick("底色", UIColor(red: 0, green: 0.5, blue: 0, alpha: 1))
+        XCTAssertEqual(table.fills, [CellFill(row: 1, col: 1, hex: "#008000FF")], "選的顏色套用到選取的格子")
+        try pick("底色", UIColor(red: 0, green: 0.5, blue: 0, alpha: 0))
+        XCTAssertTrue(table.fills.isEmpty, "全透明＝無底色")
+        try pick("格線", UIColor(red: 0, green: 0, blue: 1, alpha: 1))
+        XCTAssertEqual(table.lineColorHex, "#0000FFFF")
+    }
+
+    /// 回報的需求：拖格線要有表格外面的圓點（一直顯示）
+    func testGripDotsOutsideTheTableMoveTheLines() throws {
+        let h = try XCTUnwrap(editor.selectedTableHandles()).handles
+        XCTAssertEqual(h.colGrips.map(\.index), [1, 2, 3])
+        XCTAssertEqual(h.rowGrips.map(\.index), [1, 2, 3])
+        let r = try XCTUnwrap(editor.selectedTable()).docRect
+        XCTAssertTrue(h.colGrips.allSatisfy { $0.point.y > r.maxY }, "直線的圓點在表格下方")
+        XCTAssertTrue(h.rowGrips.allSatisfy { $0.point.x > r.maxX }, "橫線的圓點在表格右邊")
+        XCTAssertNotNil(editor.overlay.gripLayer.path, "選到表格就顯示")
+        guard case .colLine(3)? = editor.dragTarget(at: h.colGrips[2].point)?.1 else { return XCTFail("最後一條線的圓點不會變成右下角的縮放") }
+        let grip = h.colGrips[0].point
+        let g = TouchPan()
+        editor.toolPan = g
+        var began: Bool?
+        g.drag(from: grip, to: CGPoint(x: grip.x + 30, y: grip.y), slop: CGPoint(x: 12, y: 0)) { g in
+            if g.state == .began { began = editor.gestureRecognizerShouldBegin(g) }
+            editor.handleToolPan(g)
+        }
+        XCTAssertEqual(began, true)
+        XCTAssertEqual(table.colWidths[0], 130, accuracy: 0.5, "拖圓點移動那條直線")
+        XCTAssertEqual(table.colWidths[1], 70, accuracy: 0.5)
     }
 
     /// 回報的問題：拖動表格的線沒反應。拖曳要移動一小段才開始，那時手指已經離開格線了，要用按下的位置判斷

@@ -431,7 +431,7 @@ extension NotebookViewController {
         } else if let s = inkStrokes(sel.ink).first {
             picker.selectedColor = UIColor(hex: s.colorHex).withAlphaComponent(1)
         }
-        let handler = LassoColorPicker { [weak self] color in self?.recolorLasso(color) }
+        let handler = ColorPickerRelay { [weak self] color in self?.recolorLasso(color) }
         picker.delegate = handler
         lassoColorPicker = handler
         picker.modalPresentationStyle = .popover
@@ -607,8 +607,8 @@ extension NotebookViewController {
     }
 }
 
-/// 自訂顏色選好後套用到套索圈到的筆跡
-final class LassoColorPicker: NSObject, UIColorPickerViewControllerDelegate {
+/// 顏色選擇器選好顏色後套用（套索圈到的筆跡、表格底色、格線顏色）
+final class ColorPickerRelay: NSObject, UIColorPickerViewControllerDelegate {
     private let apply: (UIColor) -> Void
 
     init(apply: @escaping (UIColor) -> Void) {

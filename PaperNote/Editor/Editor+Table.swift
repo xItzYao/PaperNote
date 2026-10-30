@@ -88,11 +88,9 @@ extension NotebookViewController {
         updateTableCellChrome()
     }
 
-    static let tableRibbonTabs = ["列與欄", "儲存格", "樣式"]
-
-    /// 表格工具列：選到的格子、分頁（列與欄｜儲存格｜樣式），旁邊直接排出那一頁的全部按鈕（有字，不用打開選單）。
-    /// 每一頁最後都有「整個表格」：手繪格線、固定位置、刪除表格。
-    /// 打字：點兩下格子；選整欄整列：點表格上方、左邊的標頭
+    /// 表格工具列：一整排有字的按鈕（放不下可以左右捲）
+    /// 合併、分割、手繪格線、固定、刪除｜底色｜重複、平均分配｜格線顏色、⊖ 線寬 ⊕｜⊖ 字級 ⊕。
+    /// 插入、刪除列欄：點標頭（兩側的 ＋，再點一下標頭打開選單）；打字：點兩下格子
     func buildTableRibbon() -> [UIView] {
         guard let s = selectedTable() else { return [] }
         var views: [UIView] = []
@@ -105,72 +103,42 @@ extension NotebookViewController {
         tableCellLabel = cell
         views.append(cell)
 
-        let tabs = UISegmentedControl(items: Self.tableRibbonTabs)
-        tabs.selectedSegmentIndex = min(tableRibbonTab, Self.tableRibbonTabs.count - 1)
-        tabs.accessibilityLabel = "表格工具分頁"
-        tabs.addAction(UIAction { [weak self, weak tabs] _ in
-            guard let self, let i = tabs?.selectedSegmentIndex else { return }
-            self.tableRibbonTab = i
-            self.rebuildSubBar()
-        }, for: .valueChanged)
-        views.append(tabs)
-
-        var items: [UIMenuElement]
-        switch tableRibbonTab {
-        case 1: items = tableCellItems(anchor: .selection, generic: true)
-        case 2: items = tableStyleItems()
-        default: items = tableRowColItems(anchor: .selection, generic: true)
-        }
-        items.append(UIMenu(title: "整個表格", children: [
-            UIAction(title: "手繪格線", image: UIImage(systemName: "pencil.and.outline")) { [weak self] _ in
-                guard let self, let s = self.selectedTable() else { return }
-                self.setTool(.tableDraw)
-                self.tableDrawTarget = s.ref
-                self.rebuildSubBar()
-                self.updateTableDraftChrome()
-            },
-            UIAction(title: s.element.locked ? "解除固定" : "固定位置", image: UIImage(systemName: s.element.locked ? "lock.open" : "lock")) { [weak self] _ in
-                guard let self, let s = self.selectedTable() else { return }
-                self.modifyElement(s.ref) { $0.locked.toggle() }
-                self.rebuildSubBar()
-            },
-            UIAction(title: "刪除表格", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
-                guard let self, let s = self.selectedTable() else { return }
-                self.deleteElement(s.ref)
-                self.showToast("已刪除表格（可以按復原）")
-            },
-        ]))
-        views.append(ribbonRow(items))
+        let actions = tableRibbonActions()
+        var row: [UIView] = actions.edit.map(ribbonButton)
+        row.append(toolbarSeparator())
+        row.append(ribbonColorButton("底色", hex: tableSelectionFillHex(), clearable: true) { [weak self] hex in
+            self?.tableAction { t, r in t.setFill(r, hex: hex) }
+        })
+        row.append(toolbarSeparator())
+        row += actions.layout.map(ribbonButton)
+        row.append(toolbarSeparator())
+        row.append(ribbonColorButton("格線", hex: s.table.lineColorHex, clearable: false) { [weak self] hex in
+            guard let self, let s = self.selectedTable(), let hex else { return }
+            self.modifyTable(s.ref) { $0.lineColorHex = hex }
+        })
+        row.append(ribbonStepper("線寬", minus: { $0.lineWidth = max($0.lineWidth - 0.5, 0.5) },
+                                 plus: { $0.lineWidth = min($0.lineWidth + 0.5, 5) }))
+        row.append(toolbarSeparator())
+        row.append(ribbonStepper("字級", minus: { $0.fontSize = max($0.fontSize - 2, 8) },
+                                 plus: { $0.fontSize = min($0.fontSize + 2, 48) }))
+        views.append(ribbonRow(row))
         return views
     }
 
-    /// 一整排有字的按鈕，放不下可以左右捲。選單裡的每一組攤平成「組名 按鈕 按鈕…」，組和組之間用分隔線
-    func ribbonRow(_ items: [UIMenuElement]) -> UIScrollView {
-        let row = UIStackView()
+    /// 選取範圍左上那格的底色（nil＝無底色）
+    func tableSelectionFillHex() -> String? {
+        guard let s = selectedTable() else { return nil }
+        let r = tableCellSel ?? CellRange((0, 0), (0, 0))
+        let a = s.table.anchor(r.r0, r.c0)
+        return s.table.fills.first { $0.row == a.row && $0.col == a.col }?.hex
+    }
+
+    /// 一整排工具列項目，放不下可以左右捲
+    func ribbonRow(_ items: [UIView]) -> UIScrollView {
+        let row = UIStackView(arrangedSubviews: items)
         row.axis = .horizontal
         row.spacing = 2
         row.alignment = .center
-        // 一組之後接著的單獨按鈕，中間也要分隔線
-        var afterGroup = false
-        func add(_ e: UIMenuElement, top: Bool) {
-            if let a = e as? UIAction {
-                if top && afterGroup { row.addArrangedSubview(toolbarSeparator()) }
-                if top { afterGroup = false }
-                row.addArrangedSubview(ribbonButton(a))
-            } else if let m = e as? UIMenu {
-                if !row.arrangedSubviews.isEmpty { row.addArrangedSubview(toolbarSeparator()) }
-                if !m.title.isEmpty {
-                    let l = UILabel()
-                    l.text = m.title
-                    l.font = .systemFont(ofSize: 12, weight: .semibold)
-                    l.textColor = .secondaryLabel
-                    row.addArrangedSubview(l)
-                }
-                m.children.forEach { add($0, top: false) }
-                afterGroup = true
-            }
-        }
-        items.forEach { add($0, top: true) }
         let scroll = UIScrollView()
         scroll.showsHorizontalScrollIndicator = false
         scroll.accessibilityIdentifier = "ribbonRow"
@@ -189,6 +157,65 @@ extension NotebookViewController {
             fit,
         ])
         return scroll
+    }
+
+    /// 顏色框框＋名稱：點一下打開顏色選擇器。clearable：可以調透明度，全透明＝無色（回傳 nil）
+    func ribbonColorButton(_ title: String, hex: String?, clearable: Bool, _ pick: @escaping (String?) -> Void) -> UIButton {
+        let current = hex.map { UIColor(hex: $0) } ?? .white
+        weak var button: UIButton?
+        let a = UIAction(title: title, image: Self.colorBox(hex)) { [weak self] _ in
+            guard let self, let b = button else { return }
+            self.presentColorPicker(from: b, current: current, alpha: clearable) { [weak b] color in
+                let out: String? = clearable && color.cgColor.alpha < 0.05 ? nil : color.withAlphaComponent(1).hexString
+                pick(out)
+                b?.configuration?.image = Self.colorBox(out)
+            }
+        }
+        let b = ribbonButton(a)
+        button = b
+        return b
+    }
+
+    /// 方形的顏色框框（nil＝無色：白底、紅色斜線）
+    static func colorBox(_ hex: String?) -> UIImage {
+        let size = CGSize(width: 22, height: 22)
+        return UIGraphicsImageRenderer(size: size).image { _ in
+            let r = CGRect(origin: .zero, size: size).insetBy(dx: 2, dy: 2)
+            let box = UIBezierPath(roundedRect: r, cornerRadius: 4)
+            (hex.map { UIColor(hex: $0).withAlphaComponent(1) } ?? .white).setFill()
+            box.fill()
+            if hex == nil {
+                let slash = UIBezierPath()
+                slash.move(to: CGPoint(x: r.maxX - 2, y: r.minY + 2))
+                slash.addLine(to: CGPoint(x: r.minX + 2, y: r.maxY - 2))
+                slash.lineWidth = 1.5
+                UIColor.systemRed.setStroke()
+                slash.stroke()
+            }
+            box.lineWidth = 1
+            UIColor.separator.setStroke()
+            box.stroke()
+        }.withRenderingMode(.alwaysOriginal)
+    }
+
+    /// ⊖ 名稱 ⊕（和邏輯閘調整輸入數量一樣）：調整整個表格
+    func ribbonStepper(_ title: String, minus: @escaping (inout TableData) -> Void, plus: @escaping (inout TableData) -> Void) -> UIView {
+        func button(_ symbol: String, _ label: String, _ change: @escaping (inout TableData) -> Void) -> UIButton {
+            let b = makeButton(symbol: symbol, title: nil, action: nil)
+            b.accessibilityLabel = label
+            b.addAction(UIAction { [weak self] _ in
+                guard let self, let s = self.selectedTable() else { return }
+                self.modifyTable(s.ref, change)
+            }, for: .touchUpInside)
+            return b
+        }
+        let l = UILabel()
+        l.text = title
+        l.font = .systemFont(ofSize: 14)
+        let stack = UIStackView(arrangedSubviews: [button("minus.circle", "減少\(title)", minus), l, button("plus.circle", "增加\(title)", plus)])
+        stack.axis = .horizontal
+        stack.alignment = .center
+        return stack
     }
 
     /// 工具列上有圖示、有字的按鈕

@@ -587,6 +587,8 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         if case let .table(t) = e.content, t.size.width > 0, t.size.height > 0 {
             // 上方、左邊的標頭：拖兩個標頭的分界＝調整欄寬（列高），拖標頭本身＝選好幾欄（列）
             if let line = tableHeaderBoundary(at: p) { return (ref, line) }
+            // 表格外側的格線圓點（比右下角的縮放點優先）
+            if let grip = tableGripTarget(at: p) { return (ref, grip) }
             if let h = tableHeaderHit(at: p) { return (ref, h.columns ? .colHeaders(h.index) : .rowHeaders(h.index)) }
             if !e.locked, let f = tableFillHandlePoint(), p.distance(to: f) < tol * 1.3 { return (ref, .fill) }
             if !e.locked {

@@ -111,6 +111,41 @@ final class CircuitEditingTests: XCTestCase {
         XCTAssertEqual(undone.label, "CLK")
     }
 
+    /// 回報的需求：選到名稱時外面一圈藍框（拖的時候確定有選到）；右下角斜的雙箭頭拖曳調整大小
+    func testSelectedNameHasAFrameAndAResizeHandle() throws {
+        let w0 = try XCTUnwrap(wire)
+        editor.setWireLabel(ref, wire: wireID, to: "CLK", near: CGPoint(x: w0.points[0].x + 80, y: w0.points[0].y))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        let pos = editor.circuitDoc(try XCTUnwrap(wire?.labelPosition), ref)
+        editor.handleCircuitTap(at: pos)
+        XCTAssertEqual(editor.circuitSel, .wire(wireID), "點名稱選到導線")
+        let box = try XCTUnwrap(editor.selectedWireLabelRect()?.rect)
+        XCTAssertTrue(box.contains(pos))
+        let drawn = try XCTUnwrap(editor.overlay.circuitSelLayer.path?.boundingBox, "名稱外面有藍框")
+        XCTAssertEqual(drawn.minX, box.minX, accuracy: 0.5)
+        XCTAssertEqual(drawn.maxY, box.maxY, accuracy: 0.5)
+
+        let handle = try XCTUnwrap(editor.wireLabelResizePoint())
+        XCTAssertFalse(editor.overlay.circuitLabelResizeHandle.isHidden, "右下角有縮放箭頭")
+        XCTAssertGreaterThan(handle.x, box.maxX)
+        XCTAssertGreaterThan(handle.y, box.maxY)
+        XCTAssertTrue(editor.circuitPanShouldBegin(at: handle))
+
+        let before = try XCTUnwrap(wire)
+        let offset = CGPoint(x: before.labelPosition!.x - before.points[0].x, y: before.labelPosition!.y - before.points[0].y)
+        TouchPan().drag(from: handle, to: CGPoint(x: handle.x + 20, y: handle.y + 10)) { editor.handleCircuitPan($0, $0.location(in: nil)) }
+        let bigger = try XCTUnwrap(wire)
+        XCTAssertGreaterThan(bigger.labelFont, before.labelFont * 1.3, "往外拖：字變大")
+        XCTAssertEqual(bigger.labelPosition!.x - bigger.points[0].x, offset.x, accuracy: 0.01, "中心不動")
+        XCTAssertEqual(bigger.labelPosition!.y - bigger.points[0].y, offset.y, accuracy: 0.01)
+        XCTAssertEqual(editor.circuitSel, .wire(wireID), "還是選著")
+        XCTAssertTrue(CircuitRenderer.svg(try XCTUnwrap(data)).contains(#"font-size="\#(CircuitRenderer.num(bigger.labelFont))""#), "SVG 也用新的大小")
+
+        let h2 = try XCTUnwrap(editor.wireLabelResizePoint())
+        TouchPan().drag(from: h2, to: CGPoint(x: h2.x - 60, y: h2.y - 40)) { editor.handleCircuitPan($0, $0.location(in: nil)) }
+        XCTAssertEqual(wire?.labelFont ?? 0, CircuitWire.labelSizeRange.lowerBound, accuracy: 0.01, "往內拖到底：最小字級")
+    }
+
     // MARK: 刪除
 
     func testWireDeleteButtonSitsBesideTheWire() throws {

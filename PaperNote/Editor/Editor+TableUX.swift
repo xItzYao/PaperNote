@@ -179,6 +179,20 @@ extension NotebookViewController {
         }
     }
 
+    /// 顏色選擇器（從 source 跳出）；選好一個顏色就套用（拖曳中的不算）
+    func presentColorPicker(from source: UIView, current: UIColor, alpha: Bool, _ apply: @escaping (UIColor) -> Void) {
+        let picker = UIColorPickerViewController()
+        picker.supportsAlpha = alpha
+        picker.selectedColor = current
+        let relay = ColorPickerRelay(apply: apply)
+        picker.delegate = relay
+        colorPickerRelay = relay
+        picker.modalPresentationStyle = .popover
+        picker.popoverPresentationController?.sourceView = source
+        picker.popoverPresentationController?.sourceRect = source.bounds
+        present(picker, animated: true)
+    }
+
     /// SwiftUI 小視窗：大小跟著內容（不會被切掉）
     func hosting<V: View>(_ v: V) -> UIHostingController<V> {
         let h = UIHostingController(rootView: v)
@@ -203,15 +217,50 @@ extension NotebookViewController {
         return s.table.rangeRect(r).offsetBy(dx: s.docRect.minX, dy: s.docRect.minY)
     }
 
-    /// 列與欄：插入、刪除、重複、平均分配、鎖定寬高（照目前選取的範圍）。
-    /// generic：工具列用，先做好、按的時候才看選取範圍，名稱不寫第幾列
-    func tableRowColItems(anchor: TablePanelAnchor, generic: Bool = false) -> [UIMenuElement] {
+    /// 工具列的按鈕（先做好，按的時候才看選取範圍）：
+    /// edit＝合併、分割、取消合併、手繪格線、固定位置、刪除表格；layout＝重複、平均分配
+    func tableRibbonActions() -> (edit: [UIAction], layout: [UIAction]) {
+        guard let s = selectedTable() else { return ([], []) }
+        let edit = [
+            UIAction(title: "合併", image: TableIcons.merge) { [weak self] _ in self?.tableAction { t, r in t.mergeCells(r) } },
+            UIAction(title: "分割…", image: TableIcons.split) { [weak self] _ in self?.presentSplitPanel(anchor: .selection) },
+            tableAct("取消合併", "square.split.2x2") { t, r in t.unmerge(r.r0, r.c0) },
+            UIAction(title: "手繪格線", image: UIImage(systemName: "pencil.and.outline")) { [weak self] _ in
+                guard let self, let s = self.selectedTable() else { return }
+                self.setTool(.tableDraw)
+                self.tableDrawTarget = s.ref
+                self.rebuildSubBar()
+                self.updateTableDraftChrome()
+            },
+            UIAction(title: s.element.locked ? "解除固定" : "固定位置", image: UIImage(systemName: s.element.locked ? "lock.open" : "lock")) { [weak self] _ in
+                guard let self, let s = self.selectedTable() else { return }
+                self.modifyElement(s.ref) { $0.locked.toggle() }
+                self.rebuildSubBar()
+            },
+            UIAction(title: "刪除表格", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
+                guard let self, let s = self.selectedTable() else { return }
+                self.deleteElement(s.ref)
+                self.showToast("已刪除表格（可以按復原）")
+            },
+        ]
+        let layout = [
+            UIAction(title: "重複…", image: UIImage(systemName: "square.stack.3d.down.right")) { [weak self] _ in
+                self?.presentRepeatPanel(anchor: .selection)
+            },
+            tableAct("平均分配欄寬", "arrow.left.and.right") { t, r in t.distributeColumns(r.c1 > r.c0 ? r.c0...r.c1 : nil) },
+            tableAct("平均分配列高", "arrow.up.and.down") { t, r in t.distributeRows(r.r1 > r.r0 ? r.r0...r.r1 : nil) },
+        ]
+        return (edit, layout)
+    }
+
+    /// 列與欄：插入、刪除、重複、平均分配、鎖定寬高（照目前選取的範圍；標頭、長按的選單）
+    func tableRowColItems(anchor: TablePanelAnchor) -> [UIMenuElement] {
         guard selectedTable() != nil else { return [] }
         let r = tableCellSel ?? CellRange((0, 0), (0, 0))
-        let colsName = generic ? "選取的欄" : r.c1 > r.c0 ? "\(columnName(r.c0))–\(columnName(r.c1)) 欄" : "\(columnName(r.c0)) 欄"
-        let rowsName = generic ? "選取的列" : r.r1 > r.r0 ? "第 \(r.r0 + 1)–\(r.r1 + 1) 列" : "第 \(r.r0 + 1) 列"
-        let distributeCols = generic ? "平均分配欄寬" : "平均分配欄寬（\(r.c1 > r.c0 ? colsName : "全部欄")）"
-        let distributeRows = generic ? "平均分配列高" : "平均分配列高（\(r.r1 > r.r0 ? rowsName : "全部列")）"
+        let colsName = r.c1 > r.c0 ? "\(columnName(r.c0))–\(columnName(r.c1)) 欄" : "\(columnName(r.c0)) 欄"
+        let rowsName = r.r1 > r.r0 ? "第 \(r.r0 + 1)–\(r.r1 + 1) 列" : "第 \(r.r0 + 1) 列"
+        let distributeCols = "平均分配欄寬（\(r.c1 > r.c0 ? colsName : "全部欄")）"
+        let distributeRows = "平均分配列高（\(r.r1 > r.r0 ? rowsName : "全部列")）"
         return [
             UIMenu(title: "插入", image: UIImage(systemName: "plus.rectangle.on.rectangle"), children: [
                 tableAct("在上方插入列", "arrow.up.to.line") { t, r in t.insertRow(at: r.r0) },
@@ -249,21 +298,21 @@ extension NotebookViewController {
         ]
     }
 
-    /// 儲存格：合併、分割、取消合併、斜線、底色。generic：工具列用（按的時候才看選取範圍）
-    func tableCellItems(anchor: TablePanelAnchor, generic: Bool = false) -> [UIMenuElement] {
+    /// 儲存格：合併、分割、取消合併、斜線、底色（長按、再點一下格子的選單）
+    func tableCellItems(anchor: TablePanelAnchor) -> [UIMenuElement] {
         guard let s = selectedTable() else { return [] }
         let r = s.table.expanded(tableCellSel ?? CellRange((0, 0), (0, 0)))
         let span = s.table.span(r.r0, r.c0)
         let single = span.rowSpan == r.r1 - r.r0 + 1 && span.colSpan == r.c1 - r.c0 + 1
         var items: [UIMenuElement] = [
-            UIAction(title: "合併", image: TableIcons.merge, attributes: single && !generic ? .disabled : []) { [weak self] _ in
+            UIAction(title: "合併", image: TableIcons.merge, attributes: single ? .disabled : []) { [weak self] _ in
                 self?.tableAction { t, r in t.mergeCells(r) }
             },
-            UIAction(title: single || generic ? "分割…" : "分割每一格…", image: TableIcons.split) { [weak self] _ in
+            UIAction(title: single ? "分割…" : "分割每一格…", image: TableIcons.split) { [weak self] _ in
                 self?.presentSplitPanel(anchor: anchor)
             },
         ]
-        if generic || (single && span.rowSpan * span.colSpan > 1) {
+        if single && span.rowSpan * span.colSpan > 1 {
             items.append(tableAct("取消合併", "square.split.2x2") { t, r in t.unmerge(r.r0, r.c0) })
         }
         let fills: [(String, String?)] = [("黃色", "#FFF59DFF"), ("綠色", "#C8E6C9FF"), ("藍色", "#BBDEFBFF"),

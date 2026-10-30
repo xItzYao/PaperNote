@@ -23,13 +23,13 @@ enum CircuitRenderer {
         ctx.restoreGState()
     }
 
-    static func wireLabelFont() -> UIFont { .systemFont(ofSize: CircuitWire.labelFontSize, weight: .medium) }
+    static func wireLabelFont(_ size: CGFloat) -> UIFont { .systemFont(ofSize: size, weight: .medium) }
 
     /// 導線名稱：字的中心在 labelPosition
     static func drawWireLabels(_ d: CircuitData, color: UIColor) {
         for w in d.wires {
             guard let text = w.label, !text.isEmpty, let c = w.labelPosition else { continue }
-            let str = NSAttributedString(string: text, attributes: [.font: wireLabelFont(), .foregroundColor: color])
+            let str = NSAttributedString(string: text, attributes: [.font: wireLabelFont(w.labelFont), .foregroundColor: color])
             let sz = str.size()
             str.draw(at: CGPoint(x: c.x - sz.width / 2, y: c.y - sz.height / 2))
         }
@@ -355,7 +355,7 @@ extension CircuitRenderer {
         }
         for w in d.wires {
             guard let s = w.label, !s.isEmpty, let c = w.labelPosition else { continue }
-            text(s, at: c, size: CircuitWire.labelFontSize, weight: "500")
+            text(s, at: c, size: w.labelFont, weight: "500")
         }
         out.append("</svg>")
         return out.joined(separator: "\n") + "\n"

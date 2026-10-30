@@ -255,7 +255,6 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     /// 拖曳移動表格（電路圖）時，一起帶走的手寫字
     var inkCarry: InkCarry?
     /// 表格工具列目前的分頁：0 列與欄、1 儲存格、2 樣式
-    var tableRibbonTab = 0
     /// 工具列的＋（插入表格的小視窗指著它）
     weak var insertButton: UIButton?
     weak var tableCellLabel: UILabel?
@@ -263,7 +262,9 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     // 橡皮擦擦螢光標示
     var eraserTracker: TouchTracker!
     /// 套索改顏色時的自訂顏色選擇器
-    var lassoColorPicker: LassoColorPicker?
+    var lassoColorPicker: ColorPickerRelay?
+    /// 表格工具列顏色框框打開的顏色選擇器
+    var colorPickerRelay: ColorPickerRelay?
     /// 停住變直線／圖形（見 HoldToShape.swift）
     lazy var holdToShape = HoldToShapeController(editor: self)
     var editMenu: UIEditMenuInteraction!

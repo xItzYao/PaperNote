@@ -2,7 +2,7 @@ import XCTest
 @testable import PaperNote
 
 /// 回報的問題：
-/// - 電路符號太大：新的電路圖符號、線寬都縮成一半（舊的電路圖維持原本大小）
+/// - 電路符號太大：新的電路圖符號、線寬縮小（原本的一半再放大 25%；舊的電路圖維持原本大小）
 /// - 橫線分兩筆畫、接在直線上，跨線半圓跑到直線上：存檔時兩筆接成一條
 final class CircuitScaleTests: XCTestCase {
     private var window: UIWindow!
@@ -41,19 +41,19 @@ final class CircuitScaleTests: XCTestCase {
         let tap = CGPoint(x: o.x + 200, y: o.y + 300)
         editor.placeComponent(.resistor, at: tap)
         let c = try XCTUnwrap(circuits().first)
-        XCTAssertEqual(c.data.symbolScale, CircuitData.newScale, "新的電路圖是一半大小")
-        // 外框也是一半：內容 + 邊界，乘上縮放
+        XCTAssertEqual(c.data.symbolScale, CircuitData.newScale, "新的電路圖用新的縮放")
+        // 外框：內容 + 邊界，乘上縮放
         let b = c.data.contentBounds
-        XCTAssertEqual(c.element.frame.width, (b.maxX + CircuitData.margin) * 0.5, accuracy: 0.01)
-        XCTAssertEqual(c.element.frame.height, (b.maxY + CircuitData.margin) * 0.5, accuracy: 0.01)
-        // 元件放在點的位置；兩支接腳在頁面上的距離是原本的一半
+        XCTAssertEqual(c.element.frame.width, (b.maxX + CircuitData.margin) * CircuitData.newScale, accuracy: 0.01)
+        XCTAssertEqual(c.element.frame.height, (b.maxY + CircuitData.margin) * CircuitData.newScale, accuracy: 0.01)
+        // 元件放在點的位置；兩支接腳在頁面上的距離乘上縮放
         let ref = try XCTUnwrap(editor.circuitTarget)
         let comp = c.data.components[0]
         let center = editor.circuitDoc(comp.position, ref)
         XCTAssertEqual(center.x, tap.x, accuracy: 5)
         XCTAssertEqual(center.y, tap.y, accuracy: 5)
         let pins = CircuitGeometry.pins(comp).map { editor.circuitDoc($0, ref) }
-        XCTAssertEqual(pins[0].distance(to: pins[1]), CircuitGeometry.pins(comp)[0].distance(to: CircuitGeometry.pins(comp)[1]) * 0.5, accuracy: 0.01)
+        XCTAssertEqual(pins[0].distance(to: pins[1]), CircuitGeometry.pins(comp)[0].distance(to: CircuitGeometry.pins(comp)[1]) * CircuitData.newScale, accuracy: 0.01)
         // 文件座標和內容座標來回換算一致
         let back = editor.circuitLocal(pins[1], ref)
         XCTAssertEqual(back.x, CircuitGeometry.pins(comp)[1].x, accuracy: 0.001)
@@ -95,7 +95,7 @@ final class CircuitScaleTests: XCTestCase {
         let image = UIGraphicsImageRenderer(size: size, format: { let f = UIGraphicsImageRendererFormat(); f.scale = 1; return f }()).image { _ in
             CircuitRenderer.draw(c.data, in: CGRect(origin: .zero, size: size))
         }
-        // 畫出來的最右邊：內容的右緣 × 0.5（沒有縮放的話會被外框切掉）
+        // 畫出來的最右邊：內容的右緣 × 縮放（沒有縮放的話會被外框切掉）
         let cg = try XCTUnwrap(image.cgImage)
         let w = cg.width, h = cg.height
         var px = [UInt8](repeating: 0, count: w * h * 4)
@@ -105,7 +105,7 @@ final class CircuitScaleTests: XCTestCase {
         var maxX = -1
         for y in 0..<h { for x in 0..<w where px[(y * w + x) * 4 + 3] > 40 { maxX = max(maxX, x) } }
         XCTAssertGreaterThan(CGFloat(maxX), size.width / 2, "有畫出來")
-        XCTAssertLessThan(CGFloat(maxX), size.width - 4, "符號縮成一半畫在外框裡，右邊留有邊界，沒有被切掉")
+        XCTAssertLessThan(CGFloat(maxX), size.width - 4, "符號縮放後畫在外框裡，右邊留有邊界，沒有被切掉")
     }
 
     func testStraightLineDrawnInTwoStrokesIsJoinedOnSave() throws {

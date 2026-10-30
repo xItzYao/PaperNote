@@ -108,14 +108,19 @@ struct CircuitWire: Codable, Equatable, Identifiable {
     var label: String?
     /// 名稱的中心（電路圖內的座標），可以拖到別的地方
     var labelPosition: CGPoint?
+    /// 名稱的字級（拖右下角的控制點調整）；nil＝預設大小
+    var labelSize: CGFloat?
 
-    /// 字的大小（電路圖內的座標，和元件符號一起縮放）
+    /// 預設字的大小（電路圖內的座標，和元件符號一起縮放）
     static let labelFontSize: CGFloat = 16
+    static let labelSizeRange: ClosedRange<CGFloat> = 8...72
+
+    var labelFont: CGFloat { labelSize ?? Self.labelFontSize }
 
     /// 名稱大約佔的範圍（不用 UIKit 量字：英數字算 0.6 個字寬，中文算 1 個）
     var labelBounds: CGRect? {
         guard let text = label, !text.isEmpty, let c = labelPosition else { return nil }
-        let f = Self.labelFontSize
+        let f = labelFont
         let w = text.unicodeScalars.reduce(CGFloat(0)) { $0 + ($1.isASCII ? 0.6 : 1) * f }
         let h = f * 1.25
         return CGRect(x: c.x - w / 2, y: c.y - h / 2, width: w, height: h)
@@ -150,8 +155,8 @@ struct CircuitData: Codable, Equatable {
 
     static let grid: CGFloat = 10
     static let margin: CGFloat = 24
-    /// 新建的電路圖：符號和線都是原本的一半
-    static let newScale: CGFloat = 0.5
+    /// 新建的電路圖：原本的一半再放大 25%（符號、線寬一起）
+    static let newScale: CGFloat = 0.625
     static var newCircuit: CircuitData { CircuitData(symbolScale: newScale) }
 
     static func snap(_ p: CGPoint) -> CGPoint {
@@ -415,6 +420,7 @@ extension CircuitData {
                             if w.label == nil, other.label != nil {
                                 w.label = other.label
                                 w.labelPosition = other.labelPosition
+                                w.labelSize = other.labelSize
                             }
                             w.points = Self.orthogonalize(a + b.dropFirst())
                             wires[i] = w
