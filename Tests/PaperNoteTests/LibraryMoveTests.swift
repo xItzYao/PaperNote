@@ -69,6 +69,28 @@ final class LibraryMoveTests: XCTestCase {
         XCTAssertEqual(store.notebook(a)?.title, "講義 (1)", "放回同一個資料夾：不會再加號碼")
     }
 
+    /// 回報的需求：資料庫的我的最愛是文件（筆記本旁的星星），不是頁面
+    func testStarringANotebookAddsItToFavoriteDocuments() throws {
+        let inFolder = folder("LibraryMoveTests 星號 \(UUID().uuidString.prefix(6))", in: nil)
+        let a = notebook("要收藏的筆記", in: inFolder)
+        let b = notebook("不收藏的筆記", in: nil)
+        let modified = try XCTUnwrap(store.notebook(a)?.modified)
+        store.setStarred(a, true)
+        let starred = store.visibleNotebooks.filter(\.starred).map(\.id)
+        XCTAssertTrue(starred.contains(a), "資料夾裡的筆記本也會出現在我的最愛文件")
+        XCTAssertFalse(starred.contains(b))
+        XCTAssertEqual(store.notebook(a)?.modified, modified, "加星號不算修改")
+        store.setStarred(a, false)
+        XCTAssertFalse(store.visibleNotebooks.filter(\.starred).map(\.id).contains(a))
+    }
+
+    /// 舊的資料庫沒有 starred：讀進來是沒收藏
+    func testOldNotebooksAreNotStarred() throws {
+        let json = ##"{"id":"\##(UUID().uuidString)","title":"舊筆記","coverHex":"#2654A0FF"}"##
+        let meta = try JSONDecoder().decode(NotebookMeta.self, from: Data(json.utf8))
+        XCTAssertFalse(meta.starred)
+    }
+
     /// 回報的需求：日期一行放得下、24 小時制
     func testDatesAreOneLineAnd24Hour() throws {
         let d = try XCTUnwrap(Calendar.current.date(from: DateComponents(year: 2026, month: 10, day: 30, hour: 23, minute: 5)))

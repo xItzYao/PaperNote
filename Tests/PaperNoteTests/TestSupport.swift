@@ -1,4 +1,5 @@
 import XCTest
+@testable import PaperNote
 
 enum TestWindow {
     /// 接在 App 的 window scene 上的視窗。沒接上的視窗不會真的顯示：CATiledLayer 不會畫、截圖是空白，
@@ -55,4 +56,12 @@ final class TouchPan: UIPanGestureRecognizer {
             handle(self)
         }
     }
+}
+
+/// 測 PencilKit 筆的測試用：body 執行期間把「筆」切回 PencilKit，結束後還原（App 預設用自製筆刷）
+func withPencilKitPen(_ body: () -> Void) {
+    let before = EditorSettings.shared.customInk
+    EditorSettings.shared.customInk = false
+    defer { EditorSettings.shared.customInk = before }
+    body()
 }

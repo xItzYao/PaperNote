@@ -487,6 +487,11 @@ final class LibraryStore: ObservableObject {
         return result
     }
 
+    /// 加入／移出我的最愛文件（不算修改筆記本，修改日期不變）
+    func setStarred(_ id: UUID, _ on: Bool) {
+        updateMeta(id) { $0.starred = on }
+    }
+
     func renameNotebook(_ id: UUID, to title: String) {
         guard !title.isEmpty else { return }
         updateMeta(id) { $0.title = title }

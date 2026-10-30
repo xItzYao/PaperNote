@@ -207,6 +207,8 @@ struct NotebookMeta: Codable, Equatable, Identifiable {
     var deletedAt: Date? = nil
     /// 這本筆記本「最近刪除的頁面」數量
     var trashedPageCount = 0
+    /// 加到資料庫的「我的最愛文件」
+    var starred = false
 
     init(title: String, folderId: UUID?, coverHex: String) {
         self.title = title
@@ -215,7 +217,7 @@ struct NotebookMeta: Codable, Equatable, Identifiable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, title, folderId, created, modified, coverHex, pageCount, favorites, deletedAt, trashedPageCount
+        case id, title, folderId, created, modified, coverHex, pageCount, favorites, deletedAt, trashedPageCount, starred
     }
 
     init(from decoder: Decoder) throws {
@@ -230,6 +232,7 @@ struct NotebookMeta: Codable, Equatable, Identifiable {
         favorites = try c.decodeIfPresent([FavoriteRef].self, forKey: .favorites) ?? []
         deletedAt = try c.decodeIfPresent(Date.self, forKey: .deletedAt)
         trashedPageCount = try c.decodeIfPresent(Int.self, forKey: .trashedPageCount) ?? 0
+        starred = try c.decodeIfPresent(Bool.self, forKey: .starred) ?? false
     }
 }
 

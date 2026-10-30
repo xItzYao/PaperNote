@@ -5,6 +5,8 @@ import PencilKit
 /// 回報的問題：螢光筆有些筆跡按上一步回不去、有些可以。
 /// 畫完被程式換掉的那一筆（接近直線自動拉直、超出頁面遮掉）PencilKit 自己的上一步找不到，要自己登記
 final class StrokeUndoTests: XCTestCase {
+    /// 這裡測的是 PencilKit 的筆（App 預設用自製筆刷）
+    override func invokeTest() { withPencilKitPen { super.invokeTest() } }
     private var window: UIWindow!
     private var editor: NotebookViewController!
     private var notebookID: UUID!

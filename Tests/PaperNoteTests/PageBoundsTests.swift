@@ -6,6 +6,8 @@ import SwiftUI
 /// 1. 捲到最後一頁底下就停住；再往上拉出現＋，放開後畫面中間跳出選紙張的小視窗（可以預覽、選直式或橫式）
 /// 2. 圖片、筆跡都不能超出頁面
 final class PageBoundsTests: XCTestCase {
+    /// 這裡測的是 PencilKit 的筆（App 預設用自製筆刷）
+    override func invokeTest() { withPencilKitPen { super.invokeTest() } }
     private final class FakePan: UIPanGestureRecognizer {
         var fake: UIGestureRecognizer.State = .possible
         override var state: UIGestureRecognizer.State {

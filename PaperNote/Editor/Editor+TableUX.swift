@@ -220,7 +220,7 @@ extension NotebookViewController {
     }
 
     /// 工具列的按鈕（先做好，按的時候才看選取範圍）：
-    /// edit＝重複、合併、分割、取消合併、手繪格線、刪除列、刪除欄；deleteTable 放在最右邊
+    /// edit＝重複、合併、分割、手繪格線、刪除列、刪除欄；deleteTable 放在最右邊（取消合併：用手繪格線把線畫回去）
     func tableRibbonActions() -> (edit: [UIAction], deleteTable: UIAction) {
         let edit = [
             UIAction(title: "重複…", image: UIImage(systemName: "square.stack.3d.down.right")) { [weak self] _ in
@@ -228,7 +228,6 @@ extension NotebookViewController {
             },
             UIAction(title: "合併", image: TableIcons.merge) { [weak self] _ in self?.tableAction { t, r in t.mergeCells(r) } },
             UIAction(title: "分割…", image: TableIcons.split) { [weak self] _ in self?.presentSplitPanel(anchor: .selection) },
-            tableAct("取消合併", "square.split.2x2") { t, r in t.unmerge(r.r0, r.c0) },
             UIAction(title: "手繪格線", image: UIImage(systemName: "pencil.and.outline")) { [weak self] _ in
                 self?.beginTableHandDraw()
             },

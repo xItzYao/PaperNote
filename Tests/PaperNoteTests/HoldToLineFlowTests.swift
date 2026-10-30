@@ -4,6 +4,8 @@ import PencilKit
 
 /// 在真的筆記本裡跑一次「手繪一筆 → 停住 → 放開」，確認頁面上真的留下一條直線
 final class HoldToLineFlowTests: XCTestCase {
+    /// 這裡測的是 PencilKit 的筆（App 預設用自製筆刷）
+    override func invokeTest() { withPencilKitPen { super.invokeTest() } }
     private var window: UIWindow!
     private var editor: NotebookViewController!
     private var notebookID: UUID!

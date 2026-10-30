@@ -336,15 +336,17 @@ final class TableEditorUXTests: XCTestCase {
         XCTAssertEqual(menus, ["平均分配", "鎖定"])
         XCTAssertTrue(bs.filter { $0.menu != nil }.allSatisfy(\.showsMenuAsPrimaryAction), "點一下就打開選單")
         let titles = bs.compactMap { $0.configuration?.title }
-        for t in ["重複…", "合併", "分割…", "取消合併", "手繪格線", "刪除列", "刪除欄", "底色", "字色",
+        for t in ["重複…", "合併", "分割…", "手繪格線", "刪除列", "刪除欄", "底色", "字色",
                   "平均分配", "鎖定", "格線", "刪除表格"] {
             XCTAssertTrue(titles.contains(t), "工具列要有「\(t)」")
         }
         for t in ["固定位置", "解除固定", "左上到右下", "在上方插入列", "黃色", "黑色", "加粗", "字放大", "編輯文字",
-                  "平均分配欄寬", "平均分配列高", "鎖定欄寬", "鎖定列高"] {
+                  "平均分配欄寬", "平均分配列高", "鎖定欄寬", "鎖定列高", "取消合併"] {
             XCTAssertFalse(titles.contains(t), "工具列不要「\(t)」")
         }
         XCTAssertEqual(titles.first, "重複…", "重複在最前面")
+        let idx = { (t: String) in titles.firstIndex(of: t) ?? -1 }
+        XCTAssertTrue(idx("平均分配") < idx("底色") && idx("鎖定") < idx("底色"), "平均分配、鎖定在顏色前面：\(titles)")
         XCTAssertEqual(titles.last, "刪除表格", "刪除表格在最右邊")
         XCTAssertEqual(editor.tableDistributeItems().map(\.title), ["平均分配欄寬", "平均分配列高"])
         XCTAssertEqual(editor.tableLockItems().map(\.title), ["鎖定欄寬", "鎖定列高"])

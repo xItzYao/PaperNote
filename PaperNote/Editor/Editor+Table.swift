@@ -89,7 +89,7 @@ extension NotebookViewController {
     }
 
     /// 表格工具列：一整排有字的按鈕（放不下可以左右捲）
-    /// 重複、合併、分割、取消合併、手繪格線、刪除列、刪除欄｜底色、字色、⊖ 字級 ⊕｜平均分配、鎖定（點了選欄寬或列高）｜格線、⊖ 線寬 ⊕｜刪除表格。
+    /// 重複、合併、分割、手繪格線、刪除列、刪除欄｜平均分配、鎖定（點了選欄寬或列高）｜底色、字色、⊖ 字級 ⊕｜格線、⊖ 線寬 ⊕｜刪除表格。
     /// 插入列欄：點標頭（兩側的 ＋，再點一下標頭打開選單）；打字：點兩下格子；固定位置：左上角的鎖頭
     func buildTableRibbon() -> [UIView] {
         guard let s = selectedTable() else { return [] }
@@ -107,6 +107,9 @@ extension NotebookViewController {
         let a = tableSelectionAnchor()
         var row: [UIView] = actions.edit.map(ribbonButton)
         row.append(toolbarSeparator())
+        row.append(ribbonMenuButton("平均分配", symbol: "arrow.left.and.right.square") { [weak self] in self?.tableDistributeItems() ?? [] })
+        row.append(ribbonMenuButton("鎖定", symbol: "lock.rectangle") { [weak self] in self?.tableLockItems() ?? [] })
+        row.append(toolbarSeparator())
         row.append(ribbonColorButton("底色", hex: s.table.fill(a.row, a.col), clear: "無底色") { [weak self] hex in
             self?.tableAction { t, r in t.setFill(r, hex: hex) }
         })
@@ -115,9 +118,6 @@ extension NotebookViewController {
         })
         row.append(ribbonStepper("字級", value: \.fontSize, minus: { $0.fontSize = max($0.fontSize - 2, 8) },
                                  plus: { $0.fontSize = min($0.fontSize + 2, 48) }))
-        row.append(toolbarSeparator())
-        row.append(ribbonMenuButton("平均分配", symbol: "arrow.left.and.right.square") { [weak self] in self?.tableDistributeItems() ?? [] })
-        row.append(ribbonMenuButton("鎖定", symbol: "lock.rectangle") { [weak self] in self?.tableLockItems() ?? [] })
         row.append(toolbarSeparator())
         row.append(ribbonColorButton("格線", hex: s.table.lineColorHex, clear: nil) { [weak self] hex in
             guard let self, let s = self.selectedTable(), let hex else { return }

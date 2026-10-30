@@ -3,6 +3,7 @@ import SwiftUI
 /// 關於我＋GitHub
 struct AboutView: View {
     static let githubURL = URL(string: "https://github.com/xItzYao/PaperNote")!
+    static let blurb = "大學生的一個用愛發電小project，希望大家用的開心！想支持的話也可以贊助這個app的運作:P"
     @Environment(\.dismiss) private var dismiss
 
     private var version: String {
@@ -20,7 +21,7 @@ struct AboutView: View {
                             .font(.system(size: 64))
                             .foregroundStyle(Color.accentColor)
                         Text("PaperNote").font(.title2.weight(.bold))
-                        Text("一個大學生做的 iPad 筆記軟體，原始碼公開在 GitHub。")
+                        Text(Self.blurb)
                             .multilineTextAlignment(.center)
                             .foregroundStyle(.secondary)
                     }

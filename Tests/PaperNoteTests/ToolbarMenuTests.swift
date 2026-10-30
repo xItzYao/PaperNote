@@ -71,6 +71,19 @@ final class ToolbarMenuTests: XCTestCase {
         XCTAssertLessThanOrEqual(editor.tableRowColItems().map(depth).max() ?? 0, 1, "表格標頭的選單")
     }
 
+    /// 回報的需求：預設使用自製筆刷，工具列不寫「自製筆刷」
+    func testCustomInkIsTheDefault() {
+        let d = UserDefaults.standard
+        let saved = d.object(forKey: "customInk")
+        defer { d.set(saved, forKey: "customInk") }
+        d.removeObject(forKey: "customInk")
+        XCTAssertTrue(EditorSettings.shared.customInk, "沒設定過：用自製筆刷")
+        editor.setTool(.pen)
+        editor.rebuildSubBar()
+        func labels(_ v: UIView) -> [String] { ((v as? UILabel)?.text).map { [$0] } ?? v.subviews.flatMap(labels) }
+        XCTAssertFalse(labels(editor.subBarStack).contains("自製筆刷"), "不寫黃字")
+    }
+
     func testPageMenuHasNoDuplicates() {
         let t = titles(editor.makePageMenuItems())
         for gone in ["全部頁面…", "跳到頁碼…", "擴展此頁空白…"] {

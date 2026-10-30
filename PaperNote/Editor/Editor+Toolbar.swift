@@ -315,14 +315,6 @@ extension NotebookViewController {
             }
             if tool == .pen {
                 subBarStack.addArrangedSubview(toolbarSeparator())
-                if customInkActive {
-                    // 看得出來現在是自製筆刷（設定裡的實驗功能）
-                    let tag = UILabel()
-                    tag.text = "自製筆刷"
-                    tag.font = .systemFont(ofSize: 11, weight: .semibold)
-                    tag.textColor = .systemOrange
-                    subBarStack.addArrangedSubview(tag)
-                }
                 for v in penStyleControls() { subBarStack.addArrangedSubview(v) }
                 subBarStack.addArrangedSubview(toolbarSeparator())
                 let ruler = makeButton(symbol: "ruler", title: nil, action: nil)
@@ -900,7 +892,7 @@ extension NotebookViewController {
                 s.shapeSnap.toggle()
                 self?.updateGestureAvailability()
             },
-            UIAction(title: "實驗：自製筆刷（不圓滑）", image: UIImage(systemName: "scribble"), state: s.customInk ? .on : .off) { [weak self] _ in
+            UIAction(title: "自製筆刷（不圓滑）", image: UIImage(systemName: "scribble"), state: s.customInk ? .on : .off) { [weak self] _ in
                 s.customInk.toggle()
                 self?.applyTool()
                 self?.showToast(s.customInk ? "「筆」改用自製筆刷：照筆尖原始軌跡畫，不做圓滑" : "「筆」改回 PencilKit")

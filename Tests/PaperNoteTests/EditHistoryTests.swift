@@ -7,6 +7,8 @@ import PencilKit
 /// - PencilKit 自己登記的上一步不會被執行（換掉筆跡後那些紀錄會失效）
 /// - 系統的上一步手勢（三指滑動）走同一個堆疊；打字中的上一步留在文字框裡
 final class EditHistoryTests: XCTestCase {
+    /// 這裡測的是 PencilKit 的筆（App 預設用自製筆刷）
+    override func invokeTest() { withPencilKitPen { super.invokeTest() } }
     private var window: UIWindow!
     private var editor: NotebookViewController!
     private var notebookID: UUID!

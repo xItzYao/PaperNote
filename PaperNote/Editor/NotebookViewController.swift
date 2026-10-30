@@ -116,9 +116,9 @@ final class EditorSettings {
         get { bool("captureFreeform", false) }
         set { d.set(newValue, forKey: "captureFreeform") }
     }
-    /// 實驗：「筆」改用自製筆刷（照原始取樣點畫，不圓滑；見 InkEngine.swift）
+    /// 「筆」用自製筆刷（照原始取樣點畫，不圓滑；見 InkEngine.swift）。預設打開，可以在「⋯」改回 PencilKit
     var customInk: Bool {
-        get { bool("customInk", false) }
+        get { bool("customInk", true) }
         set { d.set(newValue, forKey: "customInk") }
     }
 }

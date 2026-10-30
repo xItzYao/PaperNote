@@ -167,9 +167,9 @@ struct FolderView: View {
     @State private var errorMessage: String?
     @State private var importSummary: String?
     @State private var importing = false
-    @State private var showMigration = false
     @State private var exportTarget: NotebookMeta?
-    @State private var showFavorites = false
+    /// 只看我的最愛文件（所有資料夾裡打星號的筆記本）
+    @State private var showStarred = false
     @State private var exporting = false
     @State private var showAbout = false
     @State private var showBackup = false
@@ -187,11 +187,11 @@ struct FolderView: View {
     private let columns = [GridItem(.adaptive(minimum: 160, maximum: 220), spacing: 28)]
 
     private var title: String {
-        folderID.flatMap { store.folder($0)?.name } ?? "資料庫"
+        showStarred ? "我的最愛文件" : folderID.flatMap { store.folder($0)?.name } ?? "資料庫"
     }
 
     private var folders: [Folder] {
-        guard search.isEmpty else { return [] }
+        guard search.isEmpty, !showStarred else { return [] }
         let list = store.folders(in: folderID)
         switch sortMode {
         case "name": return list
@@ -200,8 +200,9 @@ struct FolderView: View {
     }
 
     private var notebooks: [NotebookMeta] {
-        let list = search.isEmpty ? store.notebooks(in: folderID)
-            : store.visibleNotebooks.filter { $0.title.localizedCaseInsensitiveContains(search) }
+        var list = showStarred ? store.visibleNotebooks.filter(\.starred)
+            : search.isEmpty ? store.notebooks(in: folderID) : store.visibleNotebooks
+        if !search.isEmpty { list = list.filter { $0.title.localizedCaseInsensitiveContains(search) } }
         switch sortMode {
         case "name": return list.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
         case "created": return list.sorted { $0.created > $1.created }
@@ -217,17 +218,26 @@ struct FolderView: View {
         content
         .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle(title)
-        .searchable(text: $search, prompt: "搜尋筆記本名稱")
         .safeAreaInset(edge: .bottom) {
             if selecting { batchBar }
         }
         .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                Button(selecting ? "完成" : "選取") {
-                    selecting.toggle()
-                    selection = []
+            // 左邊：找文件、我的最愛文件、新增（文件的操作）
+            ToolbarItemGroup(placement: .topBarLeading) {
+                searchField
+                Button { showStarred.toggle() } label: {
+                    Label("我的最愛文件", systemImage: showStarred ? "star.fill" : "star")
                 }
-                .fontWeight(selecting ? .semibold : .regular)
+                Menu {
+                    Button { setNewNotebookShown(true) } label: { Label("新增筆記本", systemImage: "book.closed") }
+                    Button { showImporter = true } label: { Label("匯入 PDF、zip 或 PaperNote 檔", systemImage: "doc.richtext") }
+                    Button { newFolderName = ""; showNewFolder = true } label: { Label("新增資料夾", systemImage: "folder.badge.plus") }
+                } label: {
+                    Image(systemName: "plus")
+                }
+            }
+            // 右邊：檢視方式（在修改日期那一欄上面）、⋯、選取、回到筆記本
+            ToolbarItemGroup(placement: .topBarTrailing) {
                 Menu {
                     Section("檢視方式") {
                         Picker("檢視方式", selection: $viewMode) {
@@ -245,14 +255,6 @@ struct FolderView: View {
                 } label: {
                     Label("檢視方式", systemImage: viewMode == "list" ? "list.bullet" : "square.grid.2x2")
                 }
-                if let active = TabStore.shared.state.active {
-                    Button { open(active, nil) } label: {
-                        Label("回到分頁", systemImage: "rectangle.stack")
-                    }
-                }
-                Button { showFavorites = true } label: {
-                    Label("我的最愛頁面", systemImage: "star")
-                }
                 Menu {
                     Button { showTrash = true } label: { Label("垃圾桶", systemImage: "trash") }
                     Button { showBackup = true } label: { Label("雲端備份（Google Drive）", systemImage: "icloud.and.arrow.up") }
@@ -260,26 +262,55 @@ struct FolderView: View {
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
-                Menu {
-                    Button { setNewNotebookShown(true) } label: { Label("新增筆記本", systemImage: "book.closed") }
-                    Button { showImporter = true } label: { Label("匯入 PDF、zip 或 PaperNote 檔", systemImage: "doc.richtext") }
-                    Button { showMigration = true } label: { Label("從 GoodNotes 搬家…", systemImage: "shippingbox") }
-                    Button { newFolderName = ""; showNewFolder = true } label: { Label("新增資料夾", systemImage: "folder.badge.plus") }
-                } label: {
-                    Image(systemName: "plus")
+                Button(selecting ? "完成" : "選取") {
+                    selecting.toggle()
+                    selection = []
+                }
+                .fontWeight(selecting ? .semibold : .regular)
+                if let active = TabStore.shared.state.active {
+                    Button { open(active, nil) } label: {
+                        Label("回到分頁", systemImage: "rectangle.stack")
+                    }
                 }
             }
         }
+    }
+
+    /// 搜尋筆記本名稱（放在左上角，和其他文件操作在一起）
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("搜尋筆記本名稱", text: $search)
+                .textFieldStyle(.plain)
+                .submitLabel(.search)
+            if !search.isEmpty {
+                Button { search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("清除搜尋")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .frame(width: 220)
+        .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
     }
 
     @ViewBuilder
     private var content: some View {
         if folders.isEmpty && notebooks.isEmpty {
             ScrollView {
-                ContentUnavailableView(search.isEmpty ? "這裡還沒有東西" : "找不到符合的筆記本",
-                                       systemImage: search.isEmpty ? "books.vertical" : "magnifyingglass",
-                                       description: Text(search.isEmpty ? "按右上角的「＋」新增筆記本、匯入 PDF（或從 GoodNotes 搬家）或建立資料夾。" : ""))
-                    .padding(.top, 80)
+                if !search.isEmpty {
+                    ContentUnavailableView("找不到符合的筆記本", systemImage: "magnifyingglass")
+                        .padding(.top, 80)
+                } else if showStarred {
+                    ContentUnavailableView("還沒有我的最愛文件", systemImage: "star",
+                                           description: Text("點筆記本旁邊的星星，就會加到這裡。"))
+                        .padding(.top, 80)
+                } else {
+                    ContentUnavailableView("這裡還沒有東西", systemImage: "books.vertical",
+                                           description: Text("按左上角的「＋」新增筆記本、匯入 PDF 或建立資料夾。"))
+                        .padding(.top, 80)
+                }
             }
         } else if viewMode == "list" {
             detailsList
@@ -348,14 +379,21 @@ struct FolderView: View {
         }
     }
 
-    /// 詳細資料的一列：整列點了打開（選取模式是勾選）；選單 ⌄ 疊在修改日期左邊預留的位置（item 是 nil：「上一層」，沒有選單）
+    /// 詳細資料的一列：整列點了打開（選取模式是勾選）；選單 ⌄、星星疊在修改日期左邊預留的位置（item 是 nil：「上一層」，沒有選單）
     private func detailLine<Main: View>(dropID: UUID?, item: LibraryItem?, @ViewBuilder _ main: () -> Main) -> some View {
         main()
             .buttonStyle(.plain)
             .overlay(alignment: .trailing) {
                 if let item, !selecting {
-                    itemMenuButton(item)
-                        .padding(.trailing, hSize == .regular ? DetailColumns.modified + DetailColumns.spacing : 0)
+                    HStack(spacing: 0) {
+                        itemMenuButton(item)
+                        if case let .notebook(nb) = item {
+                            starButton(nb)
+                        } else {
+                            Color.clear.frame(width: DetailColumns.star, height: 1)
+                        }
+                    }
+                    .padding(.trailing, hSize == .regular ? DetailColumns.modified + DetailColumns.spacing : 0)
                 }
             }
         .padding(.horizontal, DetailColumns.inset)
@@ -433,10 +471,26 @@ struct FolderView: View {
         }
     }
 
-    /// 大圖底下那行小字，左邊是選單 ⌄
+    /// ☆：加入／移出我的最愛文件
+    private func starButton(_ nb: NotebookMeta) -> some View {
+        Button { store.setStarred(nb.id, !nb.starred) } label: {
+            Image(systemName: nb.starred ? "star.fill" : "star")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(nb.starred ? Color.orange : Color.secondary)
+                .frame(width: DetailColumns.star, height: 36)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(nb.starred ? "從我的最愛文件移除「\(nb.title)」" : "把「\(nb.title)」加入我的最愛文件")
+    }
+
+    /// 大圖底下那行小字，左邊是選單 ⌄（筆記本還有星星）
     private func gridCaption(_ text: String, _ item: LibraryItem) -> some View {
         HStack(spacing: 0) {
-            if !selecting { itemMenuButton(item).frame(height: GridCaption.height) }
+            if !selecting {
+                itemMenuButton(item).frame(height: GridCaption.height)
+                if case let .notebook(nb) = item { starButton(nb).frame(height: GridCaption.height) }
+            }
             Text(text).font(.caption).foregroundStyle(.secondary).lineLimit(1)
         }
         .frame(maxWidth: .infinity)
@@ -486,12 +540,6 @@ struct FolderView: View {
                 importFiles(urls)
             case let .failure(error):
                 errorMessage = error.localizedDescription
-            }
-        }
-        .sheet(isPresented: $showMigration) {
-            GoodNotesMigrationView {
-                showMigration = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { showImporter = true }
             }
         }
         .alert("匯入完成", isPresented: Binding(get: { importSummary != nil }, set: { if !$0 { importSummary = nil } })) {
@@ -601,13 +649,6 @@ struct FolderView: View {
         .sheet(isPresented: $showBackup) { BackupView() }
         .sheet(item: $shareItem) { item in
             ActivityView(items: [item.url])
-        }
-        .sheet(isPresented: $showFavorites) {
-            FavoritesView { nb, page in
-                showFavorites = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { open(nb, page) }
-            }
-            .environmentObject(store)
         }
         .alert("發生問題", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("好", role: .cancel) {}
@@ -954,88 +995,6 @@ struct FolderPickerSheet: View {
     }
 }
 
-// MARK: - 所有筆記本的我的最愛頁面
-
-struct FavoritesView: View {
-    @EnvironmentObject var store: LibraryStore
-    let open: (UUID, UUID) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var search = ""
-
-    private var groups: [(notebook: NotebookMeta, favorites: [FavoriteRef])] {
-        var result: [(notebook: NotebookMeta, favorites: [FavoriteRef])] = []
-        for nb in store.visibleNotebooks.sorted(by: { $0.modified > $1.modified }) where !nb.favorites.isEmpty {
-            let favs = nb.favorites
-                .filter { search.isEmpty || $0.note.localizedCaseInsensitiveContains(search) || nb.title.localizedCaseInsensitiveContains(search) }
-                .sorted { $0.pageNumber < $1.pageNumber }
-            if !favs.isEmpty { result.append((notebook: nb, favorites: favs)) }
-        }
-        return result
-    }
-
-    var body: some View {
-        NavigationStack {
-            Group {
-                if groups.isEmpty {
-                    ContentUnavailableView(search.isEmpty ? "還沒有我的最愛頁面" : "找不到符合的備註",
-                                           systemImage: "star",
-                                           description: Text(search.isEmpty ? "在筆記本裡按星號，就能把頁面加入我的最愛並寫備註。" : ""))
-                } else {
-                    List {
-                        ForEach(groups, id: \.notebook.id) { group in
-                            Section(group.notebook.title) {
-                                ForEach(group.favorites, id: \.pageId) { fav in
-                                    Button { open(group.notebook.id, fav.pageId) } label: {
-                                        FavoriteRow(fav: fav, thumbURL: store.thumbnailURL(notebook: group.notebook.id, page: fav.pageId))
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            .searchable(text: $search, prompt: "搜尋備註")
-            .navigationTitle("我的最愛頁面")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("關閉") { dismiss() } }
-            }
-        }
-    }
-}
-
-struct FavoriteRow: View {
-    let fav: FavoriteRef
-    let thumbURL: URL
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Group {
-                if let img = UIImage(contentsOfFile: thumbURL.path) {
-                    Image(uiImage: img).resizable().scaledToFit()
-                } else {
-                    Color.gray.opacity(0.2)
-                }
-            }
-            .frame(width: 72, height: 96)
-            .background(Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
-            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.gray.opacity(0.3)))
-            VStack(alignment: .leading, spacing: 4) {
-                Text("第 \(fav.pageNumber) 頁").font(.headline)
-                Text(fav.note.isEmpty ? "（沒有備註）" : fav.note)
-                    .font(.subheadline)
-                    .foregroundStyle(fav.note.isEmpty ? .secondary : .primary)
-                    .lineLimit(4)
-            }
-            Spacer()
-        }
-        .contentShape(Rectangle())
-        .padding(.vertical, 4)
-    }
-}
-
 struct ActivityView: UIViewControllerRepresentable {
     let items: [Any]
     func makeUIViewController(context: Context) -> UIActivityViewController {
@@ -1054,6 +1013,7 @@ enum DetailColumns {
     static let iconHeight: CGFloat = 66
     static let modified: CGFloat = 170
     static let menu: CGFloat = 36
+    static let star: CGFloat = 36
     static let spacing: CGFloat = 12
 }
 
@@ -1082,8 +1042,8 @@ struct DetailHeader: View {
             Color.clear.frame(width: DetailColumns.icon, height: 1)
             Text("名稱")
             Spacer(minLength: 8)
-            // 選單 ⌄ 那一欄（在修改日期左邊）
-            Color.clear.frame(width: DetailColumns.menu, height: 1)
+            // 選單 ⌄、星星那一欄（在修改日期左邊）
+            Color.clear.frame(width: DetailColumns.menu + DetailColumns.star, height: 1)
             if hSize == .regular {
                 Text("修改日期").frame(width: DetailColumns.modified, alignment: .leading)
             }
@@ -1123,8 +1083,8 @@ struct DetailRow: View {
                 }
             }
             Spacer(minLength: 8)
-            // 選單 ⌄ 的位置（⌄ 疊在上面，不放在按鈕裡）
-            Color.clear.frame(width: DetailColumns.menu, height: 1)
+            // 選單 ⌄、星星的位置（疊在上面，不放在按鈕裡）
+            Color.clear.frame(width: DetailColumns.menu + DetailColumns.star, height: 1)
             if hSize == .regular {
                 Text(isParent ? "" : modifiedText)
                     .monospacedDigit()
