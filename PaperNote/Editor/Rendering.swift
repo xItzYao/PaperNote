@@ -210,15 +210,16 @@ enum ElementRenderer {
         // 文字（合併格只畫左上角那格的文字）
         let para = NSMutableParagraphStyle()
         para.lineBreakMode = .byWordWrapping
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: t.fontSize * min(sx, sy)),
-            .foregroundColor: UIColor(hex: "#1A1A1AFF"),
-            .paragraphStyle: para,
-        ]
+        let font = UIFont.systemFont(ofSize: t.fontSize * min(sx, sy))
         for r in 0..<t.rows {
             for c in 0..<t.cols where t.isAnchor(r, c) {
                 let text = t.text(row: r, col: c)
                 guard !text.isEmpty else { continue }
+                let attrs: [NSAttributedString.Key: Any] = [
+                    .font: font,
+                    .foregroundColor: UIColor(hex: t.textColor(r, c) ?? TableData.defaultTextColor),
+                    .paragraphStyle: para,
+                ]
                 let cell = map(t.cellRect(row: r, col: c)).insetBy(dx: 6, dy: 4)
                 (text as NSString).draw(with: cell, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
                                         attributes: attrs, context: nil)

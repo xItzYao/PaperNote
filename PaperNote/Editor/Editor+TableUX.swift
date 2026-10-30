@@ -62,7 +62,7 @@ extension NotebookViewController {
     func toggleTableEraseLines() {
         tableEraseLines.toggle()
         rebuildSubBar()
-        showToast(tableEraseLines ? "擦線：沿著格線擦，放開就合併兩邊的格子" : "畫線：切開格子、畫斜線、在表格旁邊加列欄")
+        showToast(tableEraseLines ? "擦線：沿著格線擦，放開就合併兩邊的格子；沿著斜線擦就拿掉斜線" : "畫線：切開格子、畫斜線、在表格旁邊加列欄")
     }
 
     /// 擦線：p 是到目前為止擦過的路徑（文件座標）。會被擦掉的線先變半透明
@@ -74,14 +74,17 @@ extension NotebookViewController {
                                width: t.lineWidth + 3)
     }
 
-    /// 擦線放開：擦掉預覽裡的線（合併兩邊的格子）
+    /// 擦線放開：擦掉預覽裡的線（格線＝合併兩邊的格子；斜線＝拿掉斜線）
     func finishTableErase(_ ref: ElementRef, points: [CGPoint]) {
         previewTableErase(ref, points: points)
-        let ranges = tableErasePreview.map(\.range)
+        let lines = tableErasePreview
         tableErasePreview = []
         overlay.showFadedLines([], width: 0)
-        guard !ranges.isEmpty else { return }
-        modifyTable(ref) { for r in ranges { $0.mergeCells(r) } }
+        guard !lines.isEmpty else { return }
+        modifyTable(ref) { t in
+            for l in lines where l.diagonal { t.setDiagonal(l.range.r0, l.range.c0, reverse: nil) }
+            for l in lines where !l.diagonal { t.mergeCells(l.range) }
+        }
         updateTableDraftChrome()
     }
 
@@ -143,7 +146,7 @@ extension NotebookViewController {
     func presentTableHeaderMenu(_ h: TableHeaderHit, at p: CGPoint) {
         if !isTableHeaderSelected(h) { selectTableHeaders(h) }
         let anchor = tableHeaderRects().map { h.columns ? $0.cols[h.index] : $0.rows[h.index] } ?? CGRect(origin: p, size: .zero)
-        presentMenu(UIMenu(children: tableRowColItems(anchor: .doc(anchor))), atDocPoint: p, avoiding: anchor)
+        presentMenu(UIMenu(children: tableRowColItems()), atDocPoint: p, avoiding: anchor)
     }
 
     func updateTableHeadersChrome() {
@@ -172,25 +175,14 @@ extension NotebookViewController {
         }
     }
 
-    /// 顏色選項：圖示是那個顏色的圓點（nil＝無色）
-    private func tableAct(_ title: String, swatch hex: String?, _ change: @escaping (inout TableData, CellRange) -> Void) -> UIAction {
-        UIAction(title: title, image: hex.map { Self.colorSwatch(UIColor(hex: $0)) } ?? UIImage(systemName: "circle.slash")) { [weak self] _ in
-            self?.tableAction(change)
+    /// 調色盤（從 source 跳出），點一個顏色就套用並關掉。
+    /// 和其他表格小視窗一樣讓頁面接得到觸碰（不用系統的顏色選擇器：點旁邊關掉它之後，頁面的手勢會卡住捲不動）
+    func presentColorPalette(title: String, selected: String?, clear: String?, from source: UIView, _ pick: @escaping (String?) -> Void) {
+        let panel = ColorPalettePanel(title: title, selected: selected, clearTitle: clear) { [weak self] hex in
+            self?.dismissToolPopover()
+            pick(hex)
         }
-    }
-
-    /// 顏色選擇器（從 source 跳出）；選好一個顏色就套用（拖曳中的不算）
-    func presentColorPicker(from source: UIView, current: UIColor, alpha: Bool, _ apply: @escaping (UIColor) -> Void) {
-        let picker = UIColorPickerViewController()
-        picker.supportsAlpha = alpha
-        picker.selectedColor = current
-        let relay = ColorPickerRelay(apply: apply)
-        picker.delegate = relay
-        colorPickerRelay = relay
-        picker.modalPresentationStyle = .popover
-        picker.popoverPresentationController?.sourceView = source
-        picker.popoverPresentationController?.sourceRect = source.bounds
-        present(picker, animated: true)
+        presentTablePanel(hosting(panel), anchor: .view(source), size: CGSize(width: 320, height: clear == nil ? 250 : 300))
     }
 
     /// SwiftUI 小視窗：大小跟著內容（不會被切掉）
@@ -218,9 +210,8 @@ extension NotebookViewController {
     }
 
     /// 工具列的按鈕（先做好，按的時候才看選取範圍）：
-    /// edit＝合併、分割、取消合併、手繪格線、固定位置、刪除表格；layout＝重複、平均分配
-    func tableRibbonActions() -> (edit: [UIAction], layout: [UIAction]) {
-        guard let s = selectedTable() else { return ([], []) }
+    /// edit＝合併、分割、取消合併、手繪格線、刪除列、刪除欄；layout＝重複、平均分配、鎖定欄寬列高；deleteTable 放在最右邊
+    func tableRibbonActions() -> (edit: [UIAction], layout: [UIAction], deleteTable: UIAction) {
         let edit = [
             UIAction(title: "合併", image: TableIcons.merge) { [weak self] _ in self?.tableAction { t, r in t.mergeCells(r) } },
             UIAction(title: "分割…", image: TableIcons.split) { [weak self] _ in self?.presentSplitPanel(anchor: .selection) },
@@ -232,16 +223,8 @@ extension NotebookViewController {
                 self.rebuildSubBar()
                 self.updateTableDraftChrome()
             },
-            UIAction(title: s.element.locked ? "解除固定" : "固定位置", image: UIImage(systemName: s.element.locked ? "lock.open" : "lock")) { [weak self] _ in
-                guard let self, let s = self.selectedTable() else { return }
-                self.modifyElement(s.ref) { $0.locked.toggle() }
-                self.rebuildSubBar()
-            },
-            UIAction(title: "刪除表格", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
-                guard let self, let s = self.selectedTable() else { return }
-                self.deleteElement(s.ref)
-                self.showToast("已刪除表格（可以按復原）")
-            },
+            tableAct("刪除列", "minus.rectangle", attributes: .destructive) { t, r in for row in (r.r0...r.r1).reversed() { t.removeRow(row) } },
+            tableAct("刪除欄", "minus.rectangle.portrait", attributes: .destructive) { t, r in for col in (r.c0...r.c1).reversed() { t.removeColumn(col) } },
         ]
         let layout = [
             UIAction(title: "重複…", image: UIImage(systemName: "square.stack.3d.down.right")) { [weak self] _ in
@@ -249,18 +232,24 @@ extension NotebookViewController {
             },
             tableAct("平均分配欄寬", "arrow.left.and.right") { t, r in t.distributeColumns(r.c1 > r.c0 ? r.c0...r.c1 : nil) },
             tableAct("平均分配列高", "arrow.up.and.down") { t, r in t.distributeRows(r.r1 > r.r0 ? r.r0...r.r1 : nil) },
+            // 鎖定：再按一次解除（標頭上看得到哪幾欄、列鎖住了）
+            tableAct("鎖定欄寬", "lock.rectangle") { t, r in t.setColsLocked(r.c0...r.c1, !(r.c0...r.c1).allSatisfy(t.lockedCols.contains)) },
+            tableAct("鎖定列高", "lock.rectangle") { t, r in t.setRowsLocked(r.r0...r.r1, !(r.r0...r.r1).allSatisfy(t.lockedRows.contains)) },
         ]
-        return (edit, layout)
+        let deleteTable = UIAction(title: "刪除表格", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
+            guard let self, let s = self.selectedTable() else { return }
+            self.deleteElement(s.ref)
+            self.showToast("已刪除表格（可以按復原）")
+        }
+        return (edit, layout, deleteTable)
     }
 
-    /// 列與欄：插入、刪除、重複、平均分配、鎖定寬高（照目前選取的範圍；標頭、長按的選單）
-    func tableRowColItems(anchor: TablePanelAnchor) -> [UIMenuElement] {
+    /// 列與欄：插入、刪除（點選起來的標頭、長按標頭的選單；其他功能在工具列）
+    func tableRowColItems() -> [UIMenuElement] {
         guard selectedTable() != nil else { return [] }
         let r = tableCellSel ?? CellRange((0, 0), (0, 0))
         let colsName = r.c1 > r.c0 ? "\(columnName(r.c0))–\(columnName(r.c1)) 欄" : "\(columnName(r.c0)) 欄"
         let rowsName = r.r1 > r.r0 ? "第 \(r.r0 + 1)–\(r.r1 + 1) 列" : "第 \(r.r0 + 1) 列"
-        let distributeCols = "平均分配欄寬（\(r.c1 > r.c0 ? colsName : "全部欄")）"
-        let distributeRows = "平均分配列高（\(r.r1 > r.r0 ? rowsName : "全部列")）"
         return [
             UIMenu(title: "插入", image: UIImage(systemName: "plus.rectangle.on.rectangle"), children: [
                 tableAct("在上方插入列", "arrow.up.to.line") { t, r in t.insertRow(at: r.r0) },
@@ -268,82 +257,94 @@ extension NotebookViewController {
                 tableAct("在左側插入欄", "arrow.left.to.line") { t, r in t.insertColumn(at: r.c0) },
                 tableAct("在右側插入欄", "arrow.right.to.line") { t, r in t.insertColumn(at: r.c1 + 1) },
             ]),
-            UIAction(title: "重複…", image: UIImage(systemName: "square.stack.3d.down.right")) { [weak self] _ in
-                self?.presentRepeatPanel(anchor: anchor)
-            },
-            UIMenu(title: "平均分配", image: UIImage(systemName: "arrow.left.and.right"), children: [
-                tableAct(distributeCols, "arrow.left.and.right") { t, r in t.distributeColumns(r.c1 > r.c0 ? r.c0...r.c1 : nil) },
-                tableAct(distributeRows, "arrow.up.and.down") { t, r in t.distributeRows(r.r1 > r.r0 ? r.r0...r.r1 : nil) },
-            ]),
-            UIMenu(title: "鎖定寬高", image: UIImage(systemName: "lock.rectangle"), children: [
-                tableAct("鎖定欄寬（\(colsName)）", "lock") { t, r in t.setColsLocked(r.c0...r.c1, true) },
-                tableAct("鎖定列高（\(rowsName)）", "lock") { t, r in t.setRowsLocked(r.r0...r.r1, true) },
-                tableAct("解除選取範圍的鎖定", "lock.open") { t, r in
-                    t.setColsLocked(r.c0...r.c1, false)
-                    t.setRowsLocked(r.r0...r.r1, false)
-                },
-                tableAct("解除全部鎖定", "lock.open", attributes: .destructive) { t, _ in
-                    t.lockedCols = []
-                    t.lockedRows = []
-                },
-            ]),
             UIMenu(title: "刪除", image: UIImage(systemName: "minus.rectangle"), children: [
                 tableAct("刪除\(rowsName)", "minus.rectangle", attributes: .destructive) { t, r in for row in (r.r0...r.r1).reversed() { t.removeRow(row) } },
                 tableAct("刪除\(colsName)", "minus.rectangle", attributes: .destructive) { t, r in for col in (r.c0...r.c1).reversed() { t.removeColumn(col) } },
-                UIAction(title: "刪除整個表格", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
-                    guard let self, let s = self.selectedTable() else { return }
-                    self.deleteElement(s.ref)
-                },
             ]),
         ]
     }
 
-    /// 儲存格：合併、分割、取消合併、斜線、底色（長按、再點一下格子的選單）
-    func tableCellItems(anchor: TablePanelAnchor) -> [UIMenuElement] {
-        guard let s = selectedTable() else { return [] }
-        let r = s.table.expanded(tableCellSel ?? CellRange((0, 0), (0, 0)))
-        let span = s.table.span(r.r0, r.c0)
-        let single = span.rowSpan == r.r1 - r.r0 + 1 && span.colSpan == r.c1 - r.c0 + 1
-        var items: [UIMenuElement] = [
-            UIAction(title: "合併", image: TableIcons.merge, attributes: single ? .disabled : []) { [weak self] _ in
-                self?.tableAction { t, r in t.mergeCells(r) }
-            },
-            UIAction(title: single ? "分割…" : "分割每一格…", image: TableIcons.split) { [weak self] _ in
-                self?.presentSplitPanel(anchor: anchor)
+    // MARK: - 長按格子的選單：文字、拷貝、剪下、貼上（多格記相對位置）
+
+    func tableCellMenuItems(_ ref: ElementRef, cell: (row: Int, col: Int)?) -> [UIMenuElement] {
+        var items: [UIMenuElement] = []
+        if let cell {
+            items.append(UIAction(title: "編輯文字", image: UIImage(systemName: "keyboard")) { [weak self] _ in
+                self?.beginTextEditing(ref, cell: cell)
+            })
+        }
+        let canPaste = tableCellClipboard.map { $0.changeCount == UIPasteboard.general.changeCount } == true || UIPasteboard.general.hasStrings
+        items += [
+            UIAction(title: "刪除文字", image: UIImage(systemName: "delete.left"), attributes: .destructive) { [weak self] _ in self?.clearTableCellText() },
+            UIAction(title: "複製一份", image: UIImage(systemName: "plus.square.on.square")) { [weak self] _ in self?.duplicateElement(ref) },
+            UIAction(title: "拷貝", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in self?.copyTableCells() },
+            UIAction(title: "剪下", image: UIImage(systemName: "scissors")) { [weak self] _ in self?.cutTableCells() },
+            UIAction(title: "貼上", image: UIImage(systemName: "doc.on.clipboard"), attributes: canPaste ? [] : .disabled) { [weak self] _ in
+                self?.pasteTableCells()
             },
         ]
-        if single && span.rowSpan * span.colSpan > 1 {
-            items.append(tableAct("取消合併", "square.split.2x2") { t, r in t.unmerge(r.r0, r.c0) })
-        }
-        let fills: [(String, String?)] = [("黃色", "#FFF59DFF"), ("綠色", "#C8E6C9FF"), ("藍色", "#BBDEFBFF"),
-                                          ("粉紅", "#F8BBD0FF"), ("灰色", "#E0E0E0FF"), ("無底色", nil)]
-        items.append(UIMenu(title: "底色", image: UIImage(systemName: "drop.fill"), children: fills.map { name, hex in
-            tableAct(name, swatch: hex) { t, r in t.setFill(r, hex: hex) }
-        }))
-        items.append(UIMenu(title: "斜線", image: UIImage(systemName: "line.diagonal"), children: [
-            tableAct("左上到右下") { t, r in t.setDiagonal(r.r0, r.c0, reverse: false) },
-            tableAct("右上到左下") { t, r in t.setDiagonal(r.r0, r.c0, reverse: true) },
-            tableAct("移除斜線", attributes: .destructive) { t, r in t.setDiagonal(r.r0, r.c0, reverse: nil) },
-        ]))
         return items
     }
 
-    /// 樣式：格線顏色粗細、字級
-    func tableStyleItems() -> [UIMenuElement] {
-        [
-            UIMenu(title: "格線", image: UIImage(systemName: "squareshape.split.3x3"), children: [
-                tableAct("黑色", swatch: "#333333FF") { t, _ in t.lineColorHex = "#333333FF" },
-                tableAct("灰色", swatch: "#9E9E9EFF") { t, _ in t.lineColorHex = "#9E9E9EFF" },
-                tableAct("藍色", swatch: "#1E5BD8FF") { t, _ in t.lineColorHex = "#1E5BD8FF" },
-                tableAct("紅色", swatch: "#D32F2FFF") { t, _ in t.lineColorHex = "#D32F2FFF" },
-                tableAct("加粗", "plus") { t, _ in t.lineWidth = min(t.lineWidth + 0.5, 5) },
-                tableAct("變細", "minus") { t, _ in t.lineWidth = max(t.lineWidth - 0.5, 0.5) },
-            ]),
-            UIMenu(title: "字級", image: UIImage(systemName: "textformat.size"), children: [
-                tableAct("字放大", "plus") { t, _ in t.fontSize = min(t.fontSize + 2, 48) },
-                tableAct("字縮小", "minus") { t, _ in t.fontSize = max(t.fontSize - 2, 8) },
-            ]),
-        ]
+    /// 選取範圍的文字，照相對位置排（合併格蓋住的格子是空字串）
+    func selectedCellTexts() -> [[String]]? {
+        guard let s = selectedTable() else { return nil }
+        let r = s.table.expanded(tableCellSel ?? CellRange((0, 0), (0, 0)))
+        return (r.r0...r.r1).map { row in
+            (r.c0...r.c1).map { col in s.table.isAnchor(row, col) ? s.table.text(row: row, col: col) : "" }
+        }
+    }
+
+    /// 拷貝選取的格子：App 裡記下相對位置；別的 App 拿到的是 Tab 分欄、換行分列的文字
+    func copyTableCells() {
+        guard let grid = selectedCellTexts() else { return }
+        let pb = UIPasteboard.general
+        pb.string = grid.map { $0.joined(separator: "\t") }.joined(separator: "\n")
+        tableCellClipboard = (grid, pb.changeCount)
+    }
+
+    func cutTableCells() {
+        copyTableCells()
+        clearTableCellText()
+    }
+
+    func clearTableCellText() {
+        tableAction { t, r in
+            t.normalizeCells()
+            for row in r.r0...r.r1 { for col in r.c0...r.c1 { t.cells[row][col] = "" } }
+        }
+    }
+
+    /// 貼上：從選取範圍的左上那格開始，照拷貝時的相對位置填（超出表格的不貼）。
+    /// 別的 App 的文字：有 Tab 就當成表格（Tab 分欄、換行分列），沒有就整段放進一格
+    func pasteTableCells() {
+        guard let s = selectedTable() else { return }
+        let pb = UIPasteboard.general
+        let grid: [[String]]
+        if let c = tableCellClipboard, c.changeCount == pb.changeCount {
+            grid = c.cells
+        } else if let text = pb.string, !text.isEmpty {
+            grid = text.contains("\t") ? text.components(separatedBy: "\n").map { $0.components(separatedBy: "\t") } : [[text]]
+        } else {
+            return
+        }
+        let (r0, c0) = tableSelectionAnchor()
+        modifyTable(s.ref) { t in
+            t.normalizeCells()
+            for (i, line) in grid.enumerated() {
+                for (j, text) in line.enumerated() {
+                    let r = r0 + i, c = c0 + j
+                    guard r < t.rows, c < t.cols, t.isAnchor(r, c) else { continue }
+                    t.cells[r][c] = text
+                }
+            }
+        }
+        // 選起貼上的範圍
+        if let t = selectedTable()?.table {
+            let width = grid.map(\.count).max() ?? 1
+            tableCellSel = t.expanded(CellRange((r0, c0), (min(r0 + grid.count - 1, t.rows - 1), min(c0 + width - 1, t.cols - 1))))
+        }
+        updateTableCellChrome()
     }
 
     // MARK: - 分割（不用打字：加減欄數、列數）
@@ -489,5 +490,51 @@ private struct CountField: View {
             if clamped != value { value = clamped }
             if clamped != n { text = "\(clamped)" }
         }
+    }
+}
+
+/// 調色盤：一格一個顏色，點了就套用；clearTitle 不是 nil 時多一個「無」（回傳 nil）
+struct ColorPalettePanel: View {
+    static let colors: [[String]] = [
+        ["#FFFFFFFF", "#F2F2F2FF", "#D9D9D9FF", "#BFBFBFFF", "#808080FF", "#595959FF", "#333333FF", "#000000FF"],
+        ["#FFCDD2FF", "#F8BBD0FF", "#E1BEE7FF", "#C5CAE9FF", "#BBDEFBFF", "#C8E6C9FF", "#FFF59DFF", "#FFE0B2FF"],
+        ["#EF9A9AFF", "#F48FB1FF", "#CE93D8FF", "#9FA8DAFF", "#90CAF9FF", "#A5D6A7FF", "#FFF176FF", "#FFCC80FF"],
+        ["#E53935FF", "#D81B60FF", "#8E24AAFF", "#3949ABFF", "#1E88E5FF", "#43A047FF", "#FDD835FF", "#FB8C00FF"],
+        ["#B71C1CFF", "#880E4FFF", "#4A148CFF", "#1A237EFF", "#0D47A1FF", "#1B5E20FF", "#F57F17FF", "#E65100FF"],
+    ]
+
+    let title: String
+    let selected: String?
+    let clearTitle: String?
+    let onPick: (String?) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title).font(.headline)
+            VStack(spacing: 6) {
+                ForEach(Self.colors, id: \.self) { row in
+                    HStack(spacing: 6) {
+                        ForEach(row, id: \.self) { hex in swatch(hex) }
+                    }
+                }
+            }
+            if let clearTitle {
+                Button { onPick(nil) } label: { Label(clearTitle, systemImage: "circle.slash") }
+                    .buttonStyle(.bordered)
+            }
+        }
+        .padding(16)
+    }
+
+    private func swatch(_ hex: String) -> some View {
+        let on = selected?.uppercased() == hex
+        return Button { onPick(hex) } label: {
+            RoundedRectangle(cornerRadius: 5)
+                .fill(Color(uiColor: UIColor(hex: hex)))
+                .frame(width: 30, height: 30)
+                .overlay(RoundedRectangle(cornerRadius: 5).stroke(on ? Color.accentColor : Color.gray.opacity(0.35), lineWidth: on ? 3 : 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(hex)
     }
 }

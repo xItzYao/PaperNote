@@ -815,22 +815,16 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         switch e.content {
         case let .table(t):
             // 長按的格子不在選取範圍裡：改選這一格
-            let local = p - contentOrigin(pi) - e.frame.origin
-            if let cell = t.cell(at: local) {
+            let cell = t.cell(at: p - contentOrigin(pi) - e.frame.origin)
+            if let cell {
                 if let sel = tableCellSel, cell.row >= sel.r0, cell.row <= sel.r1, cell.col >= sel.c0, cell.col <= sel.c1 {
                 } else {
                     tableCellSel = t.expanded(CellRange(cell, cell))
                     updateTableCellChrome()
                 }
-                items.append(UIAction(title: "編輯文字", image: UIImage(systemName: "keyboard")) { [weak self] _ in
-                    self?.beginTextEditing(ref, cell: cell)
-                })
             }
-            let anchor = TablePanelAnchor.doc(tableSelectionDocRect() ?? CGRect(origin: p, size: .zero))
-            items += tableCellItems(anchor: anchor)
-            // 直接排在選單裡（不要選單裡再一層選單裡再一層）
-            items.append(UIMenu(options: .displayInline, children: tableRowColItems(anchor: anchor)))
-            items.append(UIMenu(options: .displayInline, children: tableStyleItems()))
+            // 表格的長按選單只放文字、拷貝、剪下、貼上（其他功能在工具列；固定位置是左上角的鎖頭）
+            return UIMenu(children: tableCellMenuItems(ref, cell: cell))
         case .text:
             items.append(UIAction(title: "編輯文字", image: UIImage(systemName: "keyboard")) { [weak self] _ in
                 self?.beginTextEditing(ref, cell: nil)
@@ -1066,6 +1060,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         var rect = docFrame(of: e, pageIndex: pi)
         var text = ""
         var fontSize: CGFloat = 16
+        var color = UIColor(hex: TableData.defaultTextColor)
         switch e.content {
         case let .table(t):
             guard let c = cell, c.row < t.rows, c.col < t.cols else { return }
@@ -1073,9 +1068,11 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             rect = CGRect(x: rect.minX + cr.minX, y: rect.minY + cr.minY, width: cr.width, height: max(cr.height, 60))
             text = t.text(row: c.row, col: c.col)
             fontSize = t.fontSize
+            color = UIColor(hex: t.textColor(c.row, c.col) ?? TableData.defaultTextColor)
         case let .text(t):
             text = t.text
             fontSize = t.fontSize
+            color = UIColor(hex: t.colorHex)
             rect.size.height = max(rect.height, 80)
         case .image, .circuit:
             return
@@ -1083,6 +1080,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         let z = canvas.zoomScale
         let tv = EditorTextView(frame: pagesContainer.convert(rect, to: canvas))
         tv.font = .systemFont(ofSize: fontSize * z)
+        tv.textColor = color
         tv.text = text
         tv.backgroundColor = UIColor.white.withAlphaComponent(0.97)
         tv.layer.borderColor = UIColor.systemBlue.cgColor

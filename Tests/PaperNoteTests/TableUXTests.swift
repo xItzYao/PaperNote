@@ -76,6 +76,18 @@ final class TableGestureTests: XCTestCase {
                        "擦掉第 1、2 列中間的橫線（A、B 兩欄）")
     }
 
+    /// 回報的問題：手繪格線的橡皮擦擦不掉斜線
+    func testErasingAlongADiagonalFindsIt() {
+        var m = t
+        m.setDiagonal(1, 1, reverse: false)
+        // B2 是 (100, 40)–(200, 80)：沿著左上到右下的斜線擦
+        let pts = stride(from: CGFloat(0), through: 1, by: 0.1).map { CGPoint(x: 102 + 96 * $0, y: 42 + 36 * $0) }
+        let lines = m.erasedLines(pts, tolerance: 8)
+        XCTAssertEqual(lines.filter(\.diagonal).map(\.range), [CellRange((1, 1), (1, 1))], "擦到 B2 的斜線")
+        XCTAssertTrue(lines.filter { !$0.diagonal }.isEmpty, "格線沒被擦到")
+        XCTAssertTrue(t.erasedLines(pts, tolerance: 8).isEmpty, "沒有斜線的格子：斜著擦什麼都不算")
+    }
+
     // MARK: 合併後把原本的線畫回去
 
     func testRedrawingALineInsideAVerticalMergeRestoresIt() {
@@ -294,8 +306,8 @@ final class TableEditorUXTests: XCTestCase {
         return editor.buildTableRibbon().flatMap(buttons)
     }
 
-    /// 回報的需求：工具列不要分頁、不要選單，一排就好：斜線拿掉（用手繪）、插入列欄拿掉（點標頭的 ＋）、
-    /// 「整個表格」的功能和合併、分割放一起（不寫組名）；底色、格線是顏色框框；線寬、字級是 ⊖ ⊕
+    /// 回報的需求：工具列不要分頁、不要選單，一排就好：斜線拿掉（用手繪）、插入列欄拿掉（點標頭的 ＋）；
+    /// 固定位置拿掉（左上角有鎖頭）；字級、字色在底色旁邊；平均分配、鎖定寬高從長按選單搬來；刪除表格在最右邊，原位置是刪除列、欄
     func testRibbonIsOneShortRow() throws {
         let cell = CGPoint(x: origin.x + 150, y: origin.y + 60)
         editor.updateCellSelection(from: cell, to: cell)
@@ -304,55 +316,101 @@ final class TableEditorUXTests: XCTestCase {
         let bs = ribbonButtons()
         XCTAssertTrue(bs.allSatisfy { $0.menu == nil && !$0.showsMenuAsPrimaryAction }, "沒有要再點開的選單")
         let titles = bs.compactMap { $0.configuration?.title }
-        for t in ["合併", "分割…", "取消合併", "手繪格線", "固定位置", "刪除表格", "底色", "格線"] {
+        for t in ["合併", "分割…", "取消合併", "手繪格線", "刪除列", "刪除欄", "底色", "字色", "重複…",
+                  "平均分配欄寬", "平均分配列高", "鎖定欄寬", "鎖定列高", "格線", "刪除表格"] {
             XCTAssertTrue(titles.contains(t), "工具列要有「\(t)」")
         }
-        for t in ["左上到右下", "移除斜線", "在上方插入列", "在右側插入欄", "黃色", "黑色", "加粗", "字放大", "編輯文字"] {
+        for t in ["固定位置", "解除固定", "左上到右下", "在上方插入列", "黃色", "黑色", "加粗", "字放大", "編輯文字"] {
             XCTAssertFalse(titles.contains(t), "工具列不要「\(t)」")
         }
-        func texts(_ v: UIView) -> [String] { ((v as? UILabel)?.text).map { [$0] } ?? v.subviews.flatMap(texts) }
-        let words = views.flatMap(texts)
-        XCTAssertFalse(words.contains("整個表格"), "不寫組名")
-        XCTAssertTrue(words.contains("線寬"))
-        XCTAssertTrue(words.contains("字級"))
+        XCTAssertEqual(titles.last, "刪除表格", "刪除表格在最右邊")
+        // 依序看工具列：底色、字色、⊖ 字級 ⊕ 排在一起
+        func walk(_ v: UIView) -> [String] {
+            if let b = v as? UIButton { return [b.configuration?.title ?? b.accessibilityLabel ?? ""] }
+            if let l = v as? UILabel { return [l.text ?? ""] }
+            return v.subviews.flatMap(walk)
+        }
+        let order = views.flatMap(walk)
+        XCTAssertTrue(order.contains("線寬"))
+        let fill = try XCTUnwrap(order.firstIndex(of: "底色"))
+        XCTAssertEqual(Array(order[fill...].prefix(5)), ["底色", "字色", "減少字級", "字級", "增加字級"], "字級、字色在底色旁邊")
 
         // ⊖ 線寬 ⊕、⊖ 字級 ⊕
         let width0 = table.lineWidth, font0 = table.fontSize
-        let plusWidth = try XCTUnwrap(bs.first { $0.accessibilityLabel == "增加線寬" })
-        plusWidth.sendActions(for: .touchUpInside)
+        try XCTUnwrap(bs.first { $0.accessibilityLabel == "增加線寬" }).sendActions(for: .touchUpInside)
         XCTAssertEqual(table.lineWidth, width0 + 0.5, accuracy: 0.001)
         try XCTUnwrap(bs.first { $0.accessibilityLabel == "減少字級" }).sendActions(for: .touchUpInside)
         XCTAssertEqual(table.fontSize, font0 - 2, accuracy: 0.001)
     }
 
-    func testFillAndLineColorOpenAColorPicker() throws {
+    private func tapRibbon(_ title: String) throws {
+        let b = try XCTUnwrap(ribbonButtons().first { $0.configuration?.title == title }, "工具列要有「\(title)」")
+        b.sendActions(for: .primaryActionTriggered)
+    }
+
+    func testRibbonLocksAndDeletesTheSelection() throws {
+        editor.updateCellSelection(from: CGPoint(x: origin.x + 50, y: origin.y + 60), to: CGPoint(x: origin.x + 150, y: origin.y + 60))
+        try tapRibbon("鎖定欄寬")
+        XCTAssertEqual(table.lockedCols, [0, 1])
+        try tapRibbon("鎖定列高")
+        XCTAssertEqual(table.lockedRows, [1])
+        try tapRibbon("鎖定欄寬")
+        XCTAssertEqual(table.lockedCols, [], "都鎖住了再按一次：解除")
+        try tapRibbon("刪除列")
+        XCTAssertEqual(table.rows, 2)
+        let c1 = CGPoint(x: origin.x + 250, y: origin.y + 20)
+        editor.updateCellSelection(from: c1, to: c1)
+        try tapRibbon("刪除欄")
+        XCTAssertEqual(table.cols, 2)
+    }
+
+    /// 回報的問題：底色選單打開後點旁邊關掉，頁面就不能捲了（系統的顏色選擇器關掉後，頁面的手勢全部停在失敗）。
+    /// 改用自己的調色盤：和其他表格小視窗一樣，頁面接得到觸碰；點一個顏色就套用並關掉
+    func testFillTextAndLineColorsUseThePalette() throws {
         let cell = CGPoint(x: origin.x + 150, y: origin.y + 60)
         editor.updateCellSelection(from: cell, to: cell)
         func buttons(_ v: UIView) -> [UIButton] { (v as? UIButton).map { [$0] } ?? v.subviews.flatMap(buttons) }
-        func pick(_ title: String, _ color: UIColor) throws {
-            // 用畫面上真的工具列按鈕（顏色選擇器從按鈕跳出，按鈕要在畫面上）
+        func wait(until done: () -> Bool) {
+            let deadline = Date().addingTimeInterval(3)
+            while !done(), Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        }
+        func palette(_ title: String) throws -> UIHostingController<ColorPalettePanel> {
             editor.rebuildSubBar()
             editor.view.layoutIfNeeded()
             let b = try XCTUnwrap(editor.subBarStack.arrangedSubviews.flatMap(buttons).first { $0.configuration?.title == title })
-            XCTAssertNotNil(b.window)
             b.sendActions(for: .primaryActionTriggered)
-            // 顏色選擇器是系統的遠端畫面：等它真的跳出來（關掉時也要等關好，才能打開下一個）
-            func wait(until done: () -> Bool) {
-                let deadline = Date().addingTimeInterval(5)
-                while !done(), Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.1)) }
-            }
-            wait { (editor.presentedViewController as? UIColorPickerViewController).map { !$0.isBeingPresented } ?? false }
-            let picker = try XCTUnwrap(editor.presentedViewController as? UIColorPickerViewController, "按「\(title)」打開顏色選擇器")
-            picker.delegate?.colorPickerViewController?(picker, didSelect: color, continuously: false)
-            editor.dismiss(animated: false)
-            wait { editor.presentedViewController == nil }
+            wait { editor.presentedViewController is UIHostingController<ColorPalettePanel> }
+            let host = try XCTUnwrap(editor.presentedViewController as? UIHostingController<ColorPalettePanel>, "按「\(title)」打開調色盤")
+            let pass = host.popoverPresentationController?.passthroughViews ?? []
+            XCTAssertTrue(pass.contains(editor.canvas), "調色盤打開時頁面還接得到觸碰（點旁邊不會卡住手勢）")
+            return host
         }
-        try pick("底色", UIColor(red: 0, green: 0.5, blue: 0, alpha: 1))
-        XCTAssertEqual(table.fills, [CellFill(row: 1, col: 1, hex: "#008000FF")], "選的顏色套用到選取的格子")
-        try pick("底色", UIColor(red: 0, green: 0.5, blue: 0, alpha: 0))
-        XCTAssertTrue(table.fills.isEmpty, "全透明＝無底色")
-        try pick("格線", UIColor(red: 0, green: 0, blue: 1, alpha: 1))
-        XCTAssertEqual(table.lineColorHex, "#0000FFFF")
+        func closed() { wait { editor.presentedViewController == nil } }
+
+        let fill = try palette("底色")
+        XCTAssertNotNil(fill.rootView.clearTitle, "底色可以選「無」")
+        fill.rootView.onPick("#C8E6C9FF")
+        closed()
+        XCTAssertNil(editor.presentedViewController, "選了就關掉")
+        XCTAssertEqual(table.fills, [CellFill(row: 1, col: 1, hex: "#C8E6C9FF")])
+        try palette("底色").rootView.onPick(nil)
+        closed()
+        XCTAssertTrue(table.fills.isEmpty, "「無」＝無底色")
+
+        try palette("字色").rootView.onPick("#E53935FF")
+        closed()
+        XCTAssertEqual(table.textColor(1, 1), "#E53935FF", "字色套用到選取的格子")
+        XCTAssertNil(table.textColor(0, 0))
+
+        let line = try palette("格線")
+        XCTAssertNil(line.rootView.clearTitle, "格線沒有「無」")
+        line.rootView.onPick("#1E88E5FF")
+        closed()
+        XCTAssertEqual(table.lineColorHex, "#1E88E5FF")
+
+        // 關掉之後頁面的手勢沒有停在失敗
+        let stuck = (editor.canvas.gestureRecognizers ?? []).filter { $0.isEnabled && $0.state == .failed }
+        XCTAssertTrue(stuck.isEmpty, "頁面的手勢沒有停在失敗：\(stuck)")
     }
 
     /// 回報的需求：拖格線要有表格外面的圓點（一直顯示）
@@ -422,15 +480,93 @@ final class TableEditorUXTests: XCTestCase {
         XCTAssertFalse(editTitles.contains { $0.contains("收回") || $0.contains("上一步") }, "在既有表格上畫線也沒有")
     }
 
-    func testLongPressOnACellOffersTheCellActions() {
-        let o = origin
-        let p = CGPoint(x: o.x + 150, y: o.y + 60)
+    /// 回報的需求：長按格子只留編輯文字、刪除文字、複製一份、拷貝、剪下、貼上（其他功能在工具列）
+    func testLongPressOnACellOffersOnlyTextAndClipboard() {
+        let p = CGPoint(x: origin.x + 150, y: origin.y + 60)
         let t = titles(editor.elementMenu(ref, at: p).children)
-        // 列與欄、樣式直接排在長按選單裡（不再包一層「列與欄」子選單）
-        for item in ["合併", "分割…", "底色", "插入", "刪除", "平均分配", "鎖定寬高", "重複…", "格線", "字級"] {
-            XCTAssertTrue(t.contains(item), "長按格子要有「\(item)」")
-        }
+        XCTAssertEqual(t, ["編輯文字", "刪除文字", "複製一份", "拷貝", "剪下", "貼上"])
         XCTAssertEqual(editor.tableCellSel, CellRange((1, 1), (1, 1)), "長按的格子被選起來")
+    }
+
+    private func setTexts(_ texts: [[String]]) {
+        editor.modifyTable(ref) { t in
+            t.normalizeCells()
+            for (r, row) in texts.enumerated() { for (c, s) in row.enumerated() { t.cells[r][c] = s } }
+        }
+    }
+
+    /// 長按 p 的選單裡的那一項（選單項目有沒有、能不能按，再做那一項做的事）
+    private func run(_ title: String, at p: CGPoint) throws {
+        let a = try XCTUnwrap(editor.elementMenu(ref, at: p).children.compactMap { $0 as? UIAction }.first { $0.title == title }, "長按選單要有「\(title)」")
+        XCTAssertFalse(a.attributes.contains(.disabled), "「\(title)」可以按")
+        switch title {
+        case "拷貝": editor.copyTableCells()
+        case "剪下": editor.cutTableCells()
+        case "貼上": editor.pasteTableCells()
+        case "刪除文字": editor.clearTableCellText()
+        default: XCTFail("沒有「\(title)」")
+        }
+    }
+
+    /// 拷貝好幾格再貼上：照相對位置填（從選取範圍的左上那格開始，超出表格的不貼）
+    func testCopyAndPasteCellsKeepsTheirRelativePositions() throws {
+        setTexts([["a", "b", ""], ["c", "d", ""], ["", "", ""]])
+        let a1 = CGPoint(x: origin.x + 50, y: origin.y + 20)
+        editor.updateCellSelection(from: a1, to: CGPoint(x: origin.x + 150, y: origin.y + 60))
+        try run("拷貝", at: a1)
+        XCTAssertEqual(UIPasteboard.general.string, "a\tb\nc\td", "別的 App 拿到 Tab 分欄、換行分列")
+
+        let b3 = CGPoint(x: origin.x + 150, y: origin.y + 100)
+        editor.updateCellSelection(from: b3, to: b3)
+        try run("貼上", at: b3)
+        XCTAssertEqual(table.cells, [["a", "b", ""], ["c", "d", ""], ["", "a", "b"]], "從 B3 開始照相對位置貼（第 4 列超出表格不貼）")
+        XCTAssertEqual(editor.tableCellSel, CellRange((2, 1), (2, 2)), "選起貼上的範圍")
+    }
+
+    func testCutClearsTheCellsAndDeleteTextKeepsTheClipboard() throws {
+        setTexts([["a", "b", "c"], ["", "", ""], ["", "", ""]])
+        let a1 = CGPoint(x: origin.x + 50, y: origin.y + 20)
+        editor.updateCellSelection(from: a1, to: CGPoint(x: origin.x + 150, y: origin.y + 20))
+        try run("剪下", at: a1)
+        XCTAssertEqual(table.cells[0], ["", "", "c"], "剪下：清掉選取格子的字")
+        let a3 = CGPoint(x: origin.x + 50, y: origin.y + 100)
+        editor.updateCellSelection(from: a3, to: a3)
+        try run("貼上", at: a3)
+        XCTAssertEqual(table.cells[2], ["a", "b", ""])
+
+        editor.updateCellSelection(from: a3, to: a3)
+        try run("刪除文字", at: a3)
+        XCTAssertEqual(table.cells[2], ["", "b", ""], "刪除文字只清選取的格子")
+        XCTAssertEqual(UIPasteboard.general.string, "a\tb", "刪除文字不動剪貼簿")
+    }
+
+    /// 別的 App 拷貝的文字：有 Tab 當表格貼，沒有就整段放進一格
+    func testPastingTextFromOtherApps() throws {
+        let b1 = CGPoint(x: origin.x + 150, y: origin.y + 20)
+        editor.updateCellSelection(from: b1, to: b1)
+        UIPasteboard.general.string = "x\ty\nz"
+        try run("貼上", at: b1)
+        XCTAssertEqual(table.text(row: 0, col: 1), "x")
+        XCTAssertEqual(table.text(row: 0, col: 2), "y")
+        XCTAssertEqual(table.text(row: 1, col: 1), "z")
+        let a3 = CGPoint(x: origin.x + 50, y: origin.y + 100)
+        editor.updateCellSelection(from: a3, to: a3)
+        UIPasteboard.general.string = "一整段\n兩行"
+        try run("貼上", at: a3)
+        XCTAssertEqual(table.text(row: 2, col: 0), "一整段\n兩行")
+    }
+
+    /// 回報的需求：文字顏色。字色跟著格子走（插入列、合併）
+    func testTextColorFollowsTheCell() throws {
+        let a1 = CGPoint(x: origin.x + 50, y: origin.y + 20)
+        editor.updateCellSelection(from: a1, to: a1)
+        editor.tableAction { t, r in t.setTextColor(r, hex: "#1E88E5FF") }
+        XCTAssertEqual(table.textColor(0, 0), "#1E88E5FF")
+        editor.modifyTable(ref) { $0.insertRow(at: 0) }
+        XCTAssertEqual(table.textColor(1, 0), "#1E88E5FF", "插入列之後字色跟著格子走")
+        XCTAssertNil(table.textColor(0, 0))
+        editor.modifyTable(ref) { $0.mergeCells(CellRange((1, 0), (1, 1))) }
+        XCTAssertEqual(table.textColor(1, 1), "#1E88E5FF", "合併格的字色看左上那格")
     }
 
     // MARK: 不用打字
@@ -504,7 +640,7 @@ final class TableEditorUXTests: XCTestCase {
         XCTAssertNil(editor.pendingMenu, "第一下只選格子")
         editor.handleTap(FakeTap(p))
         let t = titles(try XCTUnwrap(editor.pendingMenu, "再點一下選起來的格子打開選單").children)
-        XCTAssertTrue(t.contains("合併"))
+        XCTAssertTrue(t.contains("拷貝"))
         editor.handleTap(FakeTap(CGPoint(x: origin.x + 50, y: origin.y + 100)))
         XCTAssertEqual(editor.tableCellSel, CellRange((2, 0), (2, 0)), "點別格：改選那一格")
     }

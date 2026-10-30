@@ -37,13 +37,13 @@ struct HelpView: View {
     ]
 
     private let table: [Item] = [
-        Item(symbol: "hand.tap", title: "選取儲存格", detail: "點一格選取，在表格裡拖曳可以選取多格；再點一下選起來的格子打開選單。"),
-        Item(symbol: "rectangle.split.3x1", title: "表格工具列", detail: "一排有字的按鈕：合併、分割、取消合併、手繪格線、固定位置、刪除表格、重複、平均分配。「底色」「格線」的顏色框框點一下選顏色（底色調成全透明＝無底色）；⊖ 線寬 ⊕、⊖ 字級 ⊕ 調整整個表格。斜線用手繪格線畫。左上角的鎖頭可以固定表格位置。"),
+        Item(symbol: "hand.tap", title: "選取儲存格", detail: "點一格選取，在表格裡拖曳可以選取多格；再點一下選起來的格子（或長按）打開選單：編輯文字、刪除文字、複製一份、拷貝、剪下、貼上。拷貝好幾格再貼上會照原本的相對位置填入。"),
+        Item(symbol: "rectangle.split.3x1", title: "表格工具列", detail: "一排有字的按鈕：合併、分割、取消合併、手繪格線、刪除列、刪除欄｜底色、字色、⊖ 字級 ⊕｜重複、平均分配欄寬／列高、鎖定欄寬／列高（再按一次解除）｜格線、⊖ 線寬 ⊕｜最右邊是刪除表格。「底色」「字色」「格線」的顏色框框點一下打開調色盤（底色可以選「無底色」）。斜線用手繪格線畫。左上角的鎖頭可以固定表格位置。"),
         Item(symbol: "arrow.up.and.down.and.arrow.left.and.right", title: "移動、刪除表格", detail: "拖曳左上角的青綠色按鈕或表格外框移動，表格上的手寫字會一起移動；表格工具列的「刪除表格」刪除整個表格（可以復原）。"),
         Item(symbol: "plus.circle", title: "＋ 插入列／欄", detail: "點標頭選整欄（整列）後，兩側會出現 ＋，點了在那一邊插入一欄（列）。"),
         Item(symbol: "arrow.left.and.right", title: "調整欄寬／列高", detail: "拖表格下方、右邊的藍色圓點（每條格線一個），或拖標頭之間的分界、直接拖格線。"),
         Item(symbol: "rectangle.compress.vertical", title: "合併／分割", detail: "選取多格後按合併；分割可以把一格切成左右或上下兩格。"),
-        Item(symbol: "pencil.and.outline", title: "手繪格線", detail: "在表格上畫橫線、直線會切開儲存格，畫斜線會加上斜線。"),
+        Item(symbol: "pencil.and.outline", title: "手繪格線", detail: "在表格上畫橫線、直線會切開儲存格，畫斜線會加上斜線；切到「擦線」沿著斜線擦可以拿掉斜線。"),
         Item(symbol: "keyboard", title: "輸入文字", detail: "點兩下儲存格，或按鍵盤按鈕。"),
     ]
 
@@ -54,8 +54,8 @@ struct HelpView: View {
                     ForEach(tools) { row($0) }
                 }
                 Section("表格（選取表格後第二列會出現表格工具）") {
-                    row(Item(symbol: "hand.tap", title: "不用找按鈕", detail: "點兩下格子打字；點表格上方、左邊的標頭選整欄整列（拖曳選好幾欄），再點一下（或長按）標頭插入、刪除、平均分配、鎖定；再點一下選起來的格子（或長按）合併、分割、底色。拖選取範圍右下角的藍點往下或往右重複，做大表格。"))
-                    row(Item(symbol: "pencil.and.outline", title: "用筆改表格", detail: "按「手繪格線」後：在格子裡畫線切開、畫斜線；在格線上來回塗掉、或切到「擦線」沿著格線擦（會擦掉的線先變淡；Pencil 筆身點兩下切換畫線／擦線）＝合併兩邊的格子；在合併的格子上沿著原本的格線畫＝把那條線接回去；在表格外面靠近邊的地方畫一條線＝在那裡加一列或一欄。"))
+                    row(Item(symbol: "hand.tap", title: "不用找按鈕", detail: "點兩下格子打字；點表格上方、左邊的標頭選整欄整列（拖曳選好幾欄），再點一下（或長按）標頭插入、刪除列欄；合併、分割、底色、平均分配、鎖定在工具列。拖選取範圍右下角的藍點往下或往右重複，做大表格。"))
+                    row(Item(symbol: "pencil.and.outline", title: "用筆改表格", detail: "按「手繪格線」後：在格子裡畫線切開、畫斜線；在格線上來回塗掉、或切到「擦線」沿著格線擦（會擦掉的線先變淡；Pencil 筆身點兩下切換畫線／擦線）＝合併兩邊的格子，沿著斜線擦＝拿掉斜線；在合併的格子上沿著原本的格線畫＝把那條線接回去；在表格外面靠近邊的地方畫一條線＝在那裡加一列或一欄。"))
                     ForEach(table) { row($0) }
                 }
                 Section("其他") {

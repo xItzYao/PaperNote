@@ -68,9 +68,7 @@ final class ToolbarMenuTests: XCTestCase {
         let ref = try XCTUnwrap(editor.insertElement(.table(t), size: t.size, at: CGPoint(x: o.x + 200, y: o.y + 200)))
         let cell = CGPoint(x: o.x + 200, y: o.y + 200)
         XCTAssertLessThanOrEqual(editor.elementMenu(ref, at: cell).children.map(depth).max() ?? 0, 1, "長按表格格子的選單")
-        let anchor = TablePanelAnchor.doc(CGRect(origin: cell, size: .zero))
-        XCTAssertLessThanOrEqual((editor.tableRowColItems(anchor: anchor) + editor.tableCellItems(anchor: anchor) + editor.tableStyleItems()).map(depth).max() ?? 0, 1,
-                                 "表格工具列按鈕的選單")
+        XCTAssertLessThanOrEqual(editor.tableRowColItems().map(depth).max() ?? 0, 1, "表格標頭的選單")
     }
 
     func testPageMenuHasNoDuplicates() {

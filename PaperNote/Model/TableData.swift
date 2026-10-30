@@ -68,6 +68,8 @@ struct TableData: Codable, Equatable {
     var merges: [CellMerge] = []
     var diagonals: [CellDiagonal] = []
     var fills: [CellFill] = []
+    /// 文字顏色（沒有記的格子是預設的深灰）
+    var textColors: [CellFill] = []
     /// 鎖定高度的列、鎖定寬度的欄：縮放表格、平均分配時不會變
     var lockedRows: [Int] = []
     var lockedCols: [Int] = []
@@ -77,7 +79,7 @@ struct TableData: Codable, Equatable {
     static let minCell: CGFloat = 24
 
     enum CodingKeys: String, CodingKey {
-        case colWidths, rowHeights, cells, lineColorHex, lineWidth, fontSize, merges, diagonals, fills
+        case colWidths, rowHeights, cells, lineColorHex, lineWidth, fontSize, merges, diagonals, fills, textColors
         case lockedRows, lockedCols, repeatGroup
     }
 
@@ -214,7 +216,7 @@ struct TableData: Codable, Equatable {
         merges.removeAll { $0.row < 0 || $0.col < 0 || $0.row + $0.rowSpan > rowCount || $0.col + $0.colSpan > colCount
             || $0.rowSpan * $0.colSpan <= 1 }
         diagonals.removeAll { $0.row >= rowCount || $0.col >= colCount }
-        fills.removeAll { $0.row >= rowCount || $0.col >= colCount }
+        mapCellColors { $0.row < rowCount && $0.col < colCount ? $0 : nil }
         lockedRows = Array(Set(lockedRows.filter { $0 >= 0 && $0 < rowCount })).sorted()
         lockedCols = Array(Set(lockedCols.filter { $0 >= 0 && $0 < colCount })).sorted()
         if let g = repeatGroup, g.span.lowerBound < 0 || g.span.upperBound > (g.axis == .rows ? rowCount : colCount) { repeatGroup = nil }
@@ -231,7 +233,11 @@ struct TableData: Codable, Equatable {
             if merges[i].row >= r { merges[i].row += 1 } else if merges[i].row + merges[i].rowSpan > r { merges[i].rowSpan += 1 }
         }
         for i in diagonals.indices where diagonals[i].row >= r { diagonals[i].row += 1 }
-        for i in fills.indices where fills[i].row >= r { fills[i].row += 1 }
+        mapCellColors { f in
+            var f = f
+            if f.row >= r { f.row += 1 }
+            return f
+        }
         lockedRows = lockedRows.map { $0 >= r ? $0 + 1 : $0 }
         if var g = repeatGroup, g.axis == .rows {
             // 插在整組前面：整組往後移；插在組裡面：組的結構變了，不再記
@@ -248,7 +254,11 @@ struct TableData: Codable, Equatable {
             if merges[i].col >= c { merges[i].col += 1 } else if merges[i].col + merges[i].colSpan > c { merges[i].colSpan += 1 }
         }
         for i in diagonals.indices where diagonals[i].col >= c { diagonals[i].col += 1 }
-        for i in fills.indices where fills[i].col >= c { fills[i].col += 1 }
+        mapCellColors { f in
+            var f = f
+            if f.col >= c { f.col += 1 }
+            return f
+        }
         lockedCols = lockedCols.map { $0 >= c ? $0 + 1 : $0 }
         if var g = repeatGroup, g.axis == .cols {
             if c <= g.span.lowerBound { g.start += 1; repeatGroup = g } else if c < g.span.upperBound { repeatGroup = nil }
@@ -271,7 +281,7 @@ struct TableData: Codable, Equatable {
             if d.row > r { d.row -= 1 }
             return d
         }
-        fills = fills.compactMap { f in
+        mapCellColors { f in
             var f = f
             if f.row == r { return nil }
             if f.row > r { f.row -= 1 }
@@ -299,7 +309,7 @@ struct TableData: Codable, Equatable {
             if d.col > c { d.col -= 1 }
             return d
         }
-        fills = fills.compactMap { f in
+        mapCellColors { f in
             var f = f
             if f.col == c { return nil }
             if f.col > c { f.col -= 1 }
@@ -329,7 +339,7 @@ struct TableData: Codable, Equatable {
         merges.removeAll { $0.intersects(r0: r.r0, c0: r.c0, r1: r.r1, c1: r.c1) }
         merges.append(CellMerge(row: r.r0, col: r.c0, rowSpan: r.r1 - r.r0 + 1, colSpan: r.c1 - r.c0 + 1))
         diagonals.removeAll { $0.row >= r.r0 && $0.row <= r.r1 && $0.col >= r.c0 && $0.col <= r.c1 && !($0.row == r.r0 && $0.col == r.c0) }
-        fills.removeAll { $0.row >= r.r0 && $0.row <= r.r1 && $0.col >= r.c0 && $0.col <= r.c1 && !($0.row == r.r0 && $0.col == r.c0) }
+        mapCellColors { $0.row >= r.r0 && $0.row <= r.r1 && $0.col >= r.c0 && $0.col <= r.c1 && !($0.row == r.r0 && $0.col == r.c0) ? nil : $0 }
     }
 
     mutating func unmerge(_ r: Int, _ c: Int) {
@@ -563,6 +573,34 @@ struct TableData: Codable, Equatable {
         return diagonals.first { $0.row == a.row && $0.col == a.col }
     }
 
+    /// 底色、文字顏色都是記在格子上的顏色：列欄增減、合併時一起調整（回傳 nil＝拿掉）
+    mutating func mapCellColors(_ f: (CellFill) -> CellFill?) {
+        fills = fills.compactMap(f)
+        textColors = textColors.compactMap(f)
+    }
+
+    mutating func setTextColor(_ range: CellRange, hex: String?) {
+        for r in range.r0...range.r1 {
+            for c in range.c0...range.c1 where isAnchor(r, c) {
+                textColors.removeAll { $0.row == r && $0.col == c }
+                if let hex { textColors.append(CellFill(row: r, col: c, hex: hex)) }
+            }
+        }
+    }
+
+    /// 這格（合併格看左上角）的文字顏色、底色；nil＝預設
+    func textColor(_ r: Int, _ c: Int) -> String? {
+        let a = anchor(r, c)
+        return textColors.first { $0.row == a.row && $0.col == a.col }?.hex
+    }
+
+    func fill(_ r: Int, _ c: Int) -> String? {
+        let a = anchor(r, c)
+        return fills.first { $0.row == a.row && $0.col == a.col }?.hex
+    }
+
+    static let defaultTextColor = "#1A1A1AFF"
+
     mutating func setFill(_ range: CellRange, hex: String?) {
         for r in range.r0...range.r1 {
             for c in range.c0...range.c1 where isAnchor(r, c) {
@@ -666,25 +704,27 @@ struct TableData: Codable, Equatable {
         if axis == .rows {
             let heights = Array(rowHeights[src]), texts = Array(cells[src])
             let ms = merges.filter { $0.row >= src.lowerBound && $0.row + $0.rowSpan <= src.upperBound }
-            let ds = diagonals.filter { src.contains($0.row) }, fs = fills.filter { src.contains($0.row) }
+            let ds = diagonals.filter { src.contains($0.row) }, fs = fills.filter { src.contains($0.row) }, ts = textColors.filter { src.contains($0.row) }
             let locks = lockedRows.filter { src.contains($0) }
             for (i, h) in heights.enumerated() { insertRow(at: dst + i, height: h) }
             for i in texts.indices { cells[dst + i] = texts[i] }
             merges += ms.map { var m = $0; m.row += shift; return m }
             diagonals += ds.map { var d = $0; d.row += shift; return d }
             fills += fs.map { var f = $0; f.row += shift; return f }
+            textColors += ts.map { var f = $0; f.row += shift; return f }
             lockedRows += locks.map { $0 + shift }
         } else {
             let widths = Array(colWidths[src])
             let texts = cells.map { Array($0[src]) }
             let ms = merges.filter { $0.col >= src.lowerBound && $0.col + $0.colSpan <= src.upperBound }
-            let ds = diagonals.filter { src.contains($0.col) }, fs = fills.filter { src.contains($0.col) }
+            let ds = diagonals.filter { src.contains($0.col) }, fs = fills.filter { src.contains($0.col) }, ts = textColors.filter { src.contains($0.col) }
             let locks = lockedCols.filter { src.contains($0) }
             for (i, w) in widths.enumerated() { insertColumn(at: dst + i, width: w) }
             for r in texts.indices { for i in texts[r].indices { cells[r][dst + i] = texts[r][i] } }
             merges += ms.map { var m = $0; m.col += shift; return m }
             diagonals += ds.map { var d = $0; d.col += shift; return d }
             fills += fs.map { var f = $0; f.col += shift; return f }
+            textColors += ts.map { var f = $0; f.col += shift; return f }
             lockedCols += locks.map { $0 + shift }
         }
     }
@@ -703,6 +743,7 @@ extension TableData {
         merges = try c.decodeIfPresent([CellMerge].self, forKey: .merges) ?? []
         diagonals = try c.decodeIfPresent([CellDiagonal].self, forKey: .diagonals) ?? []
         fills = try c.decodeIfPresent([CellFill].self, forKey: .fills) ?? []
+        textColors = try c.decodeIfPresent([CellFill].self, forKey: .textColors) ?? []
         lockedRows = try c.decodeIfPresent([Int].self, forKey: .lockedRows) ?? []
         lockedCols = try c.decodeIfPresent([Int].self, forKey: .lockedCols) ?? []
         repeatGroup = try c.decodeIfPresent(TableRepeat.self, forKey: .repeatGroup)
@@ -714,6 +755,8 @@ struct ErasedLine: Equatable {
     var range: CellRange
     var from: CGPoint
     var to: CGPoint
+    /// 擦到的是 range 那格的斜線（拿掉斜線，不是合併）
+    var diagonal = false
 }
 
 // MARK: - 手繪格線的手勢（不用找按鈕）
@@ -739,7 +782,7 @@ extension TableData {
         return outsideLine(pts)
     }
 
-    /// 表格「擦線」：沿著格線擦（離線 tolerance 以內、擦過那段線的 coverage 以上）的那幾段線。
+    /// 表格「擦線」：沿著格線或斜線擦（離線 tolerance 以內、擦過那段線的 coverage 以上）的那幾段線。
     /// 只是穿過格線不算
     func erasedLines(_ pts: [CGPoint], tolerance tol: CGFloat, coverage: CGFloat = 0.5) -> [ErasedLine] {
         guard pts.count >= 2, rows > 0, cols > 0 else { return [] }
@@ -775,6 +818,22 @@ extension TableData {
                 if let lo = xs.min(), let hi = xs.max(), hi - lo >= (x1 - x0) * coverage {
                     add(CellRange(anchor(r - 1, c), anchor(r, c)), CGPoint(x: x0, y: y), CGPoint(x: x1, y: y))
                 }
+            }
+        }
+        // 斜線：離斜線夠近的點，投影到斜線上涵蓋的長度
+        for d in diagonals where d.row < rows && d.col < cols {
+            let cr = cellRect(row: d.row, col: d.col)
+            let a = d.reverse ? CGPoint(x: cr.maxX, y: cr.minY) : CGPoint(x: cr.minX, y: cr.minY)
+            let b = d.reverse ? CGPoint(x: cr.minX, y: cr.maxY) : CGPoint(x: cr.maxX, y: cr.maxY)
+            let dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy
+            guard len2 > 0 else { continue }
+            let ts = dense.compactMap { p -> CGFloat? in
+                let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2
+                guard t >= 0, t <= 1 else { return nil }
+                return hypot(a.x + dx * t - p.x, a.y + dy * t - p.y) <= tol ? t : nil
+            }
+            if let lo = ts.min(), let hi = ts.max(), hi - lo >= coverage {
+                out.append(ErasedLine(range: CellRange((d.row, d.col), (d.row, d.col)), from: a, to: b, diagonal: true))
             }
         }
         return out

@@ -263,8 +263,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var eraserTracker: TouchTracker!
     /// 套索改顏色時的自訂顏色選擇器
     var lassoColorPicker: ColorPickerRelay?
-    /// 表格工具列顏色框框打開的顏色選擇器
-    var colorPickerRelay: ColorPickerRelay?
+    /// 表格格子的拷貝（照相對位置）；剪貼簿換過內容就不算
+    var tableCellClipboard: (cells: [[String]], changeCount: Int)?
     /// 停住變直線／圖形（見 HoldToShape.swift）
     lazy var holdToShape = HoldToShapeController(editor: self)
     var editMenu: UIEditMenuInteraction!
