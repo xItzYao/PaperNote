@@ -43,7 +43,7 @@ struct HelpView: View {
         Item(symbol: "plus.circle", title: "＋ 插入列／欄", detail: "點標頭選整欄（整列）後，兩側會出現 ＋，點了在那一邊插入一欄（列）。"),
         Item(symbol: "arrow.left.and.right", title: "調整欄寬／列高", detail: "拖表格下方、右邊的藍色圓點（每條格線一個），或拖標頭之間的分界、直接拖格線。"),
         Item(symbol: "rectangle.compress.vertical", title: "合併／分割", detail: "選取多格後按合併；分割可以把一格切成左右或上下兩格。"),
-        Item(symbol: "pencil.and.outline", title: "手繪格線", detail: "在表格上畫橫線、直線會切開儲存格，畫斜線會加上斜線；切到「擦線」沿著斜線擦可以拿掉斜線。"),
+        Item(symbol: "pencil.and.outline", title: "手繪格線", detail: "在表格上畫橫線、直線會切開儲存格，畫斜線會加上斜線；切到「擦線」沿著斜線擦可以拿掉斜線。選到表格時 Pencil 筆身點兩下直接進入手繪格線，之後點兩下切換畫線／擦線，按「完成」結束。"),
         Item(symbol: "keyboard", title: "輸入文字", detail: "點兩下儲存格，或按鍵盤按鈕。"),
     ]
 

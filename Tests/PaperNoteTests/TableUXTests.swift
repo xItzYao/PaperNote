@@ -260,6 +260,23 @@ final class TableEditorUXTests: XCTestCase {
         XCTAssertFalse(editor.tableEraseLines, "再點兩下切回畫線")
     }
 
+    /// 回報的需求：選到表格時 Pencil 筆身點兩下直接進入手繪格線，之後點兩下切換畫線／擦線
+    func testPencilDoubleTapOnASelectedTableStartsHandDrawing() throws {
+        try XCTSkipIf(UIPencilInteraction.preferredTapAction == .ignore, "系統設定成點兩下不做事")
+        editor.setTool(.select)
+        editor.select(ref)
+        editor.tableEraseLines = true
+        editor.handlePencilDoubleTap()
+        XCTAssertEqual(editor.tool, .tableDraw, "進入手繪格線，不是切到橡皮擦")
+        XCTAssertEqual(editor.tableDrawTarget, ref)
+        XCTAssertFalse(editor.tableEraseLines, "從畫線開始")
+        editor.handlePencilDoubleTap()
+        XCTAssertTrue(editor.tableEraseLines, "再點兩下：擦線")
+        editor.handlePencilDoubleTap()
+        XCTAssertFalse(editor.tableEraseLines, "再點兩下：畫線")
+        XCTAssertEqual(editor.tool, .tableDraw)
+    }
+
     func testEraserToolDoesNotTouchTables() {
         // 真的橡皮擦只擦筆跡，不會動表格
         editor.setTool(.eraser)

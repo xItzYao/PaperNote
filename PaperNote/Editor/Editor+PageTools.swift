@@ -350,6 +350,12 @@ extension NotebookViewController: UIPencilInteractionDelegate {
             toggleTableEraseLines()
             return
         }
+        // 選到表格（表格工具列）：直接進入手繪格線，之後點兩下切換畫線／擦線，按「完成」結束
+        if tool == .select, selectedTable() != nil {
+            beginTableHandDraw()
+            showToast("手繪格線：筆身點兩下切換畫線／擦線，按「完成」結束")
+            return
+        }
         // 電路工具：在接線和原本的模式（選取或放置元件）之間切換
         if tool == .circuit {
             if circuitMode == .wire {

@@ -58,6 +58,16 @@ extension NotebookViewController {
         updateTableDraftChrome()
     }
 
+    /// 選到的表格進入手繪格線模式（從畫線開始）：工具列的「手繪格線」、Pencil 筆身點兩下
+    func beginTableHandDraw() {
+        guard let s = selectedTable() else { return }
+        setTool(.tableDraw)
+        tableDrawTarget = s.ref
+        tableEraseLines = false
+        rebuildSubBar()
+        updateTableDraftChrome()
+    }
+
     /// 手繪格線模式：畫線 ↔ 擦線（工具列的切換和 Pencil 筆身點兩下都用這個）
     func toggleTableEraseLines() {
         tableEraseLines.toggle()
@@ -220,11 +230,7 @@ extension NotebookViewController {
             UIAction(title: "分割…", image: TableIcons.split) { [weak self] _ in self?.presentSplitPanel(anchor: .selection) },
             tableAct("取消合併", "square.split.2x2") { t, r in t.unmerge(r.r0, r.c0) },
             UIAction(title: "手繪格線", image: UIImage(systemName: "pencil.and.outline")) { [weak self] _ in
-                guard let self, let s = self.selectedTable() else { return }
-                self.setTool(.tableDraw)
-                self.tableDrawTarget = s.ref
-                self.rebuildSubBar()
-                self.updateTableDraftChrome()
+                self?.beginTableHandDraw()
             },
             tableAct("刪除列", "minus.rectangle", attributes: .destructive) { t, r in for row in (r.r0...r.r1).reversed() { t.removeRow(row) } },
             tableAct("刪除欄", "minus.rectangle.portrait", attributes: .destructive) { t, r in for col in (r.c0...r.c1).reversed() { t.removeColumn(col) } },
