@@ -121,7 +121,8 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         toolPan.isEnabled = tool.usesToolPan
         // 筆／橡皮擦／套索模式下，手指點物件也能直接選取（見 shouldReceive）
         tapGesture.isEnabled = true
-        doubleTapGesture.isEnabled = tool == .select
+        // 電路工具：點兩下導線輸入名稱
+        doubleTapGesture.isEnabled = tool == .select || tool == .circuit
         pencilPointTracker.isEnabled = true
         holdRecognizer.isEnabled = tool.isInking && settings.shapeSnap && !customInkActive
         inkRecognizer.isEnabled = customInkActive
@@ -138,7 +139,8 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             case .capture, .textSelect, .tableDraw:
                 return true
             case .select, .image:
-                return editingTextView == nil && dragTarget(at: g.location(in: pagesContainer)) != nil
+                // 用手指剛碰到的位置判斷：拖曳要移動一小段才開始，那時手指已經離開格線了
+                return editingTextView == nil && dragTarget(at: panTouchDownPoint(g)) != nil
             case .pageResize:
                 return pageHandle(at: g.location(in: pagesContainer)) != nil
             case .lasso:
@@ -313,7 +315,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         switch tool {
         case .capture: handleCapturePan(g, p)
         case .textSelect: handleTextPan(g, p)
-        case .select, .image: handleElementPan(g, p)
+        case .select, .image: handleElementPan(g, g.state == .began ? panTouchDownPoint(g) : p)
         case .pageResize: handlePageResizePan(g, p)
         case .lasso: handleLassoPan(g, g.state == .began ? panTouchDownPoint(g) : p)
         case .tableDraw: handleTableDrawPan(g, p)
@@ -410,8 +412,12 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
     }
 
     @objc func handleDoubleTap(_ g: UITapGestureRecognizer) {
-        guard tool == .select else { return }
         let p = g.location(in: pagesContainer)
+        if tool == .circuit {
+            handleCircuitDoubleTap(at: p)
+            return
+        }
+        guard tool == .select else { return }
         guard let hit = hitElement(at: p), case let (pi, ei)? = locate(hit) else { return }
         select(hit)
         let e = pages[pi].elements[ei]
@@ -432,6 +438,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
     func editCircuit(_ ref: ElementRef) {
         setTool(.circuit)
         circuitTarget = ref
+        rebuildSubBar()
         updateCircuitChrome()
     }
 
@@ -618,7 +625,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         case .began:
             guard case let (ref, kind)? = dragTarget(at: p), case let (pi, ei)? = locate(ref) else { return }
             dragState = DragState(ref: ref, kind: kind, start: p, original: pages[pi].elements[ei])
-            if case .move = kind, pages[pi].elements[ei].isTable { beginTableCarry(ref) }
+            if case .move = kind, pages[pi].elements[ei].isTable || pages[pi].elements[ei].isCircuit { beginInkCarry(ref) }
         case .changed:
             guard let d = dragState, case let (pi, ei)? = locate(d.ref) else { return }
             if case .cells = d.kind {
@@ -640,7 +647,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             let e = draggedElement(d, to: p)
             session.document.pages[pi].elements[ei] = e
             pageViews[pages[pi].id]?.liveUpdate(e)
-            moveTableCarry(by: e.frame.origin - d.original.frame.origin)
+            moveInkCarry(by: e.frame.origin - d.original.frame.origin)
             updateSelectionChrome()
         case .ended:
             if let d = dragState, case .cells = d.kind {
@@ -673,7 +680,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
                 session.document.pages[pi].elements[ei] = d.original
                 pageViews[pages[pi].id]?.liveUpdate(d.original)
             }
-            cancelTableCarry()
+            cancelInkCarry()
             dragState = nil
             updateSelectionChrome()
         }
@@ -763,31 +770,31 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         var target = pi
         if case .move = d.kind, let j = pageIndex(containing: toFrame.center), j != pi { target = j }
 
-        // 表格移動時，表格上的手寫字（兩種筆）一起移動；表格和字算同一步，復原一次就全部回去
-        var movingTable = false
-        if case .move = d.kind, e.isTable { movingTable = true }
-        if movingTable {
+        // 表格、電路圖移動時，上面的手寫字（兩種筆）一起移動；物件和字算同一步，復原一次就全部回去
+        var carrying = false
+        if case .move = d.kind, e.isTable || e.isCircuit { carrying = true }
+        if carrying {
             let delta = toFrame.origin - fromFrame.origin
             if delta == .zero && target == pi {
-                cancelTableCarry()
+                cancelInkCarry()
             } else {
-                let carry = tableCarry
-                tableCarry = nil
+                let carry = inkCarry
+                inkCarry = nil
                 let pageIDs = [pages[pi].id, pages[target].id] + (carry?.ink.map(\.pageID) ?? [])
                 recordEdit(drawing: carry.flatMap { $0.strokeIndices.isEmpty ? nil : $0.original }, pageIDs: Array(Set(pageIDs)))
-                if let carry { finishTableCarry(carry, by: delta, toPage: target) }
+                if let carry { finishInkCarry(carry, by: delta, toPage: target) }
             }
         }
 
         if target == pi {
-            updatePage(pi, undoable: !movingTable) { $0.elements[ei] = e }
+            updatePage(pi, undoable: !carrying) { $0.elements[ei] = e }
         } else {
             let no = contentOrigin(target)
             e.frame.origin = CGPoint(x: toFrame.minX - no.x, y: toFrame.minY - no.y)
             e.snapCircuitToGrid()
             let moved = e
-            updatePage(pi, undoable: !movingTable) { $0.elements.removeAll { $0.id == moved.id } }
-            updatePage(target, undoable: !movingTable) { $0.elements.append(moved) }
+            updatePage(pi, undoable: !carrying) { $0.elements.removeAll { $0.id == moved.id } }
+            updatePage(target, undoable: !carrying) { $0.elements.append(moved) }
             selected = ElementRef(pageID: pages[target].id, elementID: e.id)
         }
         updateSelectionChrome()
@@ -843,6 +850,9 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         case .circuit:
             items.append(UIAction(title: "編輯電路", image: UIImage(systemName: "bolt")) { [weak self] _ in
                 self?.editCircuit(ref)
+            })
+            items.append(UIAction(title: "匯出 SVG", image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
+                self?.exportCircuitSVG(ref)
             })
         }
         items.append(UIMenu(options: .displayInline, children: [

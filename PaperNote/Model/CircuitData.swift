@@ -104,6 +104,36 @@ struct CircuitWire: Codable, Equatable, Identifiable {
     var id = UUID()
     /// 折線，每一段都是水平或垂直
     var points: [CGPoint]
+    /// 導線名稱（例如 VIN、CLK）；nil＝沒有名稱
+    var label: String?
+    /// 名稱的中心（電路圖內的座標），可以拖到別的地方
+    var labelPosition: CGPoint?
+
+    /// 字的大小（電路圖內的座標，和元件符號一起縮放）
+    static let labelFontSize: CGFloat = 16
+
+    /// 名稱大約佔的範圍（不用 UIKit 量字：英數字算 0.6 個字寬，中文算 1 個）
+    var labelBounds: CGRect? {
+        guard let text = label, !text.isEmpty, let c = labelPosition else { return nil }
+        let f = Self.labelFontSize
+        let w = text.unicodeScalars.reduce(CGFloat(0)) { $0 + ($1.isASCII ? 0.6 : 1) * f }
+        let h = f * 1.25
+        return CGRect(x: c.x - w / 2, y: c.y - h / 2, width: w, height: h)
+    }
+
+    /// 新名稱放的位置：離 p 最近的那一段旁邊（橫的放上面、直的放右邊）
+    static func defaultLabelPosition(on pts: [CGPoint], near p: CGPoint) -> CGPoint {
+        guard pts.count >= 2 else { return p }
+        var best = (d: CGFloat.greatestFiniteMagnitude, q: pts[0], horizontal: true)
+        for i in 0..<(pts.count - 1) {
+            let a = pts[i], b = pts[i + 1]
+            let q = CGPoint(x: min(max(p.x, min(a.x, b.x)), max(a.x, b.x)), y: min(max(p.y, min(a.y, b.y)), max(a.y, b.y)))
+            let d = hypot(q.x - p.x, q.y - p.y)
+            if d < best.d { best = (d, q, a.y == b.y) }
+        }
+        let f = labelFontSize
+        return best.horizontal ? CGPoint(x: best.q.x, y: best.q.y - f * 0.9) : CGPoint(x: best.q.x + f * 1.2, y: best.q.y)
+    }
 }
 
 /// 電路圖：放在頁面上的一個物件，內容座標以物件左上角為原點
@@ -317,6 +347,7 @@ extension CircuitData {
         var r = CGRect.null
         for c in components { r = r.union(CircuitGeometry.bounds(c)) }
         for w in wires { for p in w.points { r = r.union(CGRect(x: p.x, y: p.y, width: 0, height: 0)) } }
+        for w in wires { if let b = w.labelBounds { r = r.union(b) } }
         return r
     }
 
@@ -328,6 +359,7 @@ extension CircuitData {
         }
         for i in wires.indices {
             wires[i].points = wires[i].points.map { CGPoint(x: $0.x + d.x, y: $0.y + d.y) }
+            if let c = wires[i].labelPosition { wires[i].labelPosition = CGPoint(x: c.x + d.x, y: c.y + d.y) }
         }
     }
 
@@ -378,6 +410,12 @@ extension CircuitData {
                                   !pins.contains(PointKey(p)),
                                   !wires.indices.contains(where: { $0 != i && $0 != j && Self.polyline(wires[$0].points, contains: p) }) else { continue }
                             var w = wires[wires[j].id == keep ? j : i]
+                            // 只有另一條有名稱：名稱留下來
+                            let other = wires[wires[j].id == keep ? i : j]
+                            if w.label == nil, other.label != nil {
+                                w.label = other.label
+                                w.labelPosition = other.labelPosition
+                            }
                             w.points = Self.orthogonalize(a + b.dropFirst())
                             wires[i] = w
                             wires.remove(at: j)

@@ -453,20 +453,16 @@ extension NotebookViewController {
                 let done = makeButton(symbol: "checkmark.circle.fill", title: "完成", action: nil)
                 done.configuration?.baseForegroundColor = .systemBlue
                 done.addAction(UIAction { [weak self] _ in self?.finishTableEditDraw() }, for: .touchUpInside)
-                let undo = makeButton(symbol: "arrow.uturn.backward", title: nil, action: #selector(undoTapped))
                 subBarStack.addArrangedSubview(done)
-                subBarStack.addArrangedSubview(undo)
                 return
             }
             let done = makeButton(symbol: "checkmark.circle.fill", title: "完成", action: nil)
             done.configuration?.baseForegroundColor = .systemBlue
             done.addAction(UIAction { [weak self] _ in self?.finishTableDraft() }, for: .touchUpInside)
-            let undo = makeButton(symbol: "arrow.uturn.backward", title: "收回一條", action: nil)
-            undo.addAction(UIAction { [weak self] _ in self?.undoTableDivider() }, for: .touchUpInside)
+            // 收回一條線：用右上角的「上一步」
             let cancel = makeButton(symbol: "xmark", title: "取消", action: nil)
             cancel.addAction(UIAction { [weak self] _ in self?.setTool(.pen) }, for: .touchUpInside)
             subBarStack.addArrangedSubview(done)
-            subBarStack.addArrangedSubview(undo)
             subBarStack.addArrangedSubview(cancel)
         }
     }

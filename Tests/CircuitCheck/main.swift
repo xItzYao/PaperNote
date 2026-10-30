@@ -277,5 +277,22 @@ teeJoin.joinStraightRuns()
 check("wires meeting in the middle of another wire are not joined", teeJoin.wires.count == 3)
 check("the meeting point still has a dot, not a hop", teeJoin.junctions().map(PointKey.init) == [PointKey(P(50, 100))] && teeJoin.crossings().isEmpty)
 
+// 21. 導線名稱：預設放在最近那段旁邊（橫的上面、直的右邊）；接成一條時名稱留著；外框包含名稱
+let ell2 = [P(0, 100), P(100, 100), P(100, 200)]
+let abovePos = CircuitWire.defaultLabelPosition(on: ell2, near: P(40, 104))
+check("label on a horizontal run sits above it", abovePos.x == 40 && abovePos.y < 100)
+let besidePos = CircuitWire.defaultLabelPosition(on: ell2, near: P(97, 160))
+check("label on a vertical run sits to its right", besidePos.y == 160 && besidePos.x > 100)
+var named = freeTwo
+named.wires[1].label = "Vout"
+named.wires[1].labelPosition = P(75, 85)
+named.joinStraightRuns()
+check("joining wires keeps the name", named.wires.count == 1 && named.wires[0].label == "Vout" && named.wires[0].labelPosition == P(75, 85))
+var far = CircuitData()
+far.wires = [CircuitWire(points: [P(0, 100), P(100, 100)], label: "CLK", labelPosition: P(50, 300))]
+check("content bounds include the name", far.contentBounds.maxY > 300)
+far.offset(by: P(10, -20))
+check("moving the circuit moves the name", far.wires[0].labelPosition == P(60, 280))
+
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

@@ -114,10 +114,10 @@ final class TableGestureTests: XCTestCase {
     /// 移動表格時哪些字跟著走
     func testWhichStrokesBelongToTheTable() {
         let table = CGRect(x: 0, y: 0, width: 300, height: 120)
-        XCTAssertTrue(TableCarry.isOnTable(CGRect(x: 20, y: 10, width: 60, height: 20), table: table))
-        XCTAssertTrue(TableCarry.isOnTable(CGRect(x: 20, y: 100, width: 60, height: 26), table: table), "字的尾巴稍微超出表格也算")
-        XCTAssertFalse(TableCarry.isOnTable(CGRect(x: -40, y: -40, width: 380, height: 200), table: table), "圈住整個表格的大圈不算")
-        XCTAssertFalse(TableCarry.isOnTable(CGRect(x: 320, y: 10, width: 40, height: 20), table: table), "表格外面的字不算")
+        XCTAssertTrue(InkCarry.isOn(CGRect(x: 20, y: 10, width: 60, height: 20), element: table))
+        XCTAssertTrue(InkCarry.isOn(CGRect(x: 20, y: 100, width: 60, height: 26), element: table), "字的尾巴稍微超出表格也算")
+        XCTAssertFalse(InkCarry.isOn(CGRect(x: -40, y: -40, width: 380, height: 200), element: table), "圈住整個表格的大圈不算")
+        XCTAssertFalse(InkCarry.isOn(CGRect(x: 320, y: 10, width: 40, height: 20), element: table), "表格外面的字不算")
     }
 }
 
@@ -289,11 +289,81 @@ final class TableEditorUXTests: XCTestCase {
 
     // MARK: 工具列、長按
 
-    func testToolbarIsGroupedAndHasNoTypingButton() {
-        let labels = editor.buildTableRibbon().compactMap(\.accessibilityLabel)
-        XCTAssertFalse(labels.contains("編輯文字"), "打字改成點兩下格子")
-        for group in ["列與欄", "儲存格", "樣式", "手繪格線"] { XCTAssertTrue(labels.contains(group), "工具列要有「\(group)」") }
-        XCTAssertLessThanOrEqual(editor.buildTableRibbon().count, 7, "按鈕收成幾組，不要一長排")
+    private func ribbonButtons(tab: Int) -> [UIButton] {
+        editor.tableRibbonTab = tab
+        func buttons(_ v: UIView) -> [UIButton] { (v as? UIButton).map { [$0] } ?? v.subviews.flatMap(buttons) }
+        return editor.buildTableRibbon().flatMap(buttons)
+    }
+
+    /// 回報的需求：樣式、列與欄不要藏在兩三層選單裡，直接攤平，每個按鈕都寫名稱（功能複雜，只有圖示看不懂）
+    func testRibbonIsFlatWithLabeledButtons() throws {
+        editor.tableRibbonTab = 0
+        let tabs = try XCTUnwrap(editor.buildTableRibbon().compactMap { $0 as? UISegmentedControl }.first, "分頁切換")
+        XCTAssertEqual((0..<tabs.numberOfSegments).compactMap { tabs.titleForSegment(at: $0) }, ["列與欄", "儲存格", "樣式"])
+        for tab in 0..<3 {
+            let bs = ribbonButtons(tab: tab)
+            XCTAssertFalse(bs.isEmpty)
+            XCTAssertTrue(bs.allSatisfy { $0.menu == nil && !$0.showsMenuAsPrimaryAction }, "分頁 \(tab)：沒有要再點開的選單")
+            XCTAssertTrue(bs.allSatisfy { !($0.configuration?.title ?? "").isEmpty }, "分頁 \(tab)：每個按鈕都寫名稱")
+        }
+        let rowCol = ribbonButtons(tab: 0).compactMap { $0.configuration?.title }
+        for t in ["在上方插入列", "在右側插入欄", "平均分配欄寬", "刪除選取的列", "手繪格線"] { XCTAssertTrue(rowCol.contains(t), "列與欄要直接看到「\(t)」") }
+        XCTAssertFalse(rowCol.contains("編輯文字"), "打字改成點兩下格子")
+        let cells = ribbonButtons(tab: 1).compactMap { $0.configuration?.title }
+        for t in ["合併", "取消合併", "黃色", "左上到右下"] { XCTAssertTrue(cells.contains(t), "儲存格要直接看到「\(t)」") }
+        let style = ribbonButtons(tab: 2).compactMap { $0.configuration?.title }
+        for t in ["黑色", "加粗", "變細", "字放大"] { XCTAssertTrue(style.contains(t), "樣式要直接看到「\(t)」") }
+
+        // 按鈕真的有作用
+        let cell = CGPoint(x: origin.x + 150, y: origin.y + 60)
+        editor.updateCellSelection(from: cell, to: cell)
+        let insert = try XCTUnwrap(ribbonButtons(tab: 0).first { $0.configuration?.title == "在右側插入欄" })
+        insert.sendActions(for: .primaryActionTriggered)
+        XCTAssertEqual(table.cols, 4)
+    }
+
+    /// 回報的問題：拖動表格的線沒反應。拖曳要移動一小段才開始，那時手指已經離開格線了，要用按下的位置判斷
+    func testDraggingAnInnerLineStartsWhereTheFingerTouchedDown() {
+        let line = CGPoint(x: origin.x + 100, y: origin.y + 60)
+        let g = TouchPan()
+        editor.toolPan = g
+        var began: Bool?
+        g.drag(from: line, to: CGPoint(x: line.x + 30, y: line.y), slop: CGPoint(x: 12, y: 0)) { g in
+            if g.state == .began { began = editor.gestureRecognizerShouldBegin(g) }
+            editor.handleToolPan(g)
+        }
+        XCTAssertEqual(began, true, "按在格線上拖：手勢要開始（不能用已經移開的位置判斷）")
+        XCTAssertEqual(table.colWidths[0], 130, accuracy: 0.5, "A 欄變寬")
+        XCTAssertEqual(table.colWidths[1], 70, accuracy: 0.5)
+    }
+
+    /// 回報的需求：鎖頭放在左上角
+    func testLockIconIsAtTheTopLeft() throws {
+        let lock = try XCTUnwrap(editor.lockIconTargets().first { $0.ref == ref })
+        XCTAssertLessThan(lock.point.x, origin.x, "在表格左邊")
+        XCTAssertLessThan(lock.point.y, origin.y, "在表格上面")
+        let move = try XCTUnwrap(editor.tableMoveHandlePoint())
+        XCTAssertGreaterThan(lock.point.distance(to: move), 30 / editor.canvas.zoomScale, "不和移動按鈕疊在一起")
+    }
+
+    /// 回報的需求：手繪表格的工具列不要放上一步（和右上角的上一步重複）；右上角的上一步收回最後一條線
+    func testDrawingANewTableUsesTheMainUndo() {
+        editor.select(nil)
+        editor.setTool(.tableDraw)
+        editor.tableDrawTarget = nil
+        editor.tableDraft = TableDraft(pageIndex: 0, rect: CGRect(x: 60, y: 60, width: 300, height: 200), xs: [160], ys: [110])
+        editor.rebuildSubBar()
+        func buttons(_ v: UIView) -> [UIButton] { (v as? UIButton).map { [$0] } ?? v.subviews.flatMap(buttons) }
+        let titles = editor.subBarStack.arrangedSubviews.flatMap(buttons).map { $0.configuration?.title ?? $0.accessibilityLabel ?? "" }
+        XCTAssertFalse(titles.contains { $0.contains("收回") || $0.contains("上一步") }, "工具列沒有自己的上一步")
+        editor.undoTapped()
+        XCTAssertEqual(editor.tableDraft?.ys, [], "上一步：收回最後畫的那條線")
+        XCTAssertEqual(editor.tableDraft?.xs, [160])
+
+        editor.tableDrawTarget = ref
+        editor.rebuildSubBar()
+        let editTitles = editor.subBarStack.arrangedSubviews.flatMap(buttons).map { $0.configuration?.title ?? $0.accessibilityLabel ?? "" }
+        XCTAssertFalse(editTitles.contains { $0.contains("收回") || $0.contains("上一步") }, "在既有表格上畫線也沒有")
     }
 
     func testLongPressOnACellOffersTheCellActions() {

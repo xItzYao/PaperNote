@@ -332,7 +332,7 @@ final class OverlayView: UIView {
                                    (resizeHandleImage, "arrow.up.left.and.arrow.down.right", UIColor.systemTeal),
                                    (circuitRotateHandle, "rotate.right", UIColor.systemBlue),
                                    (circuitFlipHandle, "arrow.left.and.right", UIColor.systemBlue),
-                                   (circuitDeleteHandle, "trash", UIColor.systemRed)] {
+                                   (circuitDeleteHandle, "xmark", UIColor.systemRed)] {
             l.contents = Self.handleImage(symbol, color: color)
             l.contentsGravity = .resizeAspect
             l.shadowColor = UIColor.black.cgColor

@@ -30,3 +30,29 @@ final class FakeTouch: UITouch {
     override func location(in view: UIView?) -> CGPoint { point }
     override var view: UIView? { nil }
 }
+
+/// 測試用的拖曳：位置、已移動的距離可以設定（真的拖曳要移動一小段才開始，開始時位置已經離開按下的點）
+final class TouchPan: UIPanGestureRecognizer {
+    var fake: UIGestureRecognizer.State = .possible
+    var point: CGPoint = .zero
+    var moved: CGPoint = .zero
+    override var state: UIGestureRecognizer.State {
+        get { fake }
+        set { fake = newValue }
+    }
+    override func location(in view: UIView?) -> CGPoint { point }
+    override func translation(in view: UIView?) -> CGPoint { moved }
+
+    convenience init() { self.init(target: nil, action: nil) }
+
+    /// 從 start 拖到 end：一開始就已經移動了 slop（還沒到 slop 手勢不會開始）
+    func drag(from start: CGPoint, to end: CGPoint, slop: CGPoint = .zero, steps: Int = 3, _ handle: (TouchPan) -> Void) {
+        for i in 0...steps {
+            let k = CGFloat(i) / CGFloat(steps)
+            moved = i == 0 ? slop : CGPoint(x: (end.x - start.x) * k, y: (end.y - start.y) * k)
+            point = CGPoint(x: start.x + moved.x, y: start.y + moved.y)
+            fake = i == 0 ? .began : (i == steps ? .ended : .changed)
+            handle(self)
+        }
+    }
+}

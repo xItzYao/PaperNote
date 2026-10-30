@@ -88,8 +88,11 @@ extension NotebookViewController {
         updateTableCellChrome()
     }
 
-    /// 表格工具列：選到的格子、列與欄、儲存格、樣式、手繪格線、固定位置。
-    /// 打字：點兩下格子；選整欄整列：點表格上方、左邊的標頭；合併、加列欄：手繪格線模式直接畫
+    static let tableRibbonTabs = ["列與欄", "儲存格", "樣式"]
+
+    /// 表格工具列：選到的格子、分頁（列與欄｜儲存格｜樣式），旁邊直接排出那一頁的全部按鈕（有字，不用打開選單）。
+    /// 每一頁最後都有「整個表格」：手繪格線、固定位置、刪除表格。
+    /// 打字：點兩下格子；選整欄整列：點表格上方、左邊的標頭
     func buildTableRibbon() -> [UIView] {
         guard let s = selectedTable() else { return [] }
         var views: [UIView] = []
@@ -102,56 +105,112 @@ extension NotebookViewController {
         tableCellLabel = cell
         views.append(cell)
 
-        /// 選單在打開時才依目前選取的範圍產生；重複、分割的小視窗指著這顆按鈕
-        func menuButton(_ image: UIImage?, _ label: String, _ items: @escaping (UIButton) -> [UIMenuElement]) -> UIButton {
-            let b = makeButton(symbol: "circle", title: nil, action: nil)
-            b.configuration?.image = image
-            b.accessibilityLabel = label
-            b.menu = UIMenu(title: label, children: [UIDeferredMenuElement.uncached { [weak b] done in
-                guard let b else { return done([]) }
-                done(items(b))
-            }])
-            b.showsMenuAsPrimaryAction = true
-            return b
-        }
-        func symbol(_ name: String) -> UIImage? {
-            UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .regular))
-        }
-
-        views.append(menuButton(symbol("tablecells"), "列與欄") { [weak self] b in self?.tableRowColItems(anchor: .view(b)) ?? [] })
-        views.append(menuButton(TableIcons.merge, "儲存格") { [weak self] b in self?.tableCellItems(anchor: .view(b)) ?? [] })
-        views.append(menuButton(symbol("paintbrush"), "樣式") { [weak self] _ in self?.tableStyleItems() ?? [] })
-
-        let draw = makeButton(symbol: "pencil.and.outline", title: nil, action: nil)
-        draw.accessibilityLabel = "手繪格線"
-        draw.addAction(UIAction { [weak self] _ in
-            guard let self, let s = self.selectedTable() else { return }
-            self.setTool(.tableDraw)
-            self.tableDrawTarget = s.ref
+        let tabs = UISegmentedControl(items: Self.tableRibbonTabs)
+        tabs.selectedSegmentIndex = min(tableRibbonTab, Self.tableRibbonTabs.count - 1)
+        tabs.accessibilityLabel = "表格工具分頁"
+        tabs.addAction(UIAction { [weak self, weak tabs] _ in
+            guard let self, let i = tabs?.selectedSegmentIndex else { return }
+            self.tableRibbonTab = i
             self.rebuildSubBar()
-            self.updateTableDraftChrome()
-        }, for: .touchUpInside)
-        views.append(draw)
+        }, for: .valueChanged)
+        views.append(tabs)
 
-        let lock = makeButton(symbol: s.element.locked ? "lock.fill" : "lock.open", title: nil, action: nil)
-        lock.accessibilityLabel = s.element.locked ? "解除固定" : "固定位置"
-        lock.addAction(UIAction { [weak self] _ in
-            guard let self, let s = self.selectedTable() else { return }
-            self.modifyElement(s.ref) { $0.locked.toggle() }
-            self.rebuildSubBar()
-        }, for: .touchUpInside)
-        views.append(lock)
-
-        let trash = makeButton(symbol: "trash", title: nil, action: nil)
-        trash.accessibilityLabel = "刪除表格"
-        trash.configuration?.baseForegroundColor = .systemRed
-        trash.addAction(UIAction { [weak self] _ in
-            guard let self, let s = self.selectedTable() else { return }
-            self.deleteElement(s.ref)
-            self.showToast("已刪除表格（可以按復原）")
-        }, for: .touchUpInside)
-        views.append(trash)
+        var items: [UIMenuElement]
+        switch tableRibbonTab {
+        case 1: items = tableCellItems(anchor: .selection, generic: true)
+        case 2: items = tableStyleItems()
+        default: items = tableRowColItems(anchor: .selection, generic: true)
+        }
+        items.append(UIMenu(title: "整個表格", children: [
+            UIAction(title: "手繪格線", image: UIImage(systemName: "pencil.and.outline")) { [weak self] _ in
+                guard let self, let s = self.selectedTable() else { return }
+                self.setTool(.tableDraw)
+                self.tableDrawTarget = s.ref
+                self.rebuildSubBar()
+                self.updateTableDraftChrome()
+            },
+            UIAction(title: s.element.locked ? "解除固定" : "固定位置", image: UIImage(systemName: s.element.locked ? "lock.open" : "lock")) { [weak self] _ in
+                guard let self, let s = self.selectedTable() else { return }
+                self.modifyElement(s.ref) { $0.locked.toggle() }
+                self.rebuildSubBar()
+            },
+            UIAction(title: "刪除表格", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
+                guard let self, let s = self.selectedTable() else { return }
+                self.deleteElement(s.ref)
+                self.showToast("已刪除表格（可以按復原）")
+            },
+        ]))
+        views.append(ribbonRow(items))
         return views
+    }
+
+    /// 一整排有字的按鈕，放不下可以左右捲。選單裡的每一組攤平成「組名 按鈕 按鈕…」，組和組之間用分隔線
+    func ribbonRow(_ items: [UIMenuElement]) -> UIScrollView {
+        let row = UIStackView()
+        row.axis = .horizontal
+        row.spacing = 2
+        row.alignment = .center
+        // 一組之後接著的單獨按鈕，中間也要分隔線
+        var afterGroup = false
+        func add(_ e: UIMenuElement, top: Bool) {
+            if let a = e as? UIAction {
+                if top && afterGroup { row.addArrangedSubview(toolbarSeparator()) }
+                if top { afterGroup = false }
+                row.addArrangedSubview(ribbonButton(a))
+            } else if let m = e as? UIMenu {
+                if !row.arrangedSubviews.isEmpty { row.addArrangedSubview(toolbarSeparator()) }
+                if !m.title.isEmpty {
+                    let l = UILabel()
+                    l.text = m.title
+                    l.font = .systemFont(ofSize: 12, weight: .semibold)
+                    l.textColor = .secondaryLabel
+                    row.addArrangedSubview(l)
+                }
+                m.children.forEach { add($0, top: false) }
+                afterGroup = true
+            }
+        }
+        items.forEach { add($0, top: true) }
+        let scroll = UIScrollView()
+        scroll.showsHorizontalScrollIndicator = false
+        scroll.accessibilityIdentifier = "ribbonRow"
+        row.translatesAutoresizingMaskIntoConstraints = false
+        scroll.addSubview(row)
+        let fit = scroll.widthAnchor.constraint(equalTo: row.widthAnchor)
+        fit.priority = UILayoutPriority(700)
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor),
+            row.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
+            row.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
+            row.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
+            scroll.heightAnchor.constraint(equalToConstant: 40),
+            scroll.widthAnchor.constraint(lessThanOrEqualToConstant: max(240, view.bounds.width - 380)),
+            fit,
+        ])
+        return scroll
+    }
+
+    /// 工具列上有圖示、有字的按鈕
+    private func ribbonButton(_ a: UIAction) -> UIButton {
+        var cfg = UIButton.Configuration.plain()
+        cfg.title = a.title
+        cfg.image = a.image
+        cfg.imagePadding = 4
+        cfg.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6)
+        cfg.baseForegroundColor = a.attributes.contains(.destructive) ? .systemRed : .label
+        cfg.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 14, weight: .regular)
+        cfg.titleLineBreakMode = .byClipping
+        cfg.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attrs in
+            var out = attrs
+            out.font = UIFont.systemFont(ofSize: 14)
+            return out
+        }
+        let b = UIButton(configuration: cfg, primaryAction: a)
+        b.configuration?.title = a.title
+        b.isEnabled = !a.attributes.contains(.disabled)
+        b.accessibilityLabel = a.title
+        return b
     }
 
     // MARK: - 重複（做大表格）
@@ -267,19 +326,19 @@ extension NotebookViewController {
         updateTableCellChrome()
     }
 
-    // MARK: - 移動表格時，表格上的手寫字一起移動
+    // MARK: - 移動表格、電路圖時，上面的手寫字一起移動
 
-    /// 開始拖曳移動表格：表格上的字先拿出來，換成跟著表格走的預覽圖（和套索移動一樣）
-    func beginTableCarry(_ ref: ElementRef) {
-        tableCarry = nil
+    /// 開始拖曳移動表格（電路圖）：上面的字先拿出來，換成跟著物件走的預覽圖（和套索移動一樣）
+    func beginInkCarry(_ ref: ElementRef) {
+        inkCarry = nil
         guard case let (pi, ei)? = locate(ref) else { return }
         let rect = docFrame(of: pages[pi].elements[ei], pageIndex: pi)
         let drawing = canvas.drawing
-        let indices = drawing.strokes.indices.filter { TableCarry.isOnTable(drawing.strokes[$0].renderBounds, table: rect) }
+        let indices = drawing.strokes.indices.filter { InkCarry.isOn(drawing.strokes[$0].renderBounds, element: rect) }
         var ink: [InkRef] = []
         for (i, page) in pages.enumerated() where pageFrames[i].intersects(rect) {
             let o = contentOrigin(i)
-            for s in page.ink where TableCarry.isOnTable(InkGeometry.bounds(of: s).offsetBy(dx: o.x, dy: o.y), table: rect) {
+            for s in page.ink where InkCarry.isOn(InkGeometry.bounds(of: s).offsetBy(dx: o.x, dy: o.y), element: rect) {
                 ink.append(InkRef(pageID: page.id, id: s.id))
             }
         }
@@ -299,17 +358,17 @@ extension NotebookViewController {
         }
         setInkHidden(ink)
         overlay.showLassoPreview(inkPreviewImage(pk, movingInk, rect: frame), frame: frame)
-        tableCarry = TableCarry(original: drawing, strokeIndices: indices, ink: ink, previewFrame: frame)
+        inkCarry = InkCarry(original: drawing, strokeIndices: indices, ink: ink, previewFrame: frame)
     }
 
     /// 拖曳中：預覽圖跟著表格移動 d
-    func moveTableCarry(by d: CGPoint) {
-        guard let c = tableCarry else { return }
+    func moveInkCarry(by d: CGPoint) {
+        guard let c = inkCarry else { return }
         overlay.moveLassoPreview(to: c.previewFrame.offsetBy(dx: d.x, dy: d.y))
     }
 
     /// 放開：字放回去並平移 d；自製筆刷的筆跡放到表格所在的第 target 頁。不另外登記復原（和表格算同一步，由呼叫端登記）
-    func finishTableCarry(_ c: TableCarry, by d: CGPoint, toPage target: Int) {
+    func finishInkCarry(_ c: InkCarry, by d: CGPoint, toPage target: Int) {
         overlay.showLassoPreview(nil, frame: .zero)
         setInkHidden([])
         if !c.strokeIndices.isEmpty {
@@ -322,9 +381,9 @@ extension NotebookViewController {
     }
 
     /// 沒有移動或拖曳取消：字放回原位
-    func cancelTableCarry() {
-        guard let c = tableCarry else { return }
-        tableCarry = nil
+    func cancelInkCarry() {
+        guard let c = inkCarry else { return }
+        inkCarry = nil
         overlay.showLassoPreview(nil, frame: .zero)
         setInkHidden([])
         if !c.strokeIndices.isEmpty { setDrawing(c.original) }
@@ -576,17 +635,17 @@ enum TableIcons {
     }
 }
 
-/// 拖曳移動表格時一起帶走的字：PencilKit 筆跡（canvas.drawing 的索引）、自製筆刷的筆跡
-struct TableCarry {
-    /// 開始拖之前的 PencilKit 筆跡（移動中先拿掉表格上的字，用圖片預覽）
+/// 拖曳移動表格、電路圖時一起帶走的字：PencilKit 筆跡（canvas.drawing 的索引）、自製筆刷的筆跡
+struct InkCarry {
+    /// 開始拖之前的 PencilKit 筆跡（移動中先拿掉物件上的字，用圖片預覽）
     var original: PKDrawing
     var strokeIndices: [Int]
     var ink: [InkRef]
     /// 預覽圖一開始的位置（文件座標）
     var previewFrame: CGRect
 
-    /// 這筆字算不算寫在表格上：中心在表格裡，而且沒有超出表格太多（圈住整個表格的大圈不算）
-    static func isOnTable(_ bounds: CGRect, table: CGRect) -> Bool {
-        table.contains(CGPoint(x: bounds.midX, y: bounds.midY)) && table.insetBy(dx: -12, dy: -12).contains(bounds)
+    /// 這筆字算不算寫在物件（表格、電路圖）上：中心在物件裡，而且沒有超出太多（圈住整個物件的大圈不算）
+    static func isOn(_ bounds: CGRect, element: CGRect) -> Bool {
+        element.contains(CGPoint(x: bounds.midX, y: bounds.midY)) && element.insetBy(dx: -12, dy: -12).contains(bounds)
     }
 }

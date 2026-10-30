@@ -252,8 +252,10 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var tableEraseLines = false
     /// 擦線中、放開就會擦掉的那幾段線（半透明顯示）
     var tableErasePreview: [ErasedLine] = []
-    /// 拖曳移動表格時，一起帶走的手寫字
-    var tableCarry: TableCarry?
+    /// 拖曳移動表格（電路圖）時，一起帶走的手寫字
+    var inkCarry: InkCarry?
+    /// 表格工具列目前的分頁：0 列與欄、1 儲存格、2 樣式
+    var tableRibbonTab = 0
     /// 工具列的＋（插入表格的小視窗指著它）
     weak var insertButton: UIButton?
     weak var tableCellLabel: UILabel?
@@ -824,6 +826,11 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     @objc func undoTapped() {
         endTextEditing()
         if holdToShape.undo() { return }
+        // 手繪新表格還沒完成：上一步＝收回最後畫的那條線
+        if tool == .tableDraw, tableDrawTarget == nil, tableDraft != nil {
+            undoTableDivider()
+            return
+        }
         _ = history.undo(capture: currentEditState, apply: restoreEditState)
     }
 

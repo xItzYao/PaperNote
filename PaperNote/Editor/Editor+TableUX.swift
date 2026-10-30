@@ -11,6 +11,8 @@ struct TableHeaderHit: Equatable {
 enum TablePanelAnchor {
     case view(UIView)
     case doc(CGRect)
+    /// 打開時目前選取的格子（工具列的按鈕先做好，選取範圍之後可能會變）
+    case selection
 }
 
 extension NotebookViewController {
@@ -170,6 +172,13 @@ extension NotebookViewController {
         }
     }
 
+    /// 顏色選項：圖示是那個顏色的圓點（nil＝無色）
+    private func tableAct(_ title: String, swatch hex: String?, _ change: @escaping (inout TableData, CellRange) -> Void) -> UIAction {
+        UIAction(title: title, image: hex.map { Self.colorSwatch(UIColor(hex: $0)) } ?? UIImage(systemName: "circle.slash")) { [weak self] _ in
+            self?.tableAction(change)
+        }
+    }
+
     /// SwiftUI 小視窗：大小跟著內容（不會被切掉）
     func hosting<V: View>(_ v: V) -> UIHostingController<V> {
         let h = UIHostingController(rootView: v)
@@ -181,6 +190,9 @@ extension NotebookViewController {
         switch anchor {
         case let .view(v): presentToolPopover(vc, from: v, size: size)
         case let .doc(r): presentToolPopover(vc, from: canvas, rect: pagesContainer.convert(r, to: canvas), size: size)
+        case .selection:
+            guard let r = tableSelectionDocRect() else { return }
+            presentToolPopover(vc, from: canvas, rect: pagesContainer.convert(r, to: canvas), size: size)
         }
     }
 
@@ -191,12 +203,15 @@ extension NotebookViewController {
         return s.table.rangeRect(r).offsetBy(dx: s.docRect.minX, dy: s.docRect.minY)
     }
 
-    /// 列與欄：插入、刪除、重複、平均分配、鎖定寬高（照目前選取的範圍）
-    func tableRowColItems(anchor: TablePanelAnchor) -> [UIMenuElement] {
+    /// 列與欄：插入、刪除、重複、平均分配、鎖定寬高（照目前選取的範圍）。
+    /// generic：工具列用，先做好、按的時候才看選取範圍，名稱不寫第幾列
+    func tableRowColItems(anchor: TablePanelAnchor, generic: Bool = false) -> [UIMenuElement] {
         guard selectedTable() != nil else { return [] }
         let r = tableCellSel ?? CellRange((0, 0), (0, 0))
-        let colsName = r.c1 > r.c0 ? "\(columnName(r.c0))–\(columnName(r.c1)) 欄" : "\(columnName(r.c0)) 欄"
-        let rowsName = r.r1 > r.r0 ? "第 \(r.r0 + 1)–\(r.r1 + 1) 列" : "第 \(r.r0 + 1) 列"
+        let colsName = generic ? "選取的欄" : r.c1 > r.c0 ? "\(columnName(r.c0))–\(columnName(r.c1)) 欄" : "\(columnName(r.c0)) 欄"
+        let rowsName = generic ? "選取的列" : r.r1 > r.r0 ? "第 \(r.r0 + 1)–\(r.r1 + 1) 列" : "第 \(r.r0 + 1) 列"
+        let distributeCols = generic ? "平均分配欄寬" : "平均分配欄寬（\(r.c1 > r.c0 ? colsName : "全部欄")）"
+        let distributeRows = generic ? "平均分配列高" : "平均分配列高（\(r.r1 > r.r0 ? rowsName : "全部列")）"
         return [
             UIMenu(title: "插入", image: UIImage(systemName: "plus.rectangle.on.rectangle"), children: [
                 tableAct("在上方插入列", "arrow.up.to.line") { t, r in t.insertRow(at: r.r0) },
@@ -208,8 +223,8 @@ extension NotebookViewController {
                 self?.presentRepeatPanel(anchor: anchor)
             },
             UIMenu(title: "平均分配", image: UIImage(systemName: "arrow.left.and.right"), children: [
-                tableAct("平均分配欄寬（\(r.c1 > r.c0 ? colsName : "全部欄")）") { t, r in t.distributeColumns(r.c1 > r.c0 ? r.c0...r.c1 : nil) },
-                tableAct("平均分配列高（\(r.r1 > r.r0 ? rowsName : "全部列")）") { t, r in t.distributeRows(r.r1 > r.r0 ? r.r0...r.r1 : nil) },
+                tableAct(distributeCols, "arrow.left.and.right") { t, r in t.distributeColumns(r.c1 > r.c0 ? r.c0...r.c1 : nil) },
+                tableAct(distributeRows, "arrow.up.and.down") { t, r in t.distributeRows(r.r1 > r.r0 ? r.r0...r.r1 : nil) },
             ]),
             UIMenu(title: "鎖定寬高", image: UIImage(systemName: "lock.rectangle"), children: [
                 tableAct("鎖定欄寬（\(colsName)）", "lock") { t, r in t.setColsLocked(r.c0...r.c1, true) },
@@ -224,8 +239,8 @@ extension NotebookViewController {
                 },
             ]),
             UIMenu(title: "刪除", image: UIImage(systemName: "minus.rectangle"), children: [
-                tableAct("刪除\(rowsName)", attributes: .destructive) { t, r in for row in (r.r0...r.r1).reversed() { t.removeRow(row) } },
-                tableAct("刪除\(colsName)", attributes: .destructive) { t, r in for col in (r.c0...r.c1).reversed() { t.removeColumn(col) } },
+                tableAct("刪除\(rowsName)", "minus.rectangle", attributes: .destructive) { t, r in for row in (r.r0...r.r1).reversed() { t.removeRow(row) } },
+                tableAct("刪除\(colsName)", "minus.rectangle", attributes: .destructive) { t, r in for col in (r.c0...r.c1).reversed() { t.removeColumn(col) } },
                 UIAction(title: "刪除整個表格", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
                     guard let self, let s = self.selectedTable() else { return }
                     self.deleteElement(s.ref)
@@ -234,27 +249,27 @@ extension NotebookViewController {
         ]
     }
 
-    /// 儲存格：合併、分割、取消合併、斜線、底色
-    func tableCellItems(anchor: TablePanelAnchor) -> [UIMenuElement] {
+    /// 儲存格：合併、分割、取消合併、斜線、底色。generic：工具列用（按的時候才看選取範圍）
+    func tableCellItems(anchor: TablePanelAnchor, generic: Bool = false) -> [UIMenuElement] {
         guard let s = selectedTable() else { return [] }
         let r = s.table.expanded(tableCellSel ?? CellRange((0, 0), (0, 0)))
         let span = s.table.span(r.r0, r.c0)
         let single = span.rowSpan == r.r1 - r.r0 + 1 && span.colSpan == r.c1 - r.c0 + 1
         var items: [UIMenuElement] = [
-            UIAction(title: "合併", image: TableIcons.merge, attributes: single ? .disabled : []) { [weak self] _ in
+            UIAction(title: "合併", image: TableIcons.merge, attributes: single && !generic ? .disabled : []) { [weak self] _ in
                 self?.tableAction { t, r in t.mergeCells(r) }
             },
-            UIAction(title: single ? "分割…" : "分割每一格…", image: TableIcons.split) { [weak self] _ in
+            UIAction(title: single || generic ? "分割…" : "分割每一格…", image: TableIcons.split) { [weak self] _ in
                 self?.presentSplitPanel(anchor: anchor)
             },
         ]
-        if single && span.rowSpan * span.colSpan > 1 {
+        if generic || (single && span.rowSpan * span.colSpan > 1) {
             items.append(tableAct("取消合併", "square.split.2x2") { t, r in t.unmerge(r.r0, r.c0) })
         }
         let fills: [(String, String?)] = [("黃色", "#FFF59DFF"), ("綠色", "#C8E6C9FF"), ("藍色", "#BBDEFBFF"),
                                           ("粉紅", "#F8BBD0FF"), ("灰色", "#E0E0E0FF"), ("無底色", nil)]
         items.append(UIMenu(title: "底色", image: UIImage(systemName: "drop.fill"), children: fills.map { name, hex in
-            tableAct(name, hex == nil ? "circle.slash" : "circle.fill") { t, r in t.setFill(r, hex: hex) }
+            tableAct(name, swatch: hex) { t, r in t.setFill(r, hex: hex) }
         }))
         items.append(UIMenu(title: "斜線", image: UIImage(systemName: "line.diagonal"), children: [
             tableAct("左上到右下") { t, r in t.setDiagonal(r.r0, r.c0, reverse: false) },
@@ -268,10 +283,10 @@ extension NotebookViewController {
     func tableStyleItems() -> [UIMenuElement] {
         [
             UIMenu(title: "格線", image: UIImage(systemName: "squareshape.split.3x3"), children: [
-                tableAct("黑色") { t, _ in t.lineColorHex = "#333333FF" },
-                tableAct("灰色") { t, _ in t.lineColorHex = "#9E9E9EFF" },
-                tableAct("藍色") { t, _ in t.lineColorHex = "#1E5BD8FF" },
-                tableAct("紅色") { t, _ in t.lineColorHex = "#D32F2FFF" },
+                tableAct("黑色", swatch: "#333333FF") { t, _ in t.lineColorHex = "#333333FF" },
+                tableAct("灰色", swatch: "#9E9E9EFF") { t, _ in t.lineColorHex = "#9E9E9EFF" },
+                tableAct("藍色", swatch: "#1E5BD8FF") { t, _ in t.lineColorHex = "#1E5BD8FF" },
+                tableAct("紅色", swatch: "#D32F2FFF") { t, _ in t.lineColorHex = "#D32F2FFF" },
                 tableAct("加粗", "plus") { t, _ in t.lineWidth = min(t.lineWidth + 0.5, 5) },
                 tableAct("變細", "minus") { t, _ in t.lineWidth = max(t.lineWidth - 0.5, 0.5) },
             ]),

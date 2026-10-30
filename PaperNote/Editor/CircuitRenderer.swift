@@ -19,7 +19,20 @@ enum CircuitRenderer {
         for p in d.junctions() {
             UIBezierPath(ovalIn: CGRect(x: p.x - dotRadius, y: p.y - dotRadius, width: dotRadius * 2, height: dotRadius * 2)).fill()
         }
+        drawWireLabels(d, color: color)
         ctx.restoreGState()
+    }
+
+    static func wireLabelFont() -> UIFont { .systemFont(ofSize: CircuitWire.labelFontSize, weight: .medium) }
+
+    /// 導線名稱：字的中心在 labelPosition
+    static func drawWireLabels(_ d: CircuitData, color: UIColor) {
+        for w in d.wires {
+            guard let text = w.label, !text.isEmpty, let c = w.labelPosition else { continue }
+            let str = NSAttributedString(string: text, attributes: [.font: wireLabelFont(), .foregroundColor: color])
+            let sz = str.size()
+            str.draw(at: CGPoint(x: c.x - sz.width / 2, y: c.y - sz.height / 2))
+        }
     }
 
     static func drawComponent(_ c: CircuitComponent, color: UIColor, lineWidth: CGFloat, labels: Bool = true) {
@@ -38,21 +51,42 @@ enum CircuitRenderer {
         if labels, let b = CircuitGeometry.blockLayout(c) { drawBlockLabels(c, b, color: color) }
     }
 
+    /// 方塊元件上的一段字（電路圖座標的中心點）；inverted＝反相，字上面畫一條橫線
+    struct BlockText {
+        var text: String
+        var center: CGPoint
+        var size: CGFloat
+        var bold: Bool
+        var inverted: Bool
+    }
+
     /// 方塊元件的文字：標題與每支接腳的名字。位置跟著旋轉、翻轉，但字永遠是正的
-    private static func drawBlockLabels(_ c: CircuitComponent, _ b: CircuitBlockLayout, color: UIColor) {
+    static func blockTexts(_ c: CircuitComponent, _ b: CircuitBlockLayout) -> [BlockText] {
         let t = CircuitGeometry.transform(c)
         let inner = b.halfWidth - 11
+        var out: [BlockText] = []
         func text(_ name: String, at p: CGPoint, size: CGFloat, bold: Bool = false) {
             let inverted = name.hasPrefix("~")
-            let label = inverted ? String(name.dropFirst()) : name
-            let attrs: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: size, weight: bold ? .semibold : .regular),
+            out.append(BlockText(text: inverted ? String(name.dropFirst()) : name, center: p.applying(t), size: size, bold: bold, inverted: inverted))
+        }
+        for (name, y) in zip(b.left, b.sideOffsets(b.left.count)) where b.clock.map({ b.left[$0] != name }) ?? true {
+            text(name, at: CGPoint(x: -inner, y: y), size: 8)
+        }
+        for (name, y) in zip(b.right, b.sideOffsets(b.right.count)) { text(name, at: CGPoint(x: inner, y: y), size: 8) }
+        for (name, x) in zip(b.bottom, CircuitGeometry.spread(b.bottom.count)) { text(name, at: CGPoint(x: x, y: b.bottomEdge(at: x) - 7), size: 8) }
+        text(b.title, at: CGPoint(x: 0, y: -b.height / 2 - 7), size: 9, bold: true)
+        return out
+    }
+
+    private static func drawBlockLabels(_ c: CircuitComponent, _ b: CircuitBlockLayout, color: UIColor) {
+        for item in blockTexts(c, b) {
+            let attrs: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: item.size, weight: item.bold ? .semibold : .regular),
                                                          .foregroundColor: color]
-            let str = NSAttributedString(string: label, attributes: attrs)
+            let str = NSAttributedString(string: item.text, attributes: attrs)
             let sz = str.size()
-            let q = p.applying(t)
-            let origin = CGPoint(x: q.x - sz.width / 2, y: q.y - sz.height / 2)
+            let origin = CGPoint(x: item.center.x - sz.width / 2, y: item.center.y - sz.height / 2)
             str.draw(at: origin)
-            if inverted {
+            if item.inverted {
                 // 反相：字上面畫一條橫線
                 let bar = UIBezierPath()
                 bar.move(to: CGPoint(x: origin.x, y: origin.y + 1.5))
@@ -62,16 +96,19 @@ enum CircuitRenderer {
                 bar.stroke()
             }
         }
-        for (name, y) in zip(b.left, b.sideOffsets(b.left.count)) where b.clock.map({ b.left[$0] != name }) ?? true {
-            text(name, at: CGPoint(x: -inner, y: y), size: 8)
-        }
-        for (name, y) in zip(b.right, b.sideOffsets(b.right.count)) { text(name, at: CGPoint(x: inner, y: y), size: 8) }
-        for (name, x) in zip(b.bottom, CircuitGeometry.spread(b.bottom.count)) { text(name, at: CGPoint(x: x, y: b.bottomEdge(at: x) - 7), size: 8) }
-        text(b.title, at: CGPoint(x: 0, y: -b.height / 2 - 7), size: 9, bold: true)
+    }
+
+    static func drawWires(_ d: CircuitData, color: UIColor) {
+        let path = wirePath(d)
+        path.lineWidth = d.lineWidth
+        path.lineCapStyle = .round
+        path.lineJoinStyle = .round
+        color.setStroke()
+        path.stroke()
     }
 
     /// 導線：遇到沒有接在一起的交叉點，畫半圓跨過去（水平段往上、垂直段往右）
-    static func drawWires(_ d: CircuitData, color: UIColor) {
+    static func wirePath(_ d: CircuitData) -> UIBezierPath {
         let crossings = d.crossings()
         let path = UIBezierPath()
         let r = hopRadius
@@ -100,11 +137,7 @@ enum CircuitRenderer {
                 path.addLine(to: b)
             }
         }
-        path.lineWidth = d.lineWidth
-        path.lineCapStyle = .round
-        path.lineJoinStyle = .round
-        color.setStroke()
-        path.stroke()
+        return path
     }
 
     // MARK: - 符號（元件座標：中心為原點、預設朝右）
@@ -280,5 +313,82 @@ enum CircuitRenderer {
             ctx.translateBy(x: -b.midX, y: -b.midY)
             drawComponent(c, color: .label, lineWidth: 1.6 / scale, labels: false)
         }.withRenderingMode(.alwaysTemplate)
+    }
+}
+
+// MARK: - 匯出 SVG（向量圖：可以放進簡報、文件，或用 Inkscape、Illustrator 再編輯）
+
+extension CircuitRenderer {
+    /// 整個電路圖存成 SVG：元件、導線、接點、跨線、文字都和畫面上一樣。用電路圖原本的座標（不乘縮放）
+    static func svg(_ d: CircuitData) -> String {
+        var box = d.contentBounds
+        if box.isNull { box = .zero }
+        box = box.insetBy(dx: -12, dy: -12)
+        let color = String(d.colorHex.prefix(7))
+        let font = "Helvetica, Arial, sans-serif"
+        var out = [
+            #"<?xml version="1.0" encoding="UTF-8"?>"#,
+            #"<svg xmlns="http://www.w3.org/2000/svg" width="\#(num(box.width))" height="\#(num(box.height))" viewBox="\#(num(box.minX)) \#(num(box.minY)) \#(num(box.width)) \#(num(box.height))">"#,
+        ]
+        func stroke(_ p: UIBezierPath) {
+            guard !p.isEmpty else { return }
+            out.append(#"<path d="\#(pathData(p.cgPath))" fill="none" stroke="\#(color)" stroke-width="\#(num(d.lineWidth))" stroke-linecap="round" stroke-linejoin="round"/>"#)
+        }
+        func text(_ s: String, at c: CGPoint, size: CGFloat, weight: String, overline: Bool = false) {
+            let deco = overline ? #" text-decoration="overline""# : ""
+            out.append(#"<text x="\#(num(c.x))" y="\#(num(c.y))" font-family="\#(font)" font-size="\#(num(size))" font-weight="\#(weight)" text-anchor="middle" dominant-baseline="central" fill="\#(color)"\#(deco)>\#(xmlEscaped(s))</text>"#)
+        }
+        for c in d.components {
+            let t = CircuitGeometry.transform(c)
+            let (s, f) = symbol(c)
+            s.apply(t)
+            f.apply(t)
+            stroke(s)
+            if !f.isEmpty { out.append(#"<path d="\#(pathData(f.cgPath))" fill="\#(color)"/>"#) }
+            if let b = CircuitGeometry.blockLayout(c) {
+                for item in blockTexts(c, b) { text(item.text, at: item.center, size: item.size, weight: item.bold ? "600" : "400", overline: item.inverted) }
+            }
+        }
+        stroke(wirePath(d))
+        for p in d.junctions() {
+            out.append(#"<circle cx="\#(num(p.x))" cy="\#(num(p.y))" r="\#(num(dotRadius))" fill="\#(color)"/>"#)
+        }
+        for w in d.wires {
+            guard let s = w.label, !s.isEmpty, let c = w.labelPosition else { continue }
+            text(s, at: c, size: CircuitWire.labelFontSize, weight: "500")
+        }
+        out.append("</svg>")
+        return out.joined(separator: "\n") + "\n"
+    }
+
+    /// CGPath → SVG 的 d（圓弧在 CGPath 裡已經是貝茲曲線）
+    static func pathData(_ p: CGPath) -> String {
+        var parts: [String] = []
+        p.applyWithBlock { e in
+            let q = e.pointee.points
+            func pt(_ i: Int) -> String { "\(CircuitRenderer.num(q[i].x)) \(CircuitRenderer.num(q[i].y))" }
+            switch e.pointee.type {
+            case .moveToPoint: parts.append("M" + pt(0))
+            case .addLineToPoint: parts.append("L" + pt(0))
+            case .addQuadCurveToPoint: parts.append("Q" + pt(0) + " " + pt(1))
+            case .addCurveToPoint: parts.append("C" + pt(0) + " " + pt(1) + " " + pt(2))
+            case .closeSubpath: parts.append("Z")
+            @unknown default: break
+            }
+        }
+        return parts.joined(separator: " ")
+    }
+
+    /// 小數最多兩位，去掉多餘的 0
+    static func num(_ v: CGFloat) -> String {
+        var s = String(format: "%.2f", Double(v))
+        while s.contains("."), s.hasSuffix("0") { s.removeLast() }
+        if s.hasSuffix(".") { s.removeLast() }
+        return s == "-0" ? "0" : s
+    }
+
+    static func xmlEscaped(_ s: String) -> String {
+        s.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\"", with: "&quot;")
     }
 }

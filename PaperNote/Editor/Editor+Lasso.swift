@@ -151,8 +151,8 @@ extension NotebookViewController {
             }
             for e in page.elements where !e.locked {
                 let f = docFrame(of: e, pageIndex: pi)
-                // 表格要整個圈到才算：圈表格上的字時，不會連表格一起拿走
-                if e.isTable ? LassoGeometry.encloses(f, path: path) : touches(f) {
+                // 表格、電路圖要整個圈到才算：圈上面的字時，不會連物件一起拿走
+                if e.isTable || e.isCircuit ? LassoGeometry.encloses(f, path: path) : touches(f) {
                     elements.append(ElementRef(pageID: page.id, elementID: e.id))
                     bounds = bounds.union(f)
                 }
@@ -549,10 +549,10 @@ extension NotebookViewController {
     /// 選取工具：選到的表格旁顯示；套索工具：所有表格旁都顯示
     func lockIconTargets() -> [(ref: ElementRef, point: CGPoint, locked: Bool)] {
         let off = 36 / canvas.zoomScale
-        // 表格：右上角外側；圖片：左上角
+        // 表格：左上角外側、移動按鈕的上方；圖片：左上角
         func target(_ e: PageElement, _ pi: Int) -> (ref: ElementRef, point: CGPoint, locked: Bool) {
             let r = docFrame(of: e, pageIndex: pi)
-            let p = e.isTable ? CGPoint(x: r.maxX + off, y: r.minY - off) : CGPoint(x: r.minX + off * 0.5, y: r.minY + off * 0.5)
+            let p = e.isTable ? CGPoint(x: r.minX - off, y: r.minY - off - 42 / canvas.zoomScale) : CGPoint(x: r.minX + off * 0.5, y: r.minY + off * 0.5)
             return (ElementRef(pageID: pages[pi].id, elementID: e.id), p, e.locked)
         }
         func lockable(_ e: PageElement) -> Bool { e.isTable || e.isImage }
