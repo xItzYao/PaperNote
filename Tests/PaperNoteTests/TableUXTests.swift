@@ -410,6 +410,8 @@ final class TableEditorUXTests: XCTestCase {
         let inCell = word(at: CGPoint(x: o.x + 120, y: o.y + 60))
         let outside = word(at: CGPoint(x: o.x - 200, y: o.y - 100))
         editor.updatePage(0) { $0.ink = [inCell, outside] }
+        // 同一輪 run loop 記的動作會併成一步：先讓插入表格、寫字結束，拖曳才是自己的一步（和實際操作一樣）
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         let grab = try XCTUnwrap(editor.tableMoveHandlePoint())
         guard case .move? = editor.dragTarget(at: grab)?.1 else { return XCTFail("左上角的按鈕可以拖") }
         let g = FakePan(target: nil, action: nil)
