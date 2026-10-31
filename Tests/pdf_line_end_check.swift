@@ -21,7 +21,7 @@ func stream(_ s: String, _ dict: String = "") -> String { "<< \(dict) /Length \(
 
 let form = """
 q 0.1347653 0 0 -0.1347653 0 595.32 cm BT 0.003 Tc 327.68 0 0 -327.68 1547.52 2513.76 Tm /G4 1 Tf [ (Intr) 20 (oduction) 10 ( to Matla) 7 (b) ] TJ ET Q
-q 0.1347653 0 0 -0.1347653 0 595.32 cm BT 0.003 Tc 163.84 0 0 -163.84 3755.84 7025.6 Tm /G4 1 Tf [ (Department of Electrical Engineerin) 5 (g) ] TJ ET Q
+q 0.1347653 0 0 -0.1347653 0 595.32 cm BT 0.003 Tc 163.84 0 0 -163.84 1855 3510 Tm /G4 1 Tf [ (Department of Electrical Engineerin) 5 (g) ] TJ ET Q
 """
 let data = pdf([
     "<< /Type /Catalog /Pages 2 0 R >>",
@@ -54,6 +54,12 @@ for word in ["Matlab", "Engineering"] {
     print("  selection(from:to:) ending at 3/4 of the last char =", page.selection(from: start, to: p)?.string.debugDescription ?? "nil")
     let past = CGPoint(x: b.maxX + 6, y: b.midY)
     print("  characterIndex(at past the end) =", page.characterIndex(at: past))
+    // App 舊的做法（PDFKit 自己決定頭尾）：筆拖過行尾、停在最後一個字上
+    print("  OLD selection(from:to:) past the end =", page.selection(from: start, to: past)?.string.debugDescription ?? "nil")
+    for k in [0.25, 0.5, 0.9] {
+        let q = CGPoint(x: b.minX + b.width * k, y: b.midY)
+        print("  OLD selection(from:to:) ending at \(k) of the last char =", page.selection(from: start, to: q)?.string.debugDescription ?? "nil")
+    }
     print("  selection(for: word) =", page.selection(for: r)?.string.debugDescription ?? "nil",
           "bounds", page.selection(for: r)?.bounds(for: page) ?? .zero)
 }
