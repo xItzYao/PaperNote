@@ -1101,7 +1101,7 @@ struct FavoriteDocumentsSheet: View {
     private func row(_ nb: NotebookMeta) -> some View {
         HStack(spacing: 12) {
             Group {
-                if let url = store.coverImageURL(nb.id), let img = UIImage(contentsOfFile: url.path) {
+                if let img = UIImage(contentsOfFile: store.coverImageURL(nb.id).path) {
                     Image(uiImage: img).resizable().scaledToFill()
                 } else {
                     Color(uiColor: UIColor(hex: nb.coverHex))
