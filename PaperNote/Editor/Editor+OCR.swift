@@ -110,7 +110,7 @@ extension NotebookViewController {
             return s
         }
         guard let i = nearestCharIndex(pdf, pageID: pageID, p) else { return nil }
-        let r = pdf.characterBounds(at: i)
+        let r = charRects(pdf, pageID: pageID)[i]
         if let s = pdf.selectionForWord(at: CGPoint(x: r.midX, y: r.midY)), let str = s.string,
            !str.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return s
@@ -118,20 +118,29 @@ extension NotebookViewController {
         return pdf.selection(for: NSRange(location: i, length: 1))
     }
 
-    /// 離 p（PDF 頁面座標）最近的字元，太遠（> 40pt）就算沒有
-    func nearestCharIndex(_ pdf: PDFPage, pageID: UUID, _ p: CGPoint) -> Int? {
-        let direct = pdf.characterIndex(at: p)
-        if direct >= 0 && direct != NSNotFound && direct < pdf.numberOfCharacters { return direct }
-        let rects: [CGRect]
-        if let cached = charRectCache[pageID] {
-            rects = cached
-        } else {
-            rects = (0..<pdf.numberOfCharacters).map { pdf.characterBounds(at: $0) }
-            charRectCache[pageID] = rects
+    /// 每個字在頁面上的範圍（PDF 頁面座標；換行是 .null）。
+    /// 不用 PDFPage.characterBounds(at:)、characterIndex(at:)：PDFKit 在兩段文字之間自己補上換行之後，
+    /// 後面每個字回報的都是「下一個字」的範圍（頁面最後一個字是空的），每一行最後的字就選不到。
+    /// 只有一個字的 selection 範圍才是對的
+    func charRects(_ pdf: PDFPage, pageID: UUID) -> [CGRect] {
+        if let cached = charRectCache[pageID] { return cached }
+        let text = (pdf.string ?? "") as NSString
+        let rects = (0..<min(pdf.numberOfCharacters, text.length)).map { i -> CGRect in
+            let r = NSRange(location: i, length: 1)
+            guard text.substring(with: r).rangeOfCharacter(from: .newlines) == nil,
+                  let b = pdf.selection(for: r)?.bounds(for: pdf), !b.isEmpty else { return .null }
+            return b
         }
+        charRectCache[pageID] = rects
+        return rects
+    }
+
+    /// 離 p（PDF 頁面座標）最近的字元（在字上就是那個字），太遠（> 40pt）就算沒有
+    func nearestCharIndex(_ pdf: PDFPage, pageID: UUID, _ p: CGPoint) -> Int? {
+        let rects = charRects(pdf, pageID: pageID)
         var best: Int?
         var bestD = CGFloat.greatestFiniteMagnitude
-        for (k, r) in rects.enumerated() where !r.isEmpty {
+        for (k, r) in rects.enumerated() where !r.isNull {
             let dx = max(r.minX - p.x, 0, p.x - r.maxX)
             let dy = max(r.minY - p.y, 0, p.y - r.maxY)
             let d = hypot(dx, dy)

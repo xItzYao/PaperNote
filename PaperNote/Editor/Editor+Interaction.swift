@@ -1419,23 +1419,18 @@ extension NotebookViewController {
     }
 
     /// 拖曳選字（a、b 是 PDF 頁面座標）：頭尾和拖控制點一樣，停在筆最近的字縫。
-    /// 不用 PDFPage.selection(from:to:) 決定頭尾：它只選「整個字都在兩點框起來的範圍內」的字，
-    /// 筆停在最後一個字上（還沒超過字的右邊），那個字就選不到。
-    /// 兩點附近都沒有字（例如從頁邊空白框一大段）才交給 PDFKit
+    /// 不用 PDFPage.selection(from:to:)：它用的字的位置在換行之後會錯開一個字，每一行最後的字選不到
     func dragSelection(_ pdf: PDFPage, pageIndex i: Int, from a: CGPoint, to b: CGPoint) -> TextSelectionState? {
         let id = pages[i].id
-        if let ca = textCaret(pdf, pageID: id, a), let cb = textCaret(pdf, pageID: id, b) {
-            return caretSelection(pdf, pageIndex: i, ca, cb)
-        }
-        guard let sel = pdf.selection(from: a, to: b) else { return nil }
-        return pdfTextSelection(sel, pageIndex: i, pdfPage: pdf)
+        guard let ca = textCaret(pdf, pageID: id, a), let cb = textCaret(pdf, pageID: id, b) else { return nil }
+        return caretSelection(pdf, pageIndex: i, ca, cb)
     }
 
     /// 離 p（PDF 頁面座標）最近的字和字之間的縫：在字的左半邊是這個字前面，右半邊是後面。
     /// 控制點才會停在手指的位置，不會跳到字的另一邊
     func textCaret(_ pdf: PDFPage, pageID: UUID, _ p: CGPoint) -> Int? {
         guard let i = nearestCharIndex(pdf, pageID: pageID, p) else { return nil }
-        return p.x > pdf.characterBounds(at: i).midX ? i + 1 : i
+        return p.x > charRects(pdf, pageID: pageID)[i].midX ? i + 1 : i
     }
 
     /// 結束選字（拷貝、螢光標示之後，或點了別的地方），回到原本的工具
@@ -1519,9 +1514,9 @@ extension NotebookViewController {
               let pdf = session.pdfPage(for: pages[i]) else { return false }
         let a = CGPoint(x: min(first.x, last.x), y: b.midY)
         let c = CGPoint(x: max(first.x, last.x), y: b.midY)
-        guard let sel = pdf.selection(from: pdfPoint(a, pageIndex: i, pdfPage: pdf), to: pdfPoint(c, pageIndex: i, pdfPage: pdf)),
-              let text = sel.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
-        let rects = docRects(for: sel, pageIndex: i, pdfPage: pdf)
+        guard let ts = dragSelection(pdf, pageIndex: i, from: pdfPoint(a, pageIndex: i, pdfPage: pdf), to: pdfPoint(c, pageIndex: i, pdfPage: pdf))
+        else { return false }
+        let rects = ts.docRects
         guard rects.contains(where: { $0.insetBy(dx: 0, dy: -8).intersects(b) }) else { return false }
         let o = contentOrigin(i)
         // 畫在文字底下，用「和白色混合」模擬透明度，深淺和一般螢光筆跡一致

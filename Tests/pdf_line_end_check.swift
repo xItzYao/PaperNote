@@ -43,13 +43,16 @@ for word in ["Matlab", "Engineering"] {
     for i in (last - 2)...min(last + 1, page.numberOfCharacters - 1) {
         print("  char \(i) \(ns.substring(with: NSRange(location: i, length: 1)).debugDescription) bounds", page.characterBounds(at: i))
     }
-    let b = page.characterBounds(at: last)
+    // App 用一個字的 selection 範圍當作字的位置：要一個接一個往右排，最後一個字也有寬度
+    func box(_ i: Int) -> CGRect { page.selection(for: NSRange(location: i, length: 1))?.bounds(for: page) ?? .null }
+    for i in r.location..<last where !(box(i).minX < box(i + 1).minX) {
+        print("FAIL \(word): selection box of char \(i) \(box(i)) is not left of char \(i + 1) \(box(i + 1))"); failures += 1
+    }
+    let b = box(last)
+    print("\(word): last=\(last) selection box=\(b) characterBounds=\(page.characterBounds(at: last))")
+    if b.isNull || b.width <= 0 { print("FAIL \(word): last character has no selection box"); failures += 1 }
     let p = CGPoint(x: b.minX + b.width * 0.75, y: b.midY)
-    let hit = page.characterIndex(at: p)
-    print("\(word): last=\(last) bounds=\(b) characterIndex(at 3/4)=\(hit)")
-    if b.width <= 0 { print("FAIL \(word): last character has no width"); failures += 1 }
-    if hit != last { print("FAIL \(word): characterIndex on the last character = \(hit)"); failures += 1 }
-    let first = page.characterBounds(at: r.location)
+    let first = box(r.location)
     let start = CGPoint(x: first.minX + 1, y: first.midY)
     print("  selection(from:to:) ending at 3/4 of the last char =", page.selection(from: start, to: p)?.string.debugDescription ?? "nil")
     let past = CGPoint(x: b.maxX + 6, y: b.midY)
