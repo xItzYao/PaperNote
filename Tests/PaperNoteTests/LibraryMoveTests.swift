@@ -76,12 +76,25 @@ final class LibraryMoveTests: XCTestCase {
         let b = notebook("不收藏的筆記", in: nil)
         let modified = try XCTUnwrap(store.notebook(a)?.modified)
         store.setStarred(a, true)
-        let starred = store.visibleNotebooks.filter(\.starred).map(\.id)
+        let starred = store.favoriteNotebooks.map(\.id)
         XCTAssertTrue(starred.contains(a), "資料夾裡的筆記本也會出現在我的最愛文件")
         XCTAssertFalse(starred.contains(b))
         XCTAssertEqual(store.notebook(a)?.modified, modified, "加星號不算修改")
         store.setStarred(a, false)
-        XCTAssertFalse(store.visibleNotebooks.filter(\.starred).map(\.id).contains(a))
+        XCTAssertFalse(store.favoriteNotebooks.map(\.id).contains(a))
+    }
+
+    /// 我的最愛文件的視窗：最近修改的排上面
+    func testFavoriteDocumentsAreNewestFirst() throws {
+        let older = notebook("舊的收藏", in: nil)
+        let newer = notebook("新的收藏", in: nil)
+        store.setStarred(older, true)
+        store.setStarred(newer, true)
+        store.updateMeta(older) { $0.modified = Date().addingTimeInterval(-60) }
+        store.updateMeta(newer) { $0.modified = Date() }
+        let ids = store.favoriteNotebooks.map(\.id)
+        let i = try XCTUnwrap(ids.firstIndex(of: newer)), j = try XCTUnwrap(ids.firstIndex(of: older))
+        XCTAssertLessThan(i, j)
     }
 
     /// 舊的資料庫沒有 starred：讀進來是沒收藏

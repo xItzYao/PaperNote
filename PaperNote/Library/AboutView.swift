@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// 關於我＋GitHub
+/// 關於我
 struct AboutView: View {
-    static let githubURL = URL(string: "https://github.com/xItzYao/PaperNote")!
     static let blurb = "大學生的一個用愛發電小project，希望大家用的開心！想支持的話也可以贊助這個app的運作:P"
     @Environment(\.dismiss) private var dismiss
 
@@ -27,11 +26,6 @@ struct AboutView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
-                }
-                Section {
-                    Link(destination: Self.githubURL) {
-                        Label("GitHub 原始碼", systemImage: "chevron.left.forwardslash.chevron.right")
-                    }
                 }
                 Section {
                     LabeledContent("版本", value: version)

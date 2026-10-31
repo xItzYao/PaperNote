@@ -314,7 +314,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         let p = g.location(in: pagesContainer)
         switch tool {
         case .capture: handleCapturePan(g, p)
-        case .textSelect: handleTextPan(g, p)
+        case .textSelect: handleTextPan(g, g.state == .began ? panTouchDownPoint(g) : p)
         case .select, .image: handleElementPan(g, g.state == .began ? panTouchDownPoint(g) : p)
         case .pageResize: handlePageResizePan(g, p)
         case .lasso: handleLassoPan(g, g.state == .began ? panTouchDownPoint(g) : p)
@@ -1282,8 +1282,7 @@ extension NotebookViewController {
             }
             let a = pdfPoint(s, pageIndex: i, pdfPage: pdf)
             let b = pdfPoint(p, pageIndex: i, pdfPage: pdf)
-            if let sel = robustSelection(pdf, pageID: pages[i].id, from: a, to: b),
-               let ts = pdfTextSelection(sel, pageIndex: i, pdfPage: pdf) {
+            if let ts = dragSelection(pdf, pageIndex: i, from: a, to: b) {
                 showTextSelection(ts)
             }
             if g.state == .ended {
@@ -1404,14 +1403,32 @@ extension NotebookViewController {
               let pdf = session.pdfPage(for: pages[ts.pageIndex]) else { return }
         let i = ts.pageIndex
         let q = CGPoint(x: p.x + textHandleGrab.x, y: p.y + textHandleGrab.y)
-        guard let moving = textCaret(pdf, pageID: pages[i].id, pdfPoint(q, pageIndex: i, pdfPage: pdf)) else { return }
-        // 兩個縫之間的字；縫重疊時至少留一個字
-        let lo = min(fixed, moving), hi = max(fixed, moving)
+        guard let moving = textCaret(pdf, pageID: pages[i].id, pdfPoint(q, pageIndex: i, pdfPage: pdf)),
+              let new = caretSelection(pdf, pageIndex: i, fixed, moving) else { return }
+        showTextSelection(new)
+    }
+
+    /// 兩個字縫之間的字；縫重疊時至少留一個字
+    func caretSelection(_ pdf: PDFPage, pageIndex i: Int, _ a: Int, _ b: Int) -> TextSelectionState? {
+        let lo = min(a, b), hi = max(a, b)
         let range = hi > lo ? NSRange(location: lo, length: hi - lo)
             : NSRange(location: min(lo, max(0, pdf.numberOfCharacters - 1)), length: 1)
-        guard let sel = pdf.selection(for: range), var new = pdfTextSelection(sel, pageIndex: i, pdfPage: pdf) else { return }
-        new.charRange = range
-        showTextSelection(new)
+        guard let sel = pdf.selection(for: range), var ts = pdfTextSelection(sel, pageIndex: i, pdfPage: pdf) else { return nil }
+        ts.charRange = range
+        return ts
+    }
+
+    /// 拖曳選字（a、b 是 PDF 頁面座標）：頭尾和拖控制點一樣，停在筆最近的字縫。
+    /// 不用 PDFPage.selection(from:to:) 決定頭尾：它只選「整個字都在兩點框起來的範圍內」的字，
+    /// 筆停在最後一個字上（還沒超過字的右邊），那個字就選不到。
+    /// 兩點附近都沒有字（例如從頁邊空白框一大段）才交給 PDFKit
+    func dragSelection(_ pdf: PDFPage, pageIndex i: Int, from a: CGPoint, to b: CGPoint) -> TextSelectionState? {
+        let id = pages[i].id
+        if let ca = textCaret(pdf, pageID: id, a), let cb = textCaret(pdf, pageID: id, b) {
+            return caretSelection(pdf, pageIndex: i, ca, cb)
+        }
+        guard let sel = pdf.selection(from: a, to: b) else { return nil }
+        return pdfTextSelection(sel, pageIndex: i, pdfPage: pdf)
     }
 
     /// 離 p（PDF 頁面座標）最近的字和字之間的縫：在字的左半邊是這個字前面，右半邊是後面。

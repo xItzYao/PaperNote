@@ -19,17 +19,18 @@ enum CircuitRenderer {
         for p in d.junctions() {
             UIBezierPath(ovalIn: CGRect(x: p.x - dotRadius, y: p.y - dotRadius, width: dotRadius * 2, height: dotRadius * 2)).fill()
         }
-        drawWireLabels(d, color: color)
+        drawNames(d, color: color)
         ctx.restoreGState()
     }
 
     static func wireLabelFont(_ size: CGFloat) -> UIFont { .systemFont(ofSize: size, weight: .medium) }
 
-    /// 導線名稱：字的中心在 labelPosition
-    static func drawWireLabels(_ d: CircuitData, color: UIColor) {
-        for w in d.wires {
-            guard let text = w.label, !text.isEmpty, let c = w.labelPosition else { continue }
-            let str = NSAttributedString(string: text, attributes: [.font: wireLabelFont(w.labelFont), .foregroundColor: color])
+    /// 導線名稱、元件名稱：字的中心在名稱的位置
+    static func drawNames(_ d: CircuitData, color: UIColor) {
+        let names = d.wires.map { ($0.label, $0.labelPosition, $0.labelFont) }
+            + d.components.map { ($0.name, $0.namePosition, $0.nameFont) }
+        for case let (text?, c?, size) in names where !text.isEmpty {
+            let str = NSAttributedString(string: text, attributes: [.font: wireLabelFont(size), .foregroundColor: color])
             let sz = str.size()
             str.draw(at: CGPoint(x: c.x - sz.width / 2, y: c.y - sz.height / 2))
         }
@@ -363,6 +364,10 @@ extension CircuitRenderer {
         for w in d.wires {
             guard let s = w.label, !s.isEmpty, let c = w.labelPosition else { continue }
             text(s, at: c, size: w.labelFont, weight: "500")
+        }
+        for comp in d.components {
+            guard let s = comp.name, !s.isEmpty, let c = comp.namePosition else { continue }
+            text(s, at: c, size: comp.nameFont, weight: "500")
         }
         out.append("</svg>")
         return out.joined(separator: "\n") + "\n"

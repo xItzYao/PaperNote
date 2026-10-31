@@ -165,6 +165,47 @@ final class TextSelectionTests: XCTestCase {
         XCTAssertLessThan(after.count, before.count)
     }
 
+    // MARK: 拖曳選字
+
+    private let sentence = "Hello world this is a test sentence"
+
+    /// 用筆從 a 拖到 b 選字（拖曳要先移動 slop 才開始）
+    private func dragSelect(from a: CGPoint, to b: CGPoint, slop: CGPoint = .zero) throws -> String {
+        editor.setTool(.textSelect)
+        TouchPan().drag(from: a, to: b, slop: slop) { editor.handleToolPan($0) }
+        return try XCTUnwrap(editor.textSelection?.text, "要選到字").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// 回報的問題：拖曳選字常常選不到最後幾個字。筆停在最後一個字的右半邊（還沒超過字的右邊）就要選到那個字
+    func testDragEndingOnTheLastCharacterSelectsIt() throws {
+        let first = try charRect(0), last = try charRect(sentence.count - 1)
+        let text = try dragSelect(from: CGPoint(x: first.minX + 1, y: first.midY),
+                                  to: CGPoint(x: last.minX + last.width * 3 / 4, y: last.midY))
+        XCTAssertEqual(text, sentence)
+    }
+
+    func testDragFromTheEndBackwardsSelectsTheLastCharacter() throws {
+        let first = try charRect(0), last = try charRect(sentence.count - 1)
+        let text = try dragSelect(from: CGPoint(x: last.minX + last.width * 3 / 4, y: last.midY),
+                                  to: CGPoint(x: first.minX + 1, y: first.midY))
+        XCTAssertEqual(text, sentence)
+    }
+
+    /// 拖曳要移動一小段才開始：開頭要用筆剛碰到的位置，不然第一個字也會漏掉
+    func testDragStartsWhereThePenTouchedDown() throws {
+        let first = try charRect(0), last = try charRect(sentence.count - 1)
+        let text = try dragSelect(from: CGPoint(x: first.minX + 1, y: first.midY),
+                                  to: CGPoint(x: last.maxX + 4, y: last.midY), slop: CGPoint(x: 14, y: 0))
+        XCTAssertEqual(text, sentence)
+    }
+
+    func testDragEndingOnTheLeftHalfStopsBeforeThatCharacter() throws {
+        let first = try charRect(0), w = try charRect(6)
+        let text = try dragSelect(from: CGPoint(x: first.minX + 1, y: first.midY),
+                                  to: CGPoint(x: w.minX + w.width / 4, y: w.midY))
+        XCTAssertEqual(text, "Hello", "和拖控制點一樣：停在最近的字縫（w 不選）")
+    }
+
     func testTappingElsewhereEndsTextSelectionAndReturnsToThePen() throws {
         _ = try selectWord(at: doc(60, 61))
         editor.handleTap(FakeTap(doc(300, 600)))

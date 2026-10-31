@@ -18,6 +18,9 @@ enum CircuitDragKind: Equatable {
     case wireLabel(UUID)
     /// 導線名稱右下角的控制點：拖曳調整字的大小
     case wireLabelSize(UUID)
+    /// 元件名稱（拖到哪就放哪，記住和元件的相對位置）
+    case componentName(UUID)
+    case componentNameSize(UUID)
 }
 
 /// 拖曳中的狀態
@@ -92,13 +95,13 @@ extension NotebookViewController {
         circuitsAt(p, margin: margin).first
     }
 
-    /// 點到的元件或導線：重疊的電路圖都找，導線名稱最優先（字小，又是特地放的），元件再優先於導線
+    /// 點到的元件或導線：重疊的電路圖都找，名稱最優先（字小，又是特地放的），元件再優先於導線
     func circuitHit(at p: CGPoint) -> (ref: ElementRef, selection: CircuitSelection)? {
         let refs = circuitsAt(p, margin: 10)
         let tol = max(6, 12 / canvas.zoomScale)
         for ref in refs {
             guard let info = circuitInfo(ref) else { continue }
-            if let id = wireLabelHit(circuitLocal(p, ref), in: info.data, tolerance: tol / 2 / info.data.scale) { return (ref, .wire(id)) }
+            if let sel = nameHit(circuitLocal(p, ref), in: info.data, tolerance: tol / 2 / info.data.scale) { return (ref, sel) }
         }
         for ref in refs {
             guard let info = circuitInfo(ref) else { continue }
@@ -126,9 +129,12 @@ extension NotebookViewController {
         return nil
     }
 
-    /// 點到的導線名稱（內容座標）
-    func wireLabelHit(_ local: CGPoint, in data: CircuitData, tolerance tol: CGFloat) -> UUID? {
-        data.wires.reversed().first { $0.labelBounds?.insetBy(dx: -tol, dy: -tol).contains(local) == true }?.id
+    /// 點到的名稱（內容座標）：元件名稱或導線名稱
+    func nameHit(_ local: CGPoint, in data: CircuitData, tolerance tol: CGFloat) -> CircuitSelection? {
+        func hit(_ b: CGRect?) -> Bool { b?.insetBy(dx: -tol, dy: -tol).contains(local) == true }
+        if let c = data.components.reversed().first(where: { hit($0.nameBounds) }) { return .component(c.id) }
+        if let w = data.wires.reversed().first(where: { hit($0.labelBounds) }) { return .wire(w.id) }
+        return nil
     }
 
     /// 選取中導線的控制點：頭尾、轉角
@@ -144,34 +150,43 @@ extension NotebookViewController {
         return nil
     }
 
-    /// 選取的導線有名稱時：名稱的外框（文件座標）
-    func selectedWireLabelRect() -> (ref: ElementRef, wire: UUID, rect: CGRect)? {
-        guard tool == .circuit, let ref = circuitTarget, case let .wire(id)? = circuitSel,
-              let b = circuitInfo(ref)?.data.wires.first(where: { $0.id == id })?.labelBounds,
+    /// 選取的導線、元件有名稱時：名稱的外框（文件座標）
+    func selectedLabelRect() -> (ref: ElementRef, selection: CircuitSelection, rect: CGRect)? {
+        guard tool == .circuit, let ref = circuitTarget, let sel = circuitSel, let data = circuitInfo(ref)?.data,
               let t = circuitTransform(ref) else { return nil }
-        return (ref, id, b.applying(t).insetBy(dx: -3 / canvas.zoomScale, dy: -3 / canvas.zoomScale))
+        let b: CGRect?
+        switch sel {
+        case let .wire(id): b = data.wires.first { $0.id == id }?.labelBounds
+        case let .component(id): b = data.components.first { $0.id == id }?.nameBounds
+        }
+        guard let b else { return nil }
+        return (ref, sel, b.applying(t).insetBy(dx: -3 / canvas.zoomScale, dy: -3 / canvas.zoomScale))
     }
 
-    /// 選取中導線名稱的縮放控制點（右下角外側）
-    func wireLabelResizePoint() -> CGPoint? {
-        guard let r = selectedWireLabelRect()?.rect else { return nil }
+    /// 選取中名稱的縮放控制點（右下角外側）
+    func labelResizePoint() -> CGPoint? {
+        guard let r = selectedLabelRect()?.rect else { return nil }
         let k = 6 / canvas.zoomScale
         return CGPoint(x: r.maxX + k, y: r.maxY + k)
     }
 
     /// 選取模式下，從這個位置拖曳會動到什麼
     private func circuitDragTarget(at p: CGPoint) -> (ElementRef, CircuitDragKind)? {
-        if let l = selectedWireLabelRect(), let h = wireLabelResizePoint(), p.distance(to: h) <= 16 / canvas.zoomScale {
-            return (l.ref, .wireLabelSize(l.wire))
+        if let l = selectedLabelRect(), let h = labelResizePoint(), p.distance(to: h) <= 16 / canvas.zoomScale {
+            switch l.selection {
+            case let .wire(id): return (l.ref, .wireLabelSize(id))
+            case let .component(id): return (l.ref, .componentNameSize(id))
+            }
         }
         if let h = wireHandleHit(at: p) { return h }
         guard let hit = circuitHit(at: p), let info = circuitInfo(hit.ref) else { return nil }
+        let tol = max(6, 12 / canvas.zoomScale)
+        let onName = nameHit(circuitLocal(p, hit.ref), in: info.data, tolerance: tol / 2 / info.data.scale) == hit.selection
         switch hit.selection {
         case let .component(id):
-            return (hit.ref, .component(id))
-        case .wire:
-            let tol = max(6, 12 / canvas.zoomScale)
-            if let id = wireLabelHit(circuitLocal(p, hit.ref), in: info.data, tolerance: tol / 2 / info.data.scale) { return (hit.ref, .wireLabel(id)) }
+            return (hit.ref, onName ? .componentName(id) : .component(id))
+        case let .wire(id):
+            if onName { return (hit.ref, .wireLabel(id)) }
             guard case let (id, i)? = wireSegmentHit(circuitLocal(p, hit.ref), in: info.data, tolerance: tol / info.data.scale) else { return nil }
             return (hit.ref, .wireSegment(id, i))
         }
@@ -370,7 +385,7 @@ extension NotebookViewController {
             circuitTarget = ref
             let sel: CircuitSelection
             switch kind {
-            case let .component(id): sel = .component(id)
+            case let .component(id), let .componentName(id), let .componentNameSize(id): sel = .component(id)
             case let .wireSegment(id, _), let .wireCorner(id, _), let .wireEnd(id, _), let .wireLabel(id), let .wireLabelSize(id): sel = .wire(id)
             }
             if circuitSel != sel {
@@ -441,12 +456,15 @@ extension NotebookViewController {
             guard let wi = data.wires.firstIndex(where: { $0.id == id }), let o = data.wires[wi].labelPosition else { return nil }
             data.wires[wi].labelPosition = CGPoint(x: o.x + delta.x, y: o.y + delta.y)
         case let .wireLabelSize(id):
-            // 中心不動，右下角跟著手指：沿著對角線的位移換算成放大倍數
+            // 中心不動，右下角跟著手指
             guard let wi = data.wires.firstIndex(where: { $0.id == id }), let b = data.wires[wi].labelBounds else { return nil }
-            let hw = b.width / 2, hh = b.height / 2
-            let k = 1 + (delta.x * hw + delta.y * hh) / (hw * hw + hh * hh)
-            let range = CircuitWire.labelSizeRange
-            data.wires[wi].labelSize = min(max(data.wires[wi].labelFont * k, range.lowerBound), range.upperBound)
+            data.wires[wi].labelSize = CircuitText.resized(data.wires[wi].labelFont, bounds: b, drag: delta)
+        case let .componentName(id):
+            guard let ci = data.components.firstIndex(where: { $0.id == id }), let o = data.components[ci].nameOffset else { return nil }
+            data.components[ci].nameOffset = CGPoint(x: o.x + delta.x, y: o.y + delta.y)
+        case let .componentNameSize(id):
+            guard let ci = data.components.firstIndex(where: { $0.id == id }), let b = data.components[ci].nameBounds else { return nil }
+            data.components[ci].nameSize = CircuitText.resized(data.components[ci].nameFont, bounds: b, drag: delta)
         }
         data.wires.removeAll { $0.points.count < 2 }
         var e = d.original
@@ -621,19 +639,61 @@ extension NotebookViewController {
         rebuildSubBar()
     }
 
-    // MARK: 導線名稱
+    // MARK: 名稱
 
-    /// 點兩下導線（或它的名稱）：輸入名稱
+    /// 點兩下導線、元件（或它們的名稱）：輸入名稱
     func handleCircuitDoubleTap(at p: CGPoint) {
-        guard circuitMode == .select, let hit = circuitHit(at: p), case let .wire(id) = hit.selection,
-              let w = circuitInfo(hit.ref)?.data.wires.first(where: { $0.id == id }) else { return }
+        guard circuitMode == .select, let hit = circuitHit(at: p) else { return }
         circuitTarget = hit.ref
         if circuitSel != hit.selection {
             circuitSel = hit.selection
             rebuildSubBar()
         }
         updateCircuitChrome()
-        let local = circuitLocal(p, hit.ref)
+        switch hit.selection {
+        case let .wire(id): promptWireLabel(hit.ref, wire: id, near: circuitLocal(p, hit.ref))
+        case let .component(id): promptComponentName(hit.ref, component: id)
+        }
+    }
+
+    /// 輸入元件名稱（例如 R1、U2）
+    func promptComponentName(_ ref: ElementRef, component id: UUID) {
+        guard let c = circuitInfo(ref)?.data.components.first(where: { $0.id == id }) else { return }
+        let a = UIAlertController(title: "元件名稱", message: "例如 R1、U2；留空就拿掉名稱", preferredStyle: .alert)
+        a.addTextField { tf in
+            tf.text = c.name
+            tf.placeholder = "R1"
+            tf.clearButtonMode = .whileEditing
+            tf.autocapitalizationType = .none
+            tf.autocorrectionType = .no
+        }
+        a.addAction(UIAlertAction(title: "取消", style: .cancel))
+        a.addAction(UIAlertAction(title: "完成", style: .default) { [weak self, weak a] _ in
+            self?.setComponentName(ref, component: id, to: a?.textFields?.first?.text ?? "")
+        })
+        present(a, animated: true)
+    }
+
+    /// 改元件名稱（空字串＝拿掉）；新名稱放在元件上方
+    func setComponentName(_ ref: ElementRef, component id: UUID, to text: String) {
+        guard var data = circuitInfo(ref)?.data, let ci = data.components.firstIndex(where: { $0.id == id }) else { return }
+        let old = data.components[ci]
+        let name = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if name.isEmpty {
+            data.components[ci].name = nil
+            data.components[ci].nameOffset = nil
+            data.components[ci].nameSize = nil
+        } else {
+            data.components[ci].name = name
+            if old.nameOffset == nil { data.components[ci].nameOffset = CircuitComponent.defaultNameOffset(old) }
+        }
+        guard data.components[ci] != old else { return }
+        circuitTarget = ref
+        updateCircuit(ref, data: data)
+    }
+
+    private func promptWireLabel(_ ref: ElementRef, wire id: UUID, near local: CGPoint) {
+        guard let w = circuitInfo(ref)?.data.wires.first(where: { $0.id == id }) else { return }
         let a = UIAlertController(title: "導線名稱", message: "例如 Vin、CLK；留空就拿掉名稱", preferredStyle: .alert)
         a.addTextField { tf in
             tf.text = w.label
@@ -644,7 +704,7 @@ extension NotebookViewController {
         }
         a.addAction(UIAlertAction(title: "取消", style: .cancel))
         a.addAction(UIAlertAction(title: "完成", style: .default) { [weak self, weak a] _ in
-            self?.setWireLabel(hit.ref, wire: id, to: a?.textFields?.first?.text ?? "", near: local)
+            self?.setWireLabel(ref, wire: id, to: a?.textFields?.first?.text ?? "", near: local)
         })
         present(a, animated: true)
     }
@@ -700,7 +760,7 @@ extension NotebookViewController {
 
     func updateCircuitChrome() {
         let h = circuitPartHandleCenters()
-        overlay.showCircuitPartHandles(rotate: h?.rotate, flip: h?.flip, delete: h?.delete, labelResize: wireLabelResizePoint())
+        overlay.showCircuitPartHandles(rotate: h?.rotate, flip: h?.flip, delete: h?.delete, labelResize: labelResizePoint())
         guard tool == .circuit, let ref = circuitTarget, let info = circuitInfo(ref) else {
             overlay.showCircuit(frame: nil, selection: nil)
             return
@@ -713,7 +773,10 @@ extension NotebookViewController {
         switch circuitSel {
         case let .component(id)?:
             if let c = info.data.components.first(where: { $0.id == id }) {
-                sel = UIBezierPath(rect: CircuitGeometry.bounds(c).applying(t).insetBy(dx: -4, dy: -4))
+                let path = UIBezierPath(rect: CircuitGeometry.bounds(c).applying(t).insetBy(dx: -4, dy: -4))
+                // 有名稱：名稱外面也一圈藍框
+                if let r = selectedLabelRect()?.rect { path.append(UIBezierPath(roundedRect: r, cornerRadius: 3 / canvas.zoomScale)) }
+                sel = path
             }
         case let .wire(id)?:
             if let w = info.data.wires.first(where: { $0.id == id }), w.points.count >= 2 {
@@ -736,7 +799,7 @@ extension NotebookViewController {
                 handles = h
             }
             // 有名稱：名稱外面一圈藍框，拖曳時看得出有選到
-            if let r = selectedWireLabelRect()?.rect { sel = UIBezierPath(roundedRect: r, cornerRadius: 3 / canvas.zoomScale) }
+            if let r = selectedLabelRect()?.rect { sel = UIBezierPath(roundedRect: r, cornerRadius: 3 / canvas.zoomScale) }
         case nil:
             break
         }
@@ -764,6 +827,11 @@ extension NotebookViewController {
             views.append(action("arrow.up.and.down.righttriangle.up.righttriangle.down", "垂直翻轉") { [weak self] in
                 self?.modifySelectedComponent { $0.flipV.toggle() }
             })
+            if let ref = circuitTarget {
+                views.append(action("character.textbox", "元件名稱") { [weak self] in
+                    self?.promptComponentName(ref, component: c.id)
+                })
+            }
             if c.part.hasVariableInputs {
                 let range = c.part.sizeRange
                 views.append(action("minus.circle", "減少") { [weak self] in
@@ -828,7 +896,12 @@ extension NotebookViewController {
         case let .component(id)?:
             guard let c = info.data.components.first(where: { $0.id == id }) else { return nil }
             let b = CircuitGeometry.bounds(c).applying(t)
-            let x = b.maxX + s * 0.9
+            var right = b.maxX
+            // 名稱在按鈕那一排旁邊：按鈕移到名稱（和右下角的縮放箭頭）右邊，不會疊在一起
+            if let r = selectedLabelRect()?.rect, r.maxY + s > b.minY, r.minY < b.minY + s * 3.4 {
+                right = max(right, r.maxX + s * 0.6)
+            }
+            let x = right + s * 0.9
             return (CGPoint(x: x, y: b.minY + s * 0.3), CGPoint(x: x, y: b.minY + s * 1.5), CGPoint(x: x, y: b.minY + s * 2.7), s * 0.7)
         case let .wire(id)?:
             guard let w = info.data.wires.first(where: { $0.id == id }), w.points.count >= 2 else { return nil }

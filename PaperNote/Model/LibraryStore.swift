@@ -174,6 +174,11 @@ final class LibraryStore: ObservableObject {
     /// 資料庫看得到的筆記本（不含垃圾桶）
     var visibleNotebooks: [NotebookMeta] { index.notebooks.filter { !isHidden($0) } }
 
+    /// 我的最愛文件：所有資料夾裡打星號的筆記本，最近修改的在上面
+    var favoriteNotebooks: [NotebookMeta] {
+        visibleNotebooks.filter(\.starred).sorted { $0.modified > $1.modified }
+    }
+
     func folder(_ id: UUID) -> Folder? { index.folders.first { $0.id == id } }
     func notebook(_ id: UUID) -> NotebookMeta? { index.notebooks.first { $0.id == id } }
 

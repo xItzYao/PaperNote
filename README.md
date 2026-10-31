@@ -1,5 +1,7 @@
 # PaperNote
 
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-支持這個%20App-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/happytw)
+
 一款給 iPad 用的手寫筆記 App，靈感來自 GoodNotes，補上了我自己做筆記時最需要、但 GoodNotes 不夠好用的功能。
 
 > 本專案與 GoodNotes 沒有任何關係。

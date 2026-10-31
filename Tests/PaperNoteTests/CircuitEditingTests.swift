@@ -119,13 +119,13 @@ final class CircuitEditingTests: XCTestCase {
         let pos = editor.circuitDoc(try XCTUnwrap(wire?.labelPosition), ref)
         editor.handleCircuitTap(at: pos)
         XCTAssertEqual(editor.circuitSel, .wire(wireID), "點名稱選到導線")
-        let box = try XCTUnwrap(editor.selectedWireLabelRect()?.rect)
+        let box = try XCTUnwrap(editor.selectedLabelRect()?.rect)
         XCTAssertTrue(box.contains(pos))
         let drawn = try XCTUnwrap(editor.overlay.circuitSelLayer.path?.boundingBox, "名稱外面有藍框")
         XCTAssertEqual(drawn.minX, box.minX, accuracy: 0.5)
         XCTAssertEqual(drawn.maxY, box.maxY, accuracy: 0.5)
 
-        let handle = try XCTUnwrap(editor.wireLabelResizePoint())
+        let handle = try XCTUnwrap(editor.labelResizePoint())
         XCTAssertFalse(editor.overlay.circuitLabelResizeHandle.isHidden, "右下角有縮放箭頭")
         XCTAssertGreaterThan(handle.x, box.maxX)
         XCTAssertGreaterThan(handle.y, box.maxY)
@@ -141,9 +141,93 @@ final class CircuitEditingTests: XCTestCase {
         XCTAssertEqual(editor.circuitSel, .wire(wireID), "還是選著")
         XCTAssertTrue(CircuitRenderer.svg(try XCTUnwrap(data)).contains(#"font-size="\#(CircuitRenderer.num(bigger.labelFont))""#), "SVG 也用新的大小")
 
-        let h2 = try XCTUnwrap(editor.wireLabelResizePoint())
+        let h2 = try XCTUnwrap(editor.labelResizePoint())
         TouchPan().drag(from: h2, to: CGPoint(x: h2.x - 60, y: h2.y - 40)) { editor.handleCircuitPan($0, $0.location(in: nil)) }
         XCTAssertEqual(wire?.labelFont ?? 0, CircuitWire.labelSizeRange.lowerBound, accuracy: 0.01, "往內拖到底：最小字級")
+    }
+
+    // MARK: 元件名稱
+
+    private var part: CircuitComponent? { data?.components.first }
+
+    /// 回報的需求：元件也可以命名（點兩下元件，或工具列的「元件名稱」）
+    func testDoubleTapAComponentToNameIt() throws {
+        let c = try XCTUnwrap(part)
+        editor.handleCircuitDoubleTap(at: editor.circuitDoc(c.position, ref))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        let alert = try XCTUnwrap(editor.presentedViewController as? UIAlertController, "點兩下元件：跳出輸入名稱")
+        XCTAssertEqual(alert.title, "元件名稱")
+        XCTAssertEqual(editor.circuitSel, .component(c.id))
+        alert.dismiss(animated: false)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertTrue(editor.buildCircuitRibbon().contains { $0.accessibilityLabel == "元件名稱" }, "工具列也可以命名")
+
+        editor.setComponentName(ref, component: c.id, to: " R1 ")
+        let named = try XCTUnwrap(part)
+        XCTAssertEqual(named.name, "R1")
+        let pos = try XCTUnwrap(named.namePosition)
+        XCTAssertLessThan(pos.y, CircuitGeometry.bounds(named).minY, "名稱在元件上方")
+        XCTAssertTrue(frame.contains(editor.circuitDoc(pos, ref)), "外框包含名稱")
+        XCTAssertEqual(editor.circuitHit(at: editor.circuitDoc(pos, ref))?.selection, .component(c.id), "點名稱也是選到這個元件")
+        XCTAssertTrue(CircuitRenderer.svg(try XCTUnwrap(data)).contains(">R1</text>"), "SVG 也有名稱")
+
+        editor.setComponentName(ref, component: c.id, to: "")
+        XCTAssertNil(part?.name, "留空＝拿掉名稱")
+        XCTAssertNil(part?.nameOffset)
+    }
+
+    /// 移動元件：名稱跟著走（和元件的相對位置不變）
+    func testTheNameFollowsTheComponent() throws {
+        let c = try XCTUnwrap(part)
+        editor.setComponentName(ref, component: c.id, to: "R1")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        let before = try XCTUnwrap(part)
+        let start = editor.circuitDoc(before.position, ref)
+        let s = try XCTUnwrap(data).scale
+        TouchPan().drag(from: start, to: CGPoint(x: start.x + 40 * s, y: start.y + 30 * s)) { editor.handleCircuitPan($0, $0.location(in: nil)) }
+        let after = try XCTUnwrap(part)
+        let docBefore = editor.circuitDoc(before.position, ref), docAfter = editor.circuitDoc(after.position, ref)
+        XCTAssertGreaterThan(docAfter.x - docBefore.x, 0, "元件有移動")
+        XCTAssertEqual(after.nameOffset, before.nameOffset, "名稱和元件的相對位置不變")
+        let nameDoc = editor.circuitDoc(try XCTUnwrap(after.namePosition), ref)
+        XCTAssertEqual(nameDoc.x - docAfter.x, (before.namePosition!.x - before.position.x) * s, accuracy: 0.5)
+    }
+
+    /// 拖名稱：只動名稱；拖右下角：字變大
+    func testDraggingAndResizingTheComponentName() throws {
+        let c = try XCTUnwrap(part)
+        editor.setComponentName(ref, component: c.id, to: "R1")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        let before = try XCTUnwrap(part)
+        let start = editor.circuitDoc(try XCTUnwrap(before.namePosition), ref)
+        XCTAssertTrue(editor.circuitPanShouldBegin(at: start), "按在名稱上可以拖")
+        let s = try XCTUnwrap(data).scale
+        TouchPan().drag(from: start, to: CGPoint(x: start.x + 33, y: start.y - 21)) { editor.handleCircuitPan($0, $0.location(in: nil)) }
+        let moved = try XCTUnwrap(part)
+        XCTAssertEqual(moved.nameOffset!.x, before.nameOffset!.x + 33 / s, accuracy: 0.01, "名稱跟著手指走（不吸格點）")
+        XCTAssertEqual(moved.nameOffset!.y, before.nameOffset!.y - 21 / s, accuracy: 0.01)
+        XCTAssertEqual(editor.circuitDoc(moved.position, ref), editor.circuitDoc(before.position, ref), "元件本身不動")
+        XCTAssertEqual(editor.circuitSel, .component(c.id))
+
+        editor.updateCircuitChrome()
+        let box = try XCTUnwrap(editor.selectedLabelRect()?.rect, "選到元件：名稱有藍框")
+        let drawn = try XCTUnwrap(editor.overlay.circuitSelLayer.path?.boundingBox)
+        XCTAssertTrue(drawn.contains(box), "藍框包含名稱")
+        let handle = try XCTUnwrap(editor.labelResizePoint())
+        XCTAssertFalse(editor.overlay.circuitLabelResizeHandle.isHidden, "右下角有縮放箭頭")
+        XCTAssertTrue(editor.circuitPanShouldBegin(at: handle))
+        let buttons = try XCTUnwrap(editor.circuitPartHandleCenters())
+        for b in [buttons.rotate, buttons.flip, buttons.delete].compactMap({ $0 }) {
+            XCTAssertGreaterThan(handle.distance(to: b), buttons.radius, "縮放箭頭不會和旋轉、翻轉、✕ 疊在一起")
+        }
+        TouchPan().drag(from: handle, to: CGPoint(x: handle.x + 20, y: handle.y + 10)) { editor.handleCircuitPan($0, $0.location(in: nil)) }
+        let bigger = try XCTUnwrap(part)
+        XCTAssertGreaterThan(bigger.nameFont, before.nameFont * 1.3, "往外拖：字變大")
+        XCTAssertEqual(bigger.nameOffset!.x, moved.nameOffset!.x, accuracy: 0.01, "中心不動")
+        XCTAssertEqual(editor.circuitSel, .component(c.id), "還是選著")
+
+        editor.undoTapped()
+        XCTAssertEqual(try XCTUnwrap(part).nameFont, before.nameFont, accuracy: 0.01, "可以復原")
     }
 
     // MARK: 刪除

@@ -104,17 +104,6 @@ extension NotebookViewController {
 
     // MARK: - PDF 選字的備用方法
 
-    /// 先用 PDFKit 的 selection(from:to:)；失敗時改用「最近的字元」定位範圍
-    func robustSelection(_ pdf: PDFPage, pageID: UUID, from a: CGPoint, to b: CGPoint) -> PDFSelection? {
-        if let s = pdf.selection(from: a, to: b), let str = s.string,
-           !str.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return s
-        }
-        guard let ia = nearestCharIndex(pdf, pageID: pageID, a), let ib = nearestCharIndex(pdf, pageID: pageID, b) else { return nil }
-        let lo = min(ia, ib), hi = max(ia, ib)
-        return pdf.selection(for: NSRange(location: lo, length: hi - lo + 1))
-    }
-
     func robustWordSelection(_ pdf: PDFPage, pageID: UUID, at p: CGPoint) -> PDFSelection? {
         if let s = pdf.selectionForWord(at: p), let str = s.string,
            !str.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

@@ -99,6 +99,50 @@ struct CircuitComponent: Codable, Equatable, Identifiable {
     var flipV = false
     /// 邏輯閘、多工器的輸入數量；解碼器、編碼器的位元數
     var inputs = 2
+    /// 元件名稱（例如 R1、U2）；nil＝沒有名稱
+    var name: String?
+    /// 名稱中心相對元件中心的位置：移動元件時名稱跟著走
+    var nameOffset: CGPoint?
+    /// 名稱的字級（拖右下角的控制點調整）；nil＝預設大小
+    var nameSize: CGFloat?
+
+    var nameFont: CGFloat { nameSize ?? CircuitText.fontSize }
+
+    var namePosition: CGPoint? {
+        nameOffset.map { CGPoint(x: position.x + $0.x, y: position.y + $0.y) }
+    }
+
+    var nameBounds: CGRect? {
+        guard let text = name, !text.isEmpty, let c = namePosition else { return nil }
+        return CircuitText.bounds(text, center: c, size: nameFont)
+    }
+
+    /// 新名稱放在元件上方
+    static func defaultNameOffset(_ c: CircuitComponent) -> CGPoint {
+        let b = CircuitGeometry.bounds(c)
+        return CGPoint(x: b.midX - c.position.x, y: b.minY - c.position.y - CircuitText.fontSize * 0.8)
+    }
+}
+
+/// 電路圖上的文字（導線名稱、元件名稱）
+enum CircuitText {
+    /// 預設字的大小（電路圖內的座標，和元件符號一起縮放）
+    static let fontSize: CGFloat = 16
+    static let sizeRange: ClosedRange<CGFloat> = 8...72
+
+    /// 文字大約佔的範圍（不用 UIKit 量字：英數字算 0.6 個字寬，中文算 1 個）
+    static func bounds(_ text: String, center c: CGPoint, size f: CGFloat) -> CGRect {
+        let w = text.unicodeScalars.reduce(CGFloat(0)) { $0 + ($1.isASCII ? 0.6 : 1) * f }
+        let h = f * 1.25
+        return CGRect(x: c.x - w / 2, y: c.y - h / 2, width: w, height: h)
+    }
+
+    /// 拖右下角的控制點調整字級：中心不動，沿著對角線的位移換算成放大倍數
+    static func resized(_ size: CGFloat, bounds b: CGRect, drag delta: CGPoint) -> CGFloat {
+        let hw = b.width / 2, hh = b.height / 2
+        let k = 1 + (delta.x * hw + delta.y * hh) / (hw * hw + hh * hh)
+        return min(max(size * k, sizeRange.lowerBound), sizeRange.upperBound)
+    }
 }
 
 struct CircuitWire: Codable, Equatable, Identifiable {
@@ -112,19 +156,14 @@ struct CircuitWire: Codable, Equatable, Identifiable {
     /// 名稱的字級（拖右下角的控制點調整）；nil＝預設大小
     var labelSize: CGFloat?
 
-    /// 預設字的大小（電路圖內的座標，和元件符號一起縮放）
-    static let labelFontSize: CGFloat = 16
-    static let labelSizeRange: ClosedRange<CGFloat> = 8...72
+    static let labelFontSize = CircuitText.fontSize
+    static let labelSizeRange = CircuitText.sizeRange
 
     var labelFont: CGFloat { labelSize ?? Self.labelFontSize }
 
-    /// 名稱大約佔的範圍（不用 UIKit 量字：英數字算 0.6 個字寬，中文算 1 個）
     var labelBounds: CGRect? {
         guard let text = label, !text.isEmpty, let c = labelPosition else { return nil }
-        let f = labelFont
-        let w = text.unicodeScalars.reduce(CGFloat(0)) { $0 + ($1.isASCII ? 0.6 : 1) * f }
-        let h = f * 1.25
-        return CGRect(x: c.x - w / 2, y: c.y - h / 2, width: w, height: h)
+        return CircuitText.bounds(text, center: c, size: labelFont)
     }
 
     /// 新名稱放的位置：離 p 最近的那一段旁邊（橫的放上面、直的放右邊）
@@ -356,7 +395,10 @@ enum CircuitGeometry {
 extension CircuitData {
     var contentBounds: CGRect {
         var r = CGRect.null
-        for c in components { r = r.union(CircuitGeometry.bounds(c)) }
+        for c in components {
+            r = r.union(CircuitGeometry.bounds(c))
+            if let b = c.nameBounds { r = r.union(b) }
+        }
         for w in wires { for p in w.points { r = r.union(CGRect(x: p.x, y: p.y, width: 0, height: 0)) } }
         for w in wires { if let b = w.labelBounds { r = r.union(b) } }
         return r

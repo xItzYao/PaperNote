@@ -305,5 +305,21 @@ let normalBox = sized.labelBounds!
 sized.labelSize = 32
 check("a bigger name has a bigger box around the same center", sized.labelBounds!.width == normalBox.width * 2 && sized.labelBounds!.midX == normalBox.midX && sized.labelBounds!.midY == normalBox.midY)
 
+// 23. 元件名稱：預設在元件上方，跟著元件移動，外框包含名稱；舊資料沒有名稱
+var namedPart = CircuitComponent(part: .resistor, position: P(100, 100), name: "R1")
+namedPart.nameOffset = CircuitComponent.defaultNameOffset(namedPart)
+check("a new component name sits above the part", namedPart.namePosition!.y < CircuitGeometry.bounds(namedPart).minY && namedPart.namePosition!.x == 100)
+var partData = CircuitData()
+partData.components = [namedPart]
+check("content bounds include the component name", partData.contentBounds.minY <= namedPart.nameBounds!.minY)
+partData.offset(by: P(30, 40))
+check("moving the circuit moves the component name", partData.components[0].namePosition == P(namedPart.namePosition!.x + 30, namedPart.namePosition!.y + 40))
+partData.components[0].position = P(200, 200)
+check("the name keeps its place relative to the part", partData.components[0].namePosition == P(200 + namedPart.nameOffset!.x, 200 + namedPart.nameOffset!.y))
+let oldPart = try! JSONDecoder().decode(CircuitComponent.self, from: Data(#"{"id":"\#(UUID().uuidString)","part":"resistor","position":[10,20],"rotation":0,"flipH":false,"flipV":false,"inputs":2}"#.utf8))
+check("old components have no name", oldPart.name == nil && oldPart.nameBounds == nil)
+let bigger = CircuitText.resized(16, bounds: CircuitText.bounds("R1", center: .zero, size: 16), drag: P(100, 100))
+check("dragging the corner outwards makes the name bigger", bigger > 16 && bigger <= CircuitText.sizeRange.upperBound)
+
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)
