@@ -286,7 +286,11 @@ extension NotebookViewController {
             c.background.backgroundColor = t == tool ? UIColor.systemBlue.withAlphaComponent(0.15) : .clear
             c.baseForegroundColor = t == tool ? .systemBlue : .label
             c.background.cornerRadius = 8
-            b.configuration = c
+            // UIButton 換 configuration 時預設會淡入淡出：工具切換要馬上變色
+            UIView.performWithoutAnimation {
+                b.configuration = c
+                b.layoutIfNeeded()
+            }
         }
         rebuildSubBar()
     }

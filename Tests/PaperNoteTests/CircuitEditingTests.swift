@@ -289,7 +289,9 @@ final class CircuitEditingTests: XCTestCase {
         let labels = editor.buildCircuitRibbon().compactMap(\.accessibilityLabel)
         XCTAssertFalse(labels.contains("旋轉 90°"), "刪除工具不放元件的編輯按鈕")
 
+        let steps = editor.history.undoCount
         editor.handleCircuitTap(at: try XCTUnwrap(h.delete))
+        XCTAssertEqual(editor.history.undoCount, steps + 1, "刪除自己是一步")
         XCTAssertEqual(data?.components.count, 0)
         XCTAssertNotNil(wire, "導線還在")
         editor.undoTapped()
