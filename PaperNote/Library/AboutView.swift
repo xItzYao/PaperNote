@@ -2,8 +2,7 @@ import SwiftUI
 
 /// 關於我
 struct AboutView: View {
-    static let blurb = "大學生的一個用愛發電小project，希望大家用的開心！
-想支持的話也可以贊助這個app的運作:P"
+    static let blurb = "大學生的一個用愛發電小project，希望大家用的開心！\n想支持的話也可以贊助這個app的運作:P"
     @Environment(\.dismiss) private var dismiss
 
     private var version: String {
