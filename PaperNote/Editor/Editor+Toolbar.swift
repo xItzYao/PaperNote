@@ -774,7 +774,6 @@ extension NotebookViewController {
             },
             UIAction(title: "手繪新表格", image: UIImage(systemName: "pencil.and.outline")) { [weak self] _ in self?.setTool(.tableDraw) },
             UIAction(title: "文字框", image: UIImage(systemName: "character.textbox")) { [weak self] _ in self?.insertTextBox(at: nil) },
-            UIAction(title: "照片…", image: UIImage(systemName: "photo")) { [weak self] _ in self?.presentPhotoPicker() },
         ])
     }
 

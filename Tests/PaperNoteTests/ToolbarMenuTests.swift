@@ -36,6 +36,23 @@ final class ToolbarMenuTests: XCTestCase {
         items.flatMap { ($0 as? UIMenu).map { titles($0.children) } ?? [$0.title] }
     }
 
+    private func animationKeys(_ v: UIView) -> [String] {
+        (v.layer.animationKeys() ?? []).map { "\(type(of: v)).\($0)" } + v.subviews.flatMap(animationKeys)
+    }
+
+    /// 朋友回報：選工具的漸變讓工具切換感覺慢
+    func testSwitchingToolsHasNoFade() throws {
+        let pen = try XCTUnwrap(editor.toolButtons[.pen])
+        let eraser = try XCTUnwrap(editor.toolButtons[.eraser])
+        editor.setTool(.pen)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        eraser.sendActions(for: .touchUpInside)
+        XCTAssertEqual(editor.tool, .eraser)
+        editor.view.layoutIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        XCTAssertEqual(animationKeys(pen) + animationKeys(eraser), [], "按下去馬上變色，沒有淡入淡出")
+    }
+
     private func allButtons(_ v: UIView) -> [UIButton] {
         (v as? UIButton).map { [$0] } ?? [] + v.subviews.flatMap(allButtons)
     }

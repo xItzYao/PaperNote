@@ -76,10 +76,35 @@ final class PageBoundsTests: XCTestCase {
         while picker != nil && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
     }
 
-    func testPullingPastTheEndOpensThePaperPicker() throws {
+    func testPullingALittleAddsABlankPageLikeTheLastOne() throws {
+        let last = try XCTUnwrap(editor.pages.last)
+        let size = editor.session.baseSize(of: last)
+        let n = editor.pages.count
         pull(by: NotebookViewController.addPagePullThreshold + 20)
         XCTAssertFalse(editor.addPagePull.isHidden, "拉過頭要出現＋")
-        XCTAssertTrue(editor.addPagePull.armed)
+        XCTAssertEqual(editor.addPagePull.stage, .blankPage)
+        release()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertNil(picker, "還沒拉到選單的距離，不跳小視窗")
+        XCTAssertEqual(editor.pages.count, n + 1, "放開就多一頁")
+        guard case let .paper(w, h, style) = try XCTUnwrap(editor.pages.last).background else { return XCTFail("要是紙張") }
+        XCTAssertEqual(CGSize(width: w, height: h), size, "和上一頁一樣大")
+        XCTAssertEqual(style, .blank, "是空白紙，不照抄上一頁的格線")
+    }
+
+    func testPullingBackBeforeLettingGoPicksTheNearerStage() {
+        pull(by: NotebookViewController.addPagePullMenuThreshold + 10)
+        XCTAssertEqual(editor.addPagePull.stage, .paperPicker)
+        pull(by: NotebookViewController.addPagePullThreshold + 10)
+        XCTAssertEqual(editor.addPagePull.stage, .blankPage, "拉回來就只加空白頁")
+        pull(by: 30)
+        XCTAssertEqual(editor.addPagePull.stage, .none)
+    }
+
+    func testPullingFurtherOpensThePaperPicker() throws {
+        pull(by: NotebookViewController.addPagePullMenuThreshold + 20)
+        XCTAssertFalse(editor.addPagePull.isHidden, "拉過頭要出現＋")
+        XCTAssertEqual(editor.addPagePull.stage, .paperPicker)
         release()
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
         let host = try XCTUnwrap(picker, "放開要跳出選紙張的小視窗")
@@ -98,10 +123,12 @@ final class PageBoundsTests: XCTestCase {
     func testShortPullDoesNotAddAPage() {
         pull(by: 30)
         XCTAssertFalse(editor.addPagePull.isHidden, "拉一點點就看得到＋")
-        XCTAssertFalse(editor.addPagePull.armed)
+        XCTAssertEqual(editor.addPagePull.stage, .none)
+        let n = editor.pages.count
         release()
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
         XCTAssertNil(picker, "沒拉夠不會跳出小視窗")
+        XCTAssertEqual(editor.pages.count, n, "沒拉夠不會加頁")
     }
 
     func testChoosingInThePickerAddsThatPaperAtTheEnd() throws {

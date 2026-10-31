@@ -1,7 +1,7 @@
 import UIKit
 
 enum CircuitMode: Equatable {
-    case select, wire, place(CircuitPart)
+    case select, wire, place(CircuitPart), delete
 }
 
 enum CircuitSelection: Equatable {
@@ -165,7 +165,7 @@ extension NotebookViewController {
 
     /// 選取中名稱的縮放控制點（右下角外側）
     func labelResizePoint() -> CGPoint? {
-        guard let r = selectedLabelRect()?.rect else { return nil }
+        guard circuitMode != .delete, let r = selectedLabelRect()?.rect else { return nil }
         let k = 6 / canvas.zoomScale
         return CGPoint(x: r.maxX + k, y: r.maxY + k)
     }
@@ -333,7 +333,7 @@ extension NotebookViewController {
             }
         case .wire:
             break
-        case .select:
+        case .select, .delete:
             let old = circuitSel, oldTarget = circuitTarget
             if let hit = circuitHit(at: p) {
                 circuitTarget = hit.ref
@@ -352,6 +352,7 @@ extension NotebookViewController {
         if let h = circuitPartHandleCenters(), [h.rotate, h.flip, h.delete].compactMap({ $0 }).contains(where: { p.distance(to: $0) <= h.radius }) { return false }
         switch circuitMode {
         case .wire: return true
+        case .delete: return false
         case .select, .place:
             return circuitDragTarget(at: p) != nil
         }
@@ -368,12 +369,14 @@ extension NotebookViewController {
                 wireDraft = WireDraft(ref: circuitAt(start, margin: 80), ink: [start])
                 handleWirePan(g, p)
             case .select, .place: handleSelectDrag(g, start)
+            case .delete: break
             }
             return
         }
         switch circuitMode {
         case .wire: handleWirePan(g, p)
         case .select, .place: handleSelectDrag(g, p)
+        case .delete: break
         }
     }
 
@@ -810,15 +813,15 @@ extension NotebookViewController {
 
     func buildCircuitRibbon() -> [UIView] {
         circuitLibrary.currentMode = circuitMode
-        // 選取、接線（從元件庫點的元件也是一種模式：兩個都不亮）
-        var views: [UIView] = [circuitModeButton("cursorarrow", "選取", .select), circuitModeButton("line.diagonal", "接線", .wire)]
+        // 選取、接線、刪除（從元件庫點的元件也是一種模式：都不亮）
+        var views: [UIView] = [circuitModeButton("cursorarrow", "選取", .select), circuitModeButton("line.diagonal", "接線", .wire), circuitModeButton("trash", "刪除", .delete)]
         func action(_ symbol: String, _ label: String, _ handler: @escaping () -> Void) -> UIButton {
             let b = makeButton(symbol: symbol, title: nil, action: nil)
             b.accessibilityLabel = label
             b.addAction(UIAction { _ in handler() }, for: .touchUpInside)
             return b
         }
-        if let c = selectedCircuitComponent {
+        if circuitMode != .delete, let c = selectedCircuitComponent {
             views.append(toolbarSeparator())
             views.append(action("rotate.right", "旋轉 90°") { [weak self] in
                 self?.modifySelectedComponent { $0.rotation = ($0.rotation + 90) % 360 }
@@ -862,7 +865,7 @@ extension NotebookViewController {
         return views
     }
 
-    /// 第二列的「選取」「接線」：目前的模式亮起來
+    /// 第二列的「選取」「接線」「刪除」：目前的模式亮起來
     private func circuitModeButton(_ symbol: String, _ title: String, _ mode: CircuitMode) -> UIButton {
         let b = makeButton(symbol: symbol, title: title, action: nil)
         b.accessibilityLabel = title
@@ -896,8 +899,8 @@ extension NotebookViewController {
 
     // MARK: 元件旁的旋轉、翻轉小圓鈕
 
-    /// 選取元件時旋轉、水平翻轉、刪除按鈕的位置；選取導線時只有刪除（文件座標）
-    func circuitPartHandleCenters() -> (rotate: CGPoint?, flip: CGPoint?, delete: CGPoint, radius: CGFloat)? {
+    /// 選取元件時旋轉、水平翻轉按鈕的位置；刪除工具選到的元件、導線旁邊只有 ✕（文件座標）
+    func circuitPartHandleCenters() -> (rotate: CGPoint?, flip: CGPoint?, delete: CGPoint?, radius: CGFloat)? {
         guard tool == .circuit, let ref = circuitTarget, let info = circuitInfo(ref) else { return nil }
         let t = circuitTransform(ref) ?? .identity
         let s = 30 / canvas.zoomScale
@@ -911,9 +914,11 @@ extension NotebookViewController {
                 right = max(right, r.maxX + s * 0.6)
             }
             let x = right + s * 0.9
-            return (CGPoint(x: x, y: b.minY + s * 0.3), CGPoint(x: x, y: b.minY + s * 1.5), CGPoint(x: x, y: b.minY + s * 2.7), s * 0.7)
+            let first = CGPoint(x: x, y: b.minY + s * 0.3)
+            if circuitMode == .delete { return (nil, nil, first, s * 0.7) }
+            return (first, CGPoint(x: x, y: b.minY + s * 1.5), nil, s * 0.7)
         case let .wire(id)?:
-            guard let w = info.data.wires.first(where: { $0.id == id }), w.points.count >= 2 else { return nil }
+            guard circuitMode == .delete, let w = info.data.wires.first(where: { $0.id == id }), w.points.count >= 2 else { return nil }
             return (nil, nil, Self.wireDeletePoint(w.points.map { $0.applying(t) }, offset: s), s * 0.7)
         case nil:
             return nil
@@ -940,7 +945,7 @@ extension NotebookViewController {
             modifySelectedComponent { $0.flipH.toggle() }
             return true
         }
-        if p.distance(to: h.delete) <= h.radius {
+        if let d = h.delete, p.distance(to: d) <= h.radius {
             deleteCircuitSelection()
             return true
         }

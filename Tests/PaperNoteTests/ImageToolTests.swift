@@ -159,5 +159,6 @@ final class ImageToolTests: XCTestCase {
     func testInsertMenuHasNoPaste() {
         let titles = editor.makeInsertMenu().children.map(\.title)
         XCTAssertFalse(titles.contains("貼上"), "長按畫面就能貼上，＋選單裡不放")
+        XCTAssertFalse(titles.contains { $0.contains("照片") }, "工具列已經有圖片工具，＋選單裡不放")
     }
 }

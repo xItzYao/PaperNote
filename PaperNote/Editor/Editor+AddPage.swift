@@ -1,11 +1,19 @@
 import UIKit
 
-/// 捲到最後一頁底下再往上拉：出現＋，拉夠了放開就跳出選紙張的小視窗
+/// 捲到最後一頁底下再往上拉放開會怎樣
+enum AddPagePullStage: Equatable {
+    case none
+    /// 新增一張和最後一頁一樣大的空白紙
+    case blankPage
+    /// 跳出選紙張的小視窗
+    case paperPicker
+}
+
+/// 捲到最後一頁底下再往上拉：出現＋，拉夠了放開就加一張空白紙，再拉遠一點放開才跳出選紙張的小視窗
 final class AddPagePullView: UIView {
     private let icon = UIImageView(image: UIImage(systemName: "plus.circle.fill"))
     let label = UILabel()
-    /// 拉夠了（放開就會問要新增哪種頁面）
-    private(set) var armed = false
+    private(set) var stage = AddPagePullStage.none
 
     override init(frame: CGRect) {
         super.init(frame: CGRect(x: 0, y: 0, width: 220, height: 64))
@@ -28,20 +36,27 @@ final class AddPagePullView: UIView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    /// progress：拉的距離 ÷ 門檻
-    func update(progress: CGFloat) {
-        let nowArmed = progress >= 1
-        if nowArmed && !armed { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
-        armed = nowArmed
+    /// over：拉過最後一頁底部多少（螢幕點）
+    func update(over: CGFloat) {
+        let progress = over / NotebookViewController.addPagePullThreshold
+        let now: AddPagePullStage = over >= NotebookViewController.addPagePullMenuThreshold ? .paperPicker : progress >= 1 ? .blankPage : .none
+        if now != stage && now != .none { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+        stage = now
         alpha = min(1, max(0, progress))
         icon.transform = CGAffineTransform(rotationAngle: min(progress, 1) * .pi / 2)
-        label.text = armed ? "放開新增頁面" : "繼續往上拉，新增頁面"
+        switch stage {
+        case .none: label.text = "繼續往上拉，新增頁面"
+        case .blankPage: label.text = "放開新增空白頁，再拉選紙張"
+        case .paperPicker: label.text = "放開選紙張"
+        }
     }
 }
 
 extension NotebookViewController {
-    /// 拉多遠（螢幕點）放開才問要新增頁面
+    /// 拉多遠（螢幕點）放開才新增空白頁
     static let addPagePullThreshold: CGFloat = 80
+    /// 拉多遠（螢幕點）放開才問要新增哪種頁面
+    static let addPagePullMenuThreshold: CGFloat = 150
 
     /// 拉過最後一頁底部多少（螢幕點）；沒有拉過是 0 或負的
     var bottomOverscroll: CGFloat {
@@ -56,22 +71,32 @@ extension NotebookViewController {
         // 擴展頁面時拉到底是要拉控制點，不是新增頁面
         guard over > 1, !pages.isEmpty, tool != .pageResize else {
             addPagePull.isHidden = true
-            addPagePull.update(progress: 0)
+            addPagePull.update(over: 0)
             return
         }
         if addPagePull.superview !== canvas { canvas.addSubview(addPagePull) }
         addPagePull.isHidden = false
-        addPagePull.update(progress: over / Self.addPagePullThreshold)
+        addPagePull.update(over: over)
         let bottom = canvas.contentOffset.y + canvas.bounds.height - canvas.adjustedContentInset.bottom
         addPagePull.center = CGPoint(x: canvas.contentOffset.x + canvas.bounds.width / 2, y: bottom - over / 2)
     }
 
-    /// 手指放開：拉夠了就問要新增哪種頁面
+    /// 手指放開：看拉多遠，加一張空白紙或問要新增哪種頁面
     func addPagePullEnded() {
-        let armed = addPagePull.armed && !addPagePull.isHidden
-        guard armed else { return }
-        addPagePull.update(progress: 0)
-        presentAddPageMenu()
+        let stage = addPagePull.isHidden ? .none : addPagePull.stage
+        addPagePull.update(over: 0)
+        switch stage {
+        case .none: break
+        case .blankPage: addBlankPageAtEnd()
+        case .paperPicker: presentAddPageMenu()
+        }
+    }
+
+    /// 加在最後面：大小、方向和最後一頁一樣的空白紙
+    func addBlankPageAtEnd() {
+        guard let last = pages.last else { return }
+        let size = session.baseSize(of: last)
+        insertPage(at: pages.count, style: .blank, landscape: size.width > size.height)
     }
 
     /// 拉過最後一頁放開：中間跳出選紙張的小視窗，選好加在最後面
