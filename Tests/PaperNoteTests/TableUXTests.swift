@@ -387,7 +387,6 @@ final class TableEditorUXTests: XCTestCase {
         let row = try XCTUnwrap(find(editor.subBarStack))
         let rowFrame = row.convert(row.bounds, to: label.superview)
         // 放得下就全部顯示，放不下就一直延伸到頁碼旁邊（不額外留空）
-        try XCTSkipIf(editor.settings.presetsOnRight, "預設是筆刷列靠左、頁碼在右邊")
         let available = label.frame.minX - 12 - rowFrame.minX
         XCTAssertEqual(rowFrame.width, min(row.contentSize.width, available), accuracy: 1,
                        "工具列寬 \(rowFrame.width)、內容 \(row.contentSize.width)、到頁碼的空間 \(available)")

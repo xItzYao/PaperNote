@@ -177,23 +177,20 @@ extension NotebookViewController {
         pageLabel.accessibilityIdentifier = "pageIndicator"
         pageLabel.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(pageLabelTapped)))
         subBar.addSubview(pageLabel)
+        pageLabel.textAlignment = .right
+        // 第二列置中（在最左邊很難按）；放不下時往左延伸，不蓋到右邊的頁碼
+        let centered = subBarStack.centerXAnchor.constraint(equalTo: subBar.centerXAnchor)
+        centered.priority = .defaultHigh
         NSLayoutConstraint.activate([
             subBarStack.centerYAnchor.constraint(equalTo: subBar.centerYAnchor),
             pageLabel.centerYAnchor.constraint(equalTo: subBar.centerYAnchor),
             // 頁碼固定留到 5 位數（99999 / 99999）的寬度：工具列可以一直延伸到這裡，頁數變多也不會跳動
             pageLabel.widthAnchor.constraint(equalToConstant: Self.pageLabelWidth),
-        ])
-        subBarLeftLayout = [
-            subBarStack.leadingAnchor.constraint(equalTo: subBar.leadingAnchor, constant: 12),
-            subBarStack.trailingAnchor.constraint(lessThanOrEqualTo: pageLabel.leadingAnchor, constant: -12),
             pageLabel.trailingAnchor.constraint(equalTo: subBar.trailingAnchor, constant: -16),
-        ]
-        subBarRightLayout = [
-            subBarStack.trailingAnchor.constraint(equalTo: subBar.trailingAnchor, constant: -12),
-            subBarStack.leadingAnchor.constraint(greaterThanOrEqualTo: pageLabel.trailingAnchor, constant: 12),
-            pageLabel.leadingAnchor.constraint(equalTo: subBar.leadingAnchor, constant: 16),
-        ]
-        applyPresetAlignment()
+            centered,
+            subBarStack.leadingAnchor.constraint(greaterThanOrEqualTo: subBar.leadingAnchor, constant: 12),
+            subBarStack.trailingAnchor.constraint(lessThanOrEqualTo: pageLabel.leadingAnchor, constant: -12),
+        ])
     }
 
     static var pageLabelWidth: CGFloat {
@@ -858,13 +855,6 @@ extension NotebookViewController {
     }
 
     /// 常用筆刷列靠左或靠右
-    func applyPresetAlignment() {
-        NSLayoutConstraint.deactivate(subBarLeftLayout + subBarRightLayout)
-        NSLayoutConstraint.activate(settings.presetsOnRight ? subBarRightLayout : subBarLeftLayout)
-        // 頁碼靠外側（工具列在左邊時靠右）
-        pageLabel.textAlignment = settings.presetsOnRight ? .left : .right
-    }
-
     func makeSettingsMenuItems() -> [UIMenuElement] {
         let s = settings
         let toggles = UIMenu(options: .displayInline, children: [
@@ -876,10 +866,6 @@ extension NotebookViewController {
                 UIAction(title: "左手寫字", state: s.palmRejection == "left" ? .on : .off) { _ in s.palmRejection = "left" },
                 UIAction(title: "關閉", state: s.palmRejection == "off" ? .on : .off) { _ in s.palmRejection = "off" },
             ]),
-            UIAction(title: "筆刷列靠右", image: UIImage(systemName: "arrow.right.to.line"), state: s.presetsOnRight ? .on : .off) { [weak self] _ in
-                s.presetsOnRight.toggle()
-                self?.applyPresetAlignment()
-            },
             UIAction(title: "用手指書寫", image: UIImage(systemName: "hand.draw"), state: s.fingerDrawing ? .on : .off) { [weak self] _ in
                 s.fingerDrawing.toggle()
                 self?.applyTool()

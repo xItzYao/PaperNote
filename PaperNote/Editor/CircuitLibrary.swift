@@ -3,7 +3,7 @@ import UIKit
 /// 電路元件庫（像 Visio 的圖庫）：選電路工具時浮在頁面左邊。
 /// 點一下元件就連續擺放；或直接把元件往右拖到頁面上放開。可以收合成一個小把手。
 final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
-    /// 點了「選取」「接線」或某個元件
+    /// 點了某個元件（「選取」「接線」在第二列工具列）
     var onSelectMode: ((CircuitMode) -> Void)?
     /// 元件拖到頁面上放開（點是在 superview 的座標）
     var onDrop: ((CircuitPart, CGPoint) -> Void)?
@@ -84,9 +84,6 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
         fit.priority = .defaultLow
         fit.isActive = true
 
-        // 選取、接線
-        let modes = row([modeButton("cursorarrow", "選取", .select), modeButton("line.diagonal", "接線", .wire)])
-        stack.addArrangedSubview(modes)
         // 各分類：標題列可以點開、收起，元件兩欄
         let collapsedNames = Set(UserDefaults.standard.stringArray(forKey: Self.collapsedKey) ?? [])
         for (name, parts) in Self.sections {
@@ -182,13 +179,6 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
         let b = UIButton(configuration: c)
         b.accessibilityLabel = title
         b.heightAnchor.constraint(equalToConstant: 56).isActive = true
-        return b
-    }
-
-    private func modeButton(_ symbol: String, _ title: String, _ mode: CircuitMode) -> UIButton {
-        let b = tile(image: UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 18)), title: title)
-        b.addAction(UIAction { [weak self] _ in self?.onSelectMode?(mode) }, for: .touchUpInside)
-        modeButtons.append((mode, b))
         return b
     }
 

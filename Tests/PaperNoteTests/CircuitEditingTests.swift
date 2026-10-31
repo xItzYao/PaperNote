@@ -298,6 +298,21 @@ final class CircuitEditingTests: XCTestCase {
         XCTAssertTrue(titles.contains("匯出 SVG"), "長按電路圖也能匯出")
     }
 
+    /// 回報的需求：「選取」「接線」放在第二列工具列，不放說明文字
+    func testModeButtonsAreOnTheSecondRow() throws {
+        let views = editor.buildCircuitRibbon()
+        let buttons = views.compactMap { $0 as? UIButton }
+        let select = try XCTUnwrap(buttons.first { $0.accessibilityLabel == "選取" })
+        let wire = try XCTUnwrap(buttons.first { $0.accessibilityLabel == "接線" })
+        XCTAssertTrue(views.prefix(2).contains(select) && views.prefix(2).contains(wire), "放在最前面")
+        XCTAssertEqual(select.configuration?.baseForegroundColor, .systemBlue, "目前的模式亮起來")
+        XCTAssertFalse(views.contains { ($0 as? UILabel)?.text?.isEmpty == false }, "不放說明文字")
+        wire.sendActions(for: .touchUpInside)
+        XCTAssertEqual(editor.circuitMode, .wire)
+        let after = editor.buildCircuitRibbon().compactMap { $0 as? UIButton }
+        XCTAssertEqual(after.first { $0.accessibilityLabel == "接線" }?.configuration?.baseForegroundColor, .systemBlue)
+    }
+
     // MARK: 套索、移動
 
     func testLassoTakesTheCircuitOnlyWhenFullyCircled() {

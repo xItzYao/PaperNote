@@ -107,11 +107,6 @@ final class EditorSettings {
         get { d.string(forKey: "palmRejection") ?? "right" }
         set { d.set(newValue, forKey: "palmRejection") }
     }
-    /// 常用筆刷列靠右（左撇子／右撇子）
-    var presetsOnRight: Bool {
-        get { bool("presetsOnRight", false) }
-        set { d.set(newValue, forKey: "presetsOnRight") }
-    }
     var captureFreeform: Bool {
         get { bool("captureFreeform", false) }
         set { d.set(newValue, forKey: "captureFreeform") }
@@ -234,8 +229,6 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var lassoMoveElementFrames: [ElementRef: CGRect] = [:]
     var lassoClipboard: LassoClipboard?
     var paletteOverlay: PaletteOverlay?
-    var subBarLeftLayout: [NSLayoutConstraint] = []
-    var subBarRightLayout: [NSLayoutConstraint] = []
 
     // 掃描檔文字辨識快取
     var pageHasTextCache: [UUID: Bool] = [:]

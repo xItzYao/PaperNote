@@ -40,6 +40,18 @@ final class ToolbarMenuTests: XCTestCase {
         (v as? UIButton).map { [$0] } ?? [] + v.subviews.flatMap(allButtons)
     }
 
+    /// 回報的需求：第二列工具列置中（在最左邊很難按），頁碼還是在右邊
+    func testSecondRowIsCentered() throws {
+        editor.setTool(.pen)
+        editor.view.layoutIfNeeded()
+        let bar = try XCTUnwrap(editor.subBarStack.superview)
+        let row = editor.subBarStack.frame
+        XCTAssertGreaterThan(row.width, 0)
+        XCTAssertEqual(row.midX, bar.bounds.midX, accuracy: 1, "第二列 \(row)、整列寬 \(bar.bounds.width)")
+        XCTAssertLessThan(row.maxX, editor.pageLabel.frame.minX, "不蓋到頁碼")
+        XCTAssertGreaterThan(editor.pageLabel.frame.midX, bar.bounds.midX, "頁碼在右邊")
+    }
+
     func testHelpLivesInTheMoreMenu() {
         let t = titles(editor.makeSettingsMenuItems())
         XCTAssertTrue(t.contains("使用說明…"), "「⋯」裡要有使用說明")

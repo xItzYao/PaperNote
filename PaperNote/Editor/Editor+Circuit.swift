@@ -809,8 +809,9 @@ extension NotebookViewController {
     // MARK: 工具列
 
     func buildCircuitRibbon() -> [UIView] {
-        var views: [UIView] = []
         circuitLibrary.currentMode = circuitMode
+        // 選取、接線（從元件庫點的元件也是一種模式：兩個都不亮）
+        var views: [UIView] = [circuitModeButton("cursorarrow", "選取", .select), circuitModeButton("line.diagonal", "接線", .wire)]
         func action(_ symbol: String, _ label: String, _ handler: @escaping () -> Void) -> UIButton {
             let b = makeButton(symbol: symbol, title: nil, action: nil)
             b.accessibilityLabel = label
@@ -818,6 +819,7 @@ extension NotebookViewController {
             return b
         }
         if let c = selectedCircuitComponent {
+            views.append(toolbarSeparator())
             views.append(action("rotate.right", "旋轉 90°") { [weak self] in
                 self?.modifySelectedComponent { $0.rotation = ($0.rotation + 90) % 360 }
             })
@@ -850,20 +852,27 @@ extension NotebookViewController {
                 })
             }
         }
-        // 刪除用元件、導線旁邊的 ✕
-        if case .wire? = circuitSel {
-            views.append(hintLabel("點兩下導線輸入名稱；名稱可以拖動，拖右下角的箭頭調整大小"))
-        }
-        if views.isEmpty {
-            views.append(hintLabel("從左邊的元件庫點一下元件連續擺放，或直接拖到頁面上；「接線」模式畫導線"))
-        }
         if let ref = circuitTarget, circuitInfo(ref) != nil {
+            views.append(toolbarSeparator())
             let b = makeButton(symbol: "square.and.arrow.up", title: "匯出 SVG", action: nil)
             b.accessibilityLabel = "匯出 SVG"
             b.addAction(UIAction { [weak self, weak b] _ in self?.exportCircuitSVG(ref, from: b) }, for: .touchUpInside)
             views.append(b)
         }
         return views
+    }
+
+    /// 第二列的「選取」「接線」：目前的模式亮起來
+    private func circuitModeButton(_ symbol: String, _ title: String, _ mode: CircuitMode) -> UIButton {
+        let b = makeButton(symbol: symbol, title: title, action: nil)
+        b.accessibilityLabel = title
+        if circuitMode == mode {
+            b.configuration?.baseForegroundColor = .systemBlue
+            b.configuration?.background.backgroundColor = UIColor.systemBlue.withAlphaComponent(0.15)
+            b.configuration?.background.cornerRadius = 8
+        }
+        b.addAction(UIAction { [weak self] _ in self?.selectCircuitMode(mode) }, for: .touchUpInside)
+        return b
     }
 
     // MARK: 元件庫

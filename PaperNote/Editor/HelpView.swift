@@ -31,7 +31,7 @@ struct HelpView: View {
         Item(symbol: "star", title: "我的最愛", detail: "筆記本裡的星號收藏頁面；資料庫裡筆記本旁的星星加入「我的最愛文件」，按左上角的星星打開。"),
         Item(symbol: "number", title: "跳到頁碼", detail: "點第二列右邊的頁碼，輸入頁數。"),
         Item(symbol: "rectangle.stack", title: "分頁", detail: "打開的筆記本排在最上面；把分頁拖到另一個分頁上可以組成群組。"),
-        Item(symbol: "ellipsis.circle", title: "設定", detail: "「⋯」裡有手掌防誤觸、筆刷列靠右、手指書寫等設定。"),
+        Item(symbol: "ellipsis.circle", title: "設定", detail: "「⋯」裡有手掌防誤觸、手指書寫等設定。"),
     ]
 
     var body: some View {
