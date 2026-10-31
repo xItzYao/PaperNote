@@ -5,7 +5,7 @@ import XCTest
 /// - 導線可以加名稱：點兩下導線打字，名稱可以拖動
 /// - 套索要把整個電路圖圈起來才選到
 /// - 匯出 SVG（只匯出電路圖）
-/// - 刪除鈕放在導線旁邊（✕），不要放在工具列最左邊
+/// - 長按元件、導線跳出刪除選項，不限選取模式
 /// - 移動電路圖時，寫在上面的字跟著走
 final class CircuitEditingTests: XCTestCase {
     private var window: UIWindow!
@@ -217,7 +217,7 @@ final class CircuitEditingTests: XCTestCase {
         XCTAssertFalse(editor.overlay.circuitLabelResizeHandle.isHidden, "右下角有縮放箭頭")
         XCTAssertTrue(editor.circuitPanShouldBegin(at: handle))
         let buttons = try XCTUnwrap(editor.circuitPartHandleCenters())
-        for b in [buttons.rotate, buttons.flip].compactMap({ $0 }) {
+        for b in [buttons.rotate, buttons.flip] {
             XCTAssertGreaterThan(handle.distance(to: b), buttons.radius, "縮放箭頭不會和旋轉、翻轉疊在一起")
         }
         TouchPan().drag(from: handle, to: CGPoint(x: handle.x + 20, y: handle.y + 10)) { editor.handleCircuitPan($0, $0.location(in: nil)) }
@@ -232,81 +232,69 @@ final class CircuitEditingTests: XCTestCase {
 
     // MARK: 刪除
 
-    func testWireDeleteButtonSitsBesideTheWire() throws {
-        editor.selectCircuitMode(.delete)
-        editor.handleCircuitTap(at: onWire(80))
-        XCTAssertNotNil(wire, "第一下只選取，不刪")
-        XCTAssertEqual(editor.circuitSel, .wire(wireID))
-        let h = try XCTUnwrap(editor.circuitPartHandleCenters(), "刪除工具選到導線：旁邊有 ✕")
-        let x = try XCTUnwrap(h.delete)
-        XCTAssertNil(h.rotate, "導線沒有旋轉")
-        XCTAssertNil(h.flip)
-        let a = onWire(0), b = onWire(160)
-        XCTAssertEqual(x.x, (a.x + b.x) / 2, accuracy: 0.5, "在導線中間")
-        XCTAssertGreaterThan(x.y, a.y + h.radius * 0.5, "在導線下面，不擋到導線")
-        XCTAssertLessThan(x.y - a.y, 60 / editor.canvas.zoomScale, "就在導線旁邊")
-        XCTAssertFalse(editor.overlay.circuitDeleteHandle.isHidden, "畫面上有 ✕")
-        XCTAssertFalse(editor.circuitPanShouldBegin(at: x), "按 ✕ 是點擊，不是拖曳")
-
-        editor.handleCircuitTap(at: x)
-        XCTAssertNil(wire, "按 ✕ 刪掉導線")
-        XCTAssertEqual(data?.components.count, 1, "電阻還在")
-        XCTAssertNil(editor.circuitSel)
-        XCTAssertTrue(editor.overlay.circuitDeleteHandle.isHidden)
-        XCTAssertEqual(editor.circuitMode, .delete, "刪完還在刪除工具，可以接著刪")
+    private final class TouchLongPress: UILongPressGestureRecognizer {
+        var point: CGPoint = .zero
+        override var state: UIGestureRecognizer.State {
+            get { .began }
+            set {}
+        }
+        override func location(in view: UIView?) -> CGPoint { point }
     }
 
-    func testSelectModeHasNoX() throws {
-        editor.handleCircuitTap(at: onWire(80))
-        XCTAssertEqual(editor.circuitSel, .wire(wireID))
-        XCTAssertNil(editor.circuitPartHandleCenters(), "選取模式選到導線：沒有 ✕")
-        XCTAssertTrue(editor.overlay.circuitDeleteHandle.isHidden)
-
-        let c = try XCTUnwrap(data?.components.first)
-        editor.handleCircuitTap(at: editor.circuitDoc(c.position, ref))
-        let h = try XCTUnwrap(editor.circuitPartHandleCenters())
-        XCTAssertNotNil(h.rotate, "元件旁邊還有旋轉、翻轉")
-        XCTAssertNotNil(h.flip)
-        XCTAssertNil(h.delete, "沒有 ✕")
-        XCTAssertTrue(editor.overlay.circuitDeleteHandle.isHidden)
+    private func longPress(at p: CGPoint) {
+        let g = TouchLongPress(target: nil, action: nil)
+        g.point = p
+        editor.handleLongPress(g)
     }
 
-    func testDeleteToolSelectsAComponentThenTheXDeletesIt() throws {
-        let c = try XCTUnwrap(data?.components.first)
-        let onPart = editor.circuitDoc(c.position, ref)
-        let button = try XCTUnwrap(editor.buildCircuitRibbon().compactMap { $0 as? UIButton }.first { $0.accessibilityLabel == "刪除" })
-        button.sendActions(for: .touchUpInside)
-        XCTAssertEqual(editor.circuitMode, .delete)
+    private func assertDeleteMenu(_ line: UInt = #line) throws {
+        let menu = try XCTUnwrap(editor.pendingMenu, "長按要跳選單", line: line)
+        let delete = try XCTUnwrap(menu.children.first as? UIAction, line: line)
+        XCTAssertEqual(menu.children.count, 1, line: line)
+        XCTAssertEqual(delete.title, "刪除", line: line)
+        XCTAssertTrue(delete.attributes.contains(.destructive), line: line)
+    }
 
-        editor.handleCircuitTap(at: onPart)
-        XCTAssertEqual(data?.components.count, 1, "第一下只選取，不刪")
+    func testLongPressDeletesInEveryCircuitMode() throws {
+        XCTAssertTrue(editor.longPressGesture.isEnabled, "電路圖工具可以長按")
+        for mode: CircuitMode in [.select, .wire, .place(.resistor)] {
+            editor.selectCircuitMode(mode)
+            editor.circuitSel = nil
+            editor.pendingMenu = nil
+            longPress(at: onWire(80))
+            try assertDeleteMenu()
+            XCTAssertEqual(editor.circuitSel, .wire(wireID), "長按的導線被選起來")
+            XCTAssertEqual(editor.circuitMode, mode, "模式不變")
+            XCTAssertNotNil(wire, "還沒按刪除，不會刪")
+        }
+    }
+
+    func testDeleteFromTheLongPressMenu() throws {
+        let c = try XCTUnwrap(data?.components.first)
+        longPress(at: editor.circuitDoc(c.position, ref))
+        try assertDeleteMenu()
         XCTAssertEqual(editor.circuitSel, .component(c.id))
-        let h = try XCTUnwrap(editor.circuitPartHandleCenters())
-        XCTAssertNil(h.rotate, "刪除工具只有 ✕")
-        XCTAssertNil(h.flip)
-        XCTAssertFalse(editor.overlay.circuitDeleteHandle.isHidden)
-        XCTAssertFalse(editor.circuitPanShouldBegin(at: onPart), "刪除工具不會拖動元件")
-        let labels = editor.buildCircuitRibbon().compactMap(\.accessibilityLabel)
-        XCTAssertFalse(labels.contains("旋轉 90°"), "刪除工具不放元件的編輯按鈕")
-
-        let steps = editor.history.undoCount
-        editor.handleCircuitTap(at: try XCTUnwrap(h.delete))
-        XCTAssertEqual(editor.history.undoCount, steps + 1, "刪除自己是一步")
+        editor.deleteCircuitSelection()
         XCTAssertEqual(data?.components.count, 0)
         XCTAssertNotNil(wire, "導線還在")
-        editor.undoTapped()
-        XCTAssertEqual(data?.components.count, 1, "可以復原")
+        XCTAssertNil(editor.circuitSel)
     }
 
-    func testDeleteToolTapOnEmptySpaceDeselects() throws {
+    func testLongPressOnEmptySpaceShowsNothing() {
+        longPress(at: CGPoint(x: onWire(0).x, y: onWire(0).y + 300))
+        XCTAssertNil(editor.pendingMenu, "空白處沒有東西可以刪")
+        XCTAssertNil(editor.circuitSel)
+    }
+
+    func testPartsKeepRotateAndFlipButWiresHaveNoButtons() throws {
+        editor.handleCircuitTap(at: onWire(80))
+        XCTAssertEqual(editor.circuitSel, .wire(wireID))
+        XCTAssertNil(editor.circuitPartHandleCenters(), "導線旁邊沒有按鈕")
         let c = try XCTUnwrap(data?.components.first)
-        editor.selectCircuitMode(.delete)
         editor.handleCircuitTap(at: editor.circuitDoc(c.position, ref))
-        XCTAssertNotNil(editor.circuitSel)
-        editor.handleCircuitTap(at: CGPoint(x: onWire(0).x, y: onWire(0).y + 300))
-        XCTAssertNil(editor.circuitSel, "點旁邊：取消，什麼都沒刪")
-        XCTAssertEqual(data?.components.count, 1)
-        XCTAssertTrue(editor.overlay.circuitDeleteHandle.isHidden)
+        XCTAssertNotNil(editor.circuitPartHandleCenters(), "元件旁邊有旋轉、翻轉")
+        let labels = editor.buildCircuitRibbon().compactMap(\.accessibilityLabel)
+        XCTAssertFalse(labels.contains("刪除"), "第二排不放刪除工具")
     }
 
     // MARK: 匯出 SVG

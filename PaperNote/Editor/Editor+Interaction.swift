@@ -130,7 +130,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         holdRecognizer.allowFinger = settings.fingerDrawing
         eraserTracker.isEnabled = tool == .eraser
         eraserTracker.allowFinger = settings.fingerDrawing
-        longPressGesture.isEnabled = tool == .select || tool == .image
+        longPressGesture.isEnabled = tool == .select || tool == .image || tool == .circuit
     }
 
     func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
@@ -151,6 +151,8 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
                 return false
             }
         }
+        // 電路圖：長按元件、導線才接手；空白處留給貼上、選字
+        if g === longPressGesture, tool == .circuit { return circuitHit(at: g.location(in: pagesContainer)) != nil }
         return true
     }
 
@@ -479,9 +481,13 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
     }
 
     @objc func handleLongPress(_ g: UILongPressGestureRecognizer) {
-        guard g.state == .began, tool == .select || tool == .image else { return }
+        guard g.state == .began, tool == .select || tool == .image || tool == .circuit else { return }
         endTextEditing()
         let p = g.location(in: pagesContainer)
+        if tool == .circuit {
+            presentCircuitMenu(at: p)
+            return
+        }
         // 長按標頭：選整欄（整列，已經選了好幾欄就不變），跳出列與欄的選單
         if let h = tableHeaderHit(at: p) {
             presentTableHeaderMenu(h, at: p)
