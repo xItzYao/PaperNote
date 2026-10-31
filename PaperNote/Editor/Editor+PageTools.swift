@@ -320,13 +320,11 @@ extension NotebookViewController {
 // MARK: - Apple Pencil 點兩下切換橡皮擦
 
 extension NotebookViewController: UIPencilInteractionDelegate {
-    @available(iOS 17.5, *)
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveTap tap: UIPencilInteraction.Tap) {
         handlePencilDoubleTap(at: tap.hoverPose?.location)
     }
 
     /// Apple Pencil Pro 擠壓 → 在筆尖位置叫出圓形筆盤
-    @available(iOS 17.5, *)
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
         guard squeeze.phase == .ended else { return }
         if paletteOverlay != nil {
@@ -334,12 +332,6 @@ extension NotebookViewController: UIPencilInteractionDelegate {
             return
         }
         showPaletteLauncher(at: squeeze.hoverPose?.location, open: true)
-    }
-
-    // iOS 17.5 以前的系統呼叫這個（17.5 以後只會呼叫上面那個）
-    func pencilInteractionDidTap(_ interaction: UIPencilInteraction) {
-        if #available(iOS 17.5, *) { return }
-        handlePencilDoubleTap()
     }
 
     /// Apple Pencil 筆身點兩下：切換橡皮擦，同時在筆尖旁出現調色盤小圖示（點了才打開）

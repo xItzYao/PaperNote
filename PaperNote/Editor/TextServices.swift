@@ -11,46 +11,26 @@ enum TextServices {
                           onInsert: ((String) -> Void)? = nil) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        if #available(iOS 18.0, *) {
-            // 自己偵測原文語言再翻譯，結果可拷貝或插入成文字框。
-            // 翻譯進行中如果視窗被關掉，系統的 TranslationSession 會讓 App 閃退，
-            // 所以改用置中視窗，翻譯完成前不能點外面或下滑關閉。
-            if vc.presentedViewController != nil { vc.dismiss(animated: false) }
-            weak var hostRef: UIViewController?
-            var insertHandler: ((String) -> Void)?
-            if let onInsert {
-                insertHandler = { result in
-                    hostRef?.dismiss(animated: true) { onInsert(result) }
-                }
+        // 自己偵測原文語言再翻譯，結果可拷貝或插入成文字框。
+        // 翻譯進行中如果視窗被關掉，系統的 TranslationSession 會讓 App 閃退，
+        // 所以改用置中視窗，翻譯完成前不能點外面或下滑關閉。
+        if vc.presentedViewController != nil { vc.dismiss(animated: false) }
+        weak var hostRef: UIViewController?
+        var insertHandler: ((String) -> Void)?
+        if let onInsert {
+            insertHandler = { result in
+                hostRef?.dismiss(animated: true) { onInsert(result) }
             }
-            let panel = TranslatePanel(text: trimmed, onInsert: insertHandler) {
-                hostRef?.dismiss(animated: true)
-            }
-            let host = UIHostingController(rootView: panel)
-            host.modalPresentationStyle = .formSheet
-            host.preferredContentSize = CGSize(width: 520, height: 460)
-            host.isModalInPresentation = true
-            hostRef = host
-            vc.present(host, animated: true)
-        } else if #available(iOS 17.4, *) {
-            var host: UIHostingController<TranslationAnchorView>?
-            let view = TranslationAnchorView(text: trimmed) {
-                host?.willMove(toParent: nil)
-                host?.view.removeFromSuperview()
-                host?.removeFromParent()
-                host = nil
-            }
-            let h = UIHostingController(rootView: view)
-            h.view.backgroundColor = .clear
-            h.view.isUserInteractionEnabled = false
-            h.view.frame = rect.isEmpty ? CGRect(x: vc.view.bounds.midX, y: vc.view.bounds.midY, width: 1, height: 1) : rect
-            vc.addChild(h)
-            vc.view.addSubview(h.view)
-            h.didMove(toParent: vc)
-            host = h
-        } else {
-            lookUp(trimmed, from: vc, anchor: rect)
         }
+        let panel = TranslatePanel(text: trimmed, onInsert: insertHandler) {
+            hostRef?.dismiss(animated: true)
+        }
+        let host = UIHostingController(rootView: panel)
+        host.modalPresentationStyle = .formSheet
+        host.preferredContentSize = CGSize(width: 520, height: 460)
+        host.isModalInPresentation = true
+        hostRef = host
+        vc.present(host, animated: true)
     }
 
     static func lookUp(_ text: String, from vc: UIViewController, anchor rect: CGRect) {
@@ -85,27 +65,8 @@ enum TextServices {
     }
 }
 
-@available(iOS 17.4, *)
-struct TranslationAnchorView: View {
-    let text: String
-    let onDismiss: () -> Void
-    @State private var isPresented = false
+// MARK: - 翻譯面板（自動偵測語言）
 
-    var body: some View {
-        Color.clear
-            .translationPresentation(isPresented: $isPresented, text: text)
-            .onAppear {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { isPresented = true }
-            }
-            .onChange(of: isPresented) { _, shown in
-                if !shown { onDismiss() }
-            }
-    }
-}
-
-// MARK: - 翻譯面板（iOS 18：自動偵測語言）
-
-@available(iOS 18.0, *)
 struct TranslatePanel: View {
     let text: String
     let onInsert: ((String) -> Void)?

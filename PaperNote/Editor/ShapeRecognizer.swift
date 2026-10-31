@@ -84,16 +84,10 @@ enum ShapeRecognizer {
         return PKStroke(ink: ink, path: PKStrokePath(controlPoints: strokePoints, creationDate: creationDate))
     }
 
-    /// iPadOS 18 起筆跡點多了 secondaryScale，用舊的建構方式在新系統上可能畫不出來
+    /// 筆跡點要帶 secondaryScale（iPadOS 18 起才有），用舊的建構方式可能畫不出來
     private static func strokePoint(_ p: CGPoint, timeOffset: TimeInterval, size: CGSize, like s: PKStrokePoint?) -> PKStrokePoint {
-        let opacity = s?.opacity ?? 1, force = s?.force ?? 1
-        let azimuth = s?.azimuth ?? 0, altitude = s?.altitude ?? .pi / 2
-        if #available(iOS 18.0, *) {
-            return PKStrokePoint(location: p, timeOffset: timeOffset, size: size, opacity: opacity, force: force,
-                                 azimuth: azimuth, altitude: altitude, secondaryScale: s?.secondaryScale ?? 1)
-        }
-        return PKStrokePoint(location: p, timeOffset: timeOffset, size: size, opacity: opacity, force: force,
-                             azimuth: azimuth, altitude: altitude)
+        PKStrokePoint(location: p, timeOffset: timeOffset, size: size, opacity: s?.opacity ?? 1, force: s?.force ?? 1,
+                      azimuth: s?.azimuth ?? 0, altitude: s?.altitude ?? .pi / 2, secondaryScale: s?.secondaryScale ?? 1)
     }
 
     // MARK: - Helpers

@@ -49,7 +49,7 @@
 
 ## 系統需求
 
-- iPad，iPadOS 17 以上（翻譯面板需要 iPadOS 18）
+- iPad，iPadOS 18 以上
 - 一台 Windows 或 Mac 電腦（用來安裝）
 - 一個 Apple ID（免費的就可以）
 
