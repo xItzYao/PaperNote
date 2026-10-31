@@ -29,6 +29,10 @@
 		<key>UIApplicationSupportsMultipleScenes</key>
 		<false/>
 	</dict>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>UIDesignRequiresCompatibility</key>
+	<true/>
 	<key>UIUserInterfaceStyle</key>
 	<string>Light</string>
 	<key>UISupportedInterfaceOrientations~ipad</key>
