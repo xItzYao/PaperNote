@@ -2,7 +2,8 @@ import SwiftUI
 
 /// 關於我
 struct AboutView: View {
-    static let blurb = "大學生的一個用愛發電小project，希望大家用的開心！想支持的話也可以贊助這個app的運作:P"
+    static let blurb = "大學生的一個用愛發電小project，希望大家用的開心！
+想支持的話也可以贊助這個app的運作:P"
     @Environment(\.dismiss) private var dismiss
 
     private var version: String {
@@ -16,9 +17,12 @@ struct AboutView: View {
             List {
                 Section {
                     VStack(spacing: 12) {
-                        Image(systemName: "person.crop.circle.fill")
-                            .font(.system(size: 64))
-                            .foregroundStyle(Color.accentColor)
+                        Image("AboutPhoto")
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: 96, height: 96)
+                            .clipShape(Circle())
+                            .overlay(Circle().stroke(Color.gray.opacity(0.25)))
                         Text("PaperNote").font(.title2.weight(.bold))
                         Text(Self.blurb)
                             .multilineTextAlignment(.center)
