@@ -284,7 +284,8 @@ final class BackupManager: ObservableObject {
         if let folder = try await drive.findFolder(named: Self.notebooksFolderName, in: root) {
             for f in try await drive.children(of: folder) where f.isFolder {
                 guard let id = UUID(uuidString: f.name), deleted.contains(id) else { continue }
-                if try await ids.contains(id) || !containsFiles(f.id) {
+                let hasFiles = try await containsFiles(f.id)
+                if ids.contains(id) || !hasFiles {
                     try await drive.trashFolder(f)
                     removed += 1
                 }
@@ -300,7 +301,8 @@ final class BackupManager: ObservableObject {
 
     private func containsFiles(_ folder: String) async throws -> Bool {
         for item in try await drive.children(of: folder) {
-            if try await !item.isFolder || containsFiles(item.id) { return true }
+            if !item.isFolder { return true }
+            if try await containsFiles(item.id) { return true }
         }
         return false
     }
