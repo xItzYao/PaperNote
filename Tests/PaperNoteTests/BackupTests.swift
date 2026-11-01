@@ -3,8 +3,8 @@ import CryptoKit
 @testable import PaperNote
 
 /// 假的 Google Drive。行為照 drive.file：App 只看得到自己建立的檔案；
-/// 刪資料夾會連裡面看不到的檔案一起刪（和真的 Drive 一樣）。
-/// 使用者自己的檔案被動到就記在 violations
+/// 資料夾移到垃圾桶會連裡面看不到的檔案一起移（和真的 Drive 一樣）。
+/// 動到 App 不該動的東西就記在 violations
 private final class FakeDrive: DriveAPI {
     final class Item {
         let id: String
@@ -28,7 +28,9 @@ private final class FakeDrive: DriveAPI {
     }
 
     var items: [String: Item] = [:]
-    private(set) var deleted: [String] = []
+    private(set) var trashed: [String] = []
+    /// 移到 Drive 垃圾桶的項目：App 看不到了，但內容還在
+    private(set) var trash: [String: Item] = [:]
     private(set) var violations: [String] = []
     /// 真的傳上來的檔案名稱
     var uploads: [String] = []
@@ -111,21 +113,31 @@ private final class FakeDrive: DriveAPI {
         try item.data.write(to: destination)
     }
 
-    func deleteFile(_ file: DriveFile) async throws {
+    func trashFile(_ file: DriveFile) async throws {
         guard let item = items[file.id] else { return }
         if item.isFolder { violations.append("刪了資料夾 \(item.name)") }
         if !item.appCreated { violations.append("刪了使用者的 \(item.name)") }
         if !isInsideBackup(file.id) { violations.append("刪了 PaperNoteBackup 外面的 \(item.name)") }
-        remove(file.id)
+        moveToTrash(file.id)
     }
 
-    private func remove(_ id: String) {
-        for child in items.values where child.parent == id {
-            if !child.appCreated { violations.append("連帶刪了使用者的 \(child.name)") }
-            remove(child.id)
+    /// 只有 PaperNoteBackup/Notebooks/<筆記本> 這一層可以整個移
+    func trashFolder(_ folder: DriveFile) async throws {
+        guard let item = items[folder.id] else { return }
+        let notebooks = self.folder(path: [BackupManager.rootFolderName, "Notebooks"])
+        if !item.isFolder || !item.appCreated || item.parent != notebooks?.id {
+            violations.append("刪了不該刪的 \(item.name)")
         }
+        moveToTrash(folder.id)
+    }
+
+    private func moveToTrash(_ id: String) {
+        for child in items.values where child.parent == id {
+            moveToTrash(child.id)
+        }
+        trash[id] = items[id]
         items[id] = nil
-        deleted.append(id)
+        trashed.append(id)
     }
 
     // MARK: 查內容
@@ -232,7 +244,7 @@ final class BackupTests: XCTestCase {
         XCTAssertEqual(drive.violations, [])
     }
 
-    /// 回報的問題：清空垃圾桶後，雲端的檔案要真的刪掉，名稱也不能留在清單裡
+    /// 回報的問題：清空垃圾桶後，雲端的檔案要移到 Drive 垃圾桶（還救得回來），名稱不能留在清單裡
     func testPermanentDeleteRemovesTheCloudFiles() async throws {
         let d = try device()
         let nb = notebook("機密筆記", on: d)
@@ -244,7 +256,8 @@ final class BackupTests: XCTestCase {
         XCTAssertEqual(d.store.index.purgedNotebooks.map(\.id), [nb.id], "等雲端刪掉之前要記著")
         _ = try await d.backup.syncWithRetry()
 
-        XCTAssertEqual(drive.filesAnywhere(under: try XCTUnwrap(drive.notebookFolder(nb.id)).id).count, 0)
+        XCTAssertNil(drive.notebookFolder(nb.id), "資料夾也要移走，不留空的")
+        XCTAssertTrue(drive.trash.values.contains { $0.name == "document.json" }, "內容還在 Drive 垃圾桶")
         XCTAssertGreaterThan(drive.filesAnywhere(under: try XCTUnwrap(drive.notebookFolder(keep.id)).id).count, 0, "別本不受影響")
         XCTAssertEqual(try status(nb.id), .deleted)
         XCTAssertEqual(try status(keep.id), .active)
@@ -273,8 +286,57 @@ final class BackupTests: XCTestCase {
 
         let retry = BackupManager(drive: drive, library: d.store, stateURL: d.dir.appendingPathComponent("state.json"))
         _ = try await retry.syncWithRetry()
-        XCTAssertEqual(drive.filesAnywhere(under: try XCTUnwrap(drive.notebookFolder(nb.id)).id).count, 0)
+        XCTAssertNil(drive.notebookFolder(nb.id))
         XCTAssertTrue(d.store.index.purgedNotebooks.isEmpty)
+    }
+
+    /// 回報的問題：上一版永久刪除後留下的空資料夾（含空的子資料夾），下次備份要清掉
+    func testEmptyFoldersLeftByTheLastVersionAreRemoved() async throws {
+        let d = try device()
+        let nb = notebook("上一版刪的", on: d)
+        _ = try await d.backup.syncWithRetry()
+        let notebooks = try XCTUnwrap(drive.folder(path: [BackupManager.rootFolderName, "Notebooks"]))
+        d.store.deleteNotebook(nb.id)
+        _ = try await d.backup.syncWithRetry()
+        let left = try await drive.createFolder(named: nb.id.uuidString, in: notebooks.id)
+        _ = try await drive.createFolder(named: "assets", in: left)
+
+        _ = try await relaunched(d).syncWithRetry()
+
+        XCTAssertNil(drive.notebookFolder(nb.id))
+        XCTAssertEqual(drive.violations, [])
+    }
+
+    /// 只有標記永久刪除的才清：別台 iPad 上還在用的筆記本，資料夾空了也不能刪
+    func testEmptyFolderOfALiveNotebookStays() async throws {
+        let a = try device()
+        let nb = notebook("另一台的", on: a)
+        _ = try await a.backup.syncWithRetry()
+        let folder = try XCTUnwrap(drive.notebookFolder(nb.id))
+        for f in try await drive.children(of: folder.id) { try await drive.trashFile(f) }
+
+        let b = try device()
+        _ = try await b.backup.syncWithRetry()
+
+        XCTAssertNotNil(drive.notebookFolder(nb.id))
+    }
+
+    /// 永久刪除只影響自己的資料夾：Notebooks 和 PaperNoteBackup 本身要留著
+    func testPermanentDeleteKeepsTheBackupFolders() async throws {
+        let d = try device()
+        let nb = notebook("唯一的一本", on: d)
+        _ = try await d.backup.syncWithRetry()
+
+        d.store.deleteNotebook(nb.id)
+        _ = try await d.backup.syncWithRetry()
+
+        XCTAssertNotNil(drive.folder(path: [BackupManager.rootFolderName, "Notebooks"]))
+        XCTAssertEqual(try status(nb.id), .deleted)
+        XCTAssertEqual(drive.violations, [])
+
+        let fresh = try device()
+        let result = try await fresh.backup.restore()
+        XCTAssertEqual(result.notebooks, 0, "在 Drive 垃圾桶的不會被還原")
     }
 
     /// 頁面永久刪除後留下的檔案：雲端跟著刪，筆記本其他檔案不動
@@ -307,7 +369,7 @@ final class BackupTests: XCTestCase {
         _ = try await d.backup.syncWithRetry()
 
         XCTAssertEqual(drive.filesAnywhere(under: folder.id).count, before)
-        XCTAssertTrue(drive.deleted.isEmpty)
+        XCTAssertTrue(drive.trashed.isEmpty)
     }
 
     // MARK: 不能動到其他資料
@@ -317,7 +379,8 @@ final class BackupTests: XCTestCase {
         let nb = notebook("要刪的", on: d)
         _ = try await d.backup.syncWithRetry()
 
-        // 使用者自己的東西，名字故意和 App 的一樣，也有放進 App 資料夾裡的
+        // 使用者自己的東西，名字故意和 App 的一樣。PaperNoteBackup 同層、上層的都不能動；
+        // 放進筆記本資料夾的，隨著筆記本一起刪（那層是 App 管理的）
         let root = try XCTUnwrap(drive.folder(path: [BackupManager.rootFolderName]))
         let notebookFolder = try XCTUnwrap(drive.notebookFolder(nb.id))
         let users = [
@@ -325,8 +388,8 @@ final class BackupTests: XCTestCase {
             drive.addUserFile(name: BackupManifest.fileName, parent: "root"),
             drive.addUserFile(name: "document.json", parent: "root"),
             drive.addUserFile(name: "我放進來的.pdf", parent: root.id),
-            drive.addUserFile(name: "我放進筆記本資料夾的.pdf", parent: notebookFolder.id),
         ]
+        let insideNotebook = drive.addUserFile(name: "我放進筆記本資料夾的.pdf", parent: notebookFolder.id)
         let lookalike = drive.addUserFile(name: "Notebooks", parent: "root", isFolder: true)
         let lookalikeNotebook = drive.addUserFile(name: nb.id.uuidString, parent: lookalike, isFolder: true)
         let lookalikeFile = drive.addUserFile(name: "document.json", parent: lookalikeNotebook)
@@ -334,7 +397,8 @@ final class BackupTests: XCTestCase {
         d.store.deleteNotebook(nb.id)
         _ = try await d.backup.syncWithRetry()
 
-        XCTAssertEqual(drive.filesAnywhere(under: notebookFolder.id).map(\.appCreated), [false], "App 的檔案刪掉、使用者放進去的留著")
+        XCTAssertNil(drive.notebookFolder(nb.id))
+        XCTAssertNil(drive.items[insideNotebook])
         for id in users + [lookalike, lookalikeNotebook, lookalikeFile] {
             XCTAssertNotNil(drive.items[id], "使用者的檔案不能不見")
         }
@@ -346,7 +410,7 @@ final class BackupTests: XCTestCase {
         XCTAssertEqual(drive.violations, [])
     }
 
-    /// 雲端清單被改成全部已刪除，也不會讓 App 動手刪：只有這台 iPad 上的永久刪除才會刪雲端
+    /// 雲端清單被改成全部已刪除，也不會讓 App 刪掉檔案：只有這台 iPad 上的永久刪除才會刪有內容的資料夾
     func testManifestAloneNeverTriggersADelete() async throws {
         let a = try device()
         let nb = notebook("別台刪的", on: a)
@@ -365,7 +429,7 @@ final class BackupTests: XCTestCase {
         let other = try device()
         _ = try await other.backup.syncWithRetry()
 
-        XCTAssertTrue(drive.deleted.isEmpty, "別台的紀錄不會讓這台刪檔案")
+        XCTAssertTrue(drive.trashed.isEmpty, "別台的紀錄不會讓這台動檔案")
         XCTAssertEqual(try status(nb.id), .deleted, "也不會把刪除紀錄蓋掉")
     }
 
@@ -375,7 +439,7 @@ final class BackupTests: XCTestCase {
 
     // MARK: 真正送出去的請求
 
-    func testDeleteIsAPermanentDeleteOfOneFile() async throws {
+    func testDeleteMovesToTheDriveTrash() async throws {
         URLProtocol.registerClass(RecordingProtocol.self)
         defer {
             URLProtocol.unregisterClass(RecordingProtocol.self)
@@ -383,22 +447,34 @@ final class BackupTests: XCTestCase {
         }
         let client = DriveClient(accessToken: { "token" })
 
-        try await client.deleteFile(DriveFile(id: "abc", name: "a.json", mimeType: "application/json"))
-        XCTAssertEqual(RecordingProtocol.requests.map(\.httpMethod), ["DELETE"], "直接刪除，不是移到垃圾桶（PATCH trashed）")
+        try await client.trashFile(DriveFile(id: "abc", name: "a.json", mimeType: "application/json"))
+        XCTAssertEqual(RecordingProtocol.requests.map(\.httpMethod), ["PATCH"], "移到垃圾桶，不是真的刪除（DELETE）")
+        XCTAssertEqual(RecordingProtocol.bodies.map { String(decoding: $0, as: UTF8.self) }, [#"{"trashed":true}"#])
         XCTAssertEqual(RecordingProtocol.requests.first?.url?.absoluteString, "https://www.googleapis.com/drive/v3/files/abc")
 
         RecordingProtocol.reset()
         RecordingProtocol.statusCode = 404
-        try await client.deleteFile(DriveFile(id: "gone", name: "a.json", mimeType: "application/json"))
+        try await client.trashFile(DriveFile(id: "gone", name: "a.json", mimeType: "application/json"))
 
         RecordingProtocol.reset()
         for mime in [DriveClient.folderMime, nil] {
             do {
-                try await client.deleteFile(DriveFile(id: "folder", name: "Notebooks", mimeType: mime))
-                XCTFail("資料夾或不確定種類的不能刪")
+                try await client.trashFile(DriveFile(id: "folder", name: "Notebooks", mimeType: mime))
+                XCTFail("資料夾或不確定種類的不能當檔案丟")
+            } catch {}
+        }
+        for mime in ["application/json", nil] {
+            do {
+                try await client.trashFolder(DriveFile(id: "file", name: "a.json", mimeType: mime))
+                XCTFail("檔案或不確定種類的不能當資料夾丟")
             } catch {}
         }
         XCTAssertTrue(RecordingProtocol.requests.isEmpty, "連請求都不會送出去")
+
+        try await client.trashFolder(DriveFile(id: "nb", name: "notebook", mimeType: DriveClient.folderMime))
+        XCTAssertEqual(RecordingProtocol.requests.map(\.httpMethod), ["PATCH"], "移到垃圾桶，不是真的刪除（DELETE）")
+        XCTAssertEqual(RecordingProtocol.bodies.map { String(decoding: $0, as: UTF8.self) }, [#"{"trashed":true}"#])
+        XCTAssertEqual(RecordingProtocol.requests.first?.url?.absoluteString, "https://www.googleapis.com/drive/v3/files/nb")
     }
 
     // MARK: 還原照清單
@@ -513,7 +589,7 @@ final class BackupTests: XCTestCase {
         let lib = try await fileID("library.json", in: root.id)
         drive.items[lib]?.data = try JSONEncoder.app.encode(index)
         let manifest = try await fileID(BackupManifest.fileName, in: root.id)
-        try await drive.deleteFile(DriveFile(id: manifest, name: BackupManifest.fileName, mimeType: "application/json"))
+        try await drive.trashFile(DriveFile(id: manifest, name: BackupManifest.fileName, mimeType: "application/json"))
 
         let b = try device()
         let result = try await b.backup.restore()
@@ -717,7 +793,7 @@ final class BackupTests: XCTestCase {
 
     func testPermanentDeleteConfirmationText() {
         XCTAssertEqual(PermanentDeleteText.title("期中筆記"), "確認刪除期中筆記?")
-        XCTAssertEqual(PermanentDeleteText.message, "此操作將會把本機與雲端檔案永久刪除，且無法復原")
+        XCTAssertEqual(PermanentDeleteText.message, "此操作將會把本機檔案永久刪除，且無法復原；雲端檔案會移到 Google Drive 的垃圾桶")
     }
 
     // MARK: 格式
@@ -790,17 +866,20 @@ private final class FailingDeleteDrive: DriveAPI {
         return try await base.upload(fileURL, name: name, parent: parent, existingID: existingID)
     }
     func download(_ fileID: String, to destination: URL) async throws { try await base.download(fileID, to: destination) }
-    func deleteFile(_ file: DriveFile) async throws { throw BackupError.http(500, "斷線") }
+    func trashFile(_ file: DriveFile) async throws { throw BackupError.http(500, "斷線") }
+    func trashFolder(_ folder: DriveFile) async throws { throw BackupError.http(500, "斷線") }
 }
 
 /// 記下 DriveClient 真正送出去的請求
 private final class RecordingProtocol: URLProtocol {
     nonisolated(unsafe) static var requests: [URLRequest] = []
+    nonisolated(unsafe) static var bodies: [Data] = []
     nonisolated(unsafe) static var statusCode = 204
     nonisolated(unsafe) static var body = Data()
 
     static func reset() {
         requests = []
+        bodies = []
         statusCode = 204
         body = Data()
     }
@@ -810,6 +889,7 @@ private final class RecordingProtocol: URLProtocol {
 
     override func startLoading() {
         Self.requests.append(request)
+        Self.bodies.append(Self.body(of: request))
         let resp = HTTPURLResponse(url: request.url!, statusCode: Self.statusCode, httpVersion: nil, headerFields: nil)!
         client?.urlProtocol(self, didReceive: resp, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Self.body)
@@ -817,4 +897,20 @@ private final class RecordingProtocol: URLProtocol {
     }
 
     override func stopLoading() {}
+
+    /// URLSession 交過來的請求，內容通常放在 stream 裡
+    private static func body(of request: URLRequest) -> Data {
+        if let data = request.httpBody { return data }
+        guard let stream = request.httpBodyStream else { return Data() }
+        stream.open()
+        defer { stream.close() }
+        var out = Data()
+        var buffer = [UInt8](repeating: 0, count: 1024)
+        while stream.hasBytesAvailable {
+            let n = stream.read(&buffer, maxLength: buffer.count)
+            guard n > 0 else { break }
+            out.append(buffer, count: n)
+        }
+        return out
+    }
 }

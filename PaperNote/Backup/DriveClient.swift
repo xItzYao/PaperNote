@@ -10,7 +10,8 @@ struct DriveFile: Decodable {
     var isFolder: Bool { mimeType == DriveClient.folderMime }
 }
 
-/// 備份用到的 Google Drive 操作。刪除只有 deleteFile：只刪單一檔案、不進垃圾桶、不能刪資料夾
+/// 備份用到的 Google Drive 操作。不會真的刪除，只會移到 Google Drive 的垃圾桶：
+/// trashFile 只收檔案，trashFolder 只收資料夾（連同裡面全部）
 protocol DriveAPI {
     func findFolder(named name: String, in parent: String) async throws -> String?
     func findFile(named name: String, in parent: String) async throws -> DriveFile?
@@ -18,7 +19,8 @@ protocol DriveAPI {
     func children(of folder: String) async throws -> [DriveFile]
     func upload(_ fileURL: URL, name: String, parent: String, existingID: String?) async throws -> String
     func download(_ fileID: String, to destination: URL) async throws
-    func deleteFile(_ file: DriveFile) async throws
+    func trashFile(_ file: DriveFile) async throws
+    func trashFolder(_ folder: DriveFile) async throws
 }
 
 /// Google Drive REST API v3（只用到 drive.file 權限）
@@ -150,16 +152,30 @@ final class DriveClient: DriveAPI {
         try data.write(to: destination, options: .atomic)
     }
 
-    /// 永久刪除單一檔案（不進 Google Drive 的垃圾桶）。資料夾一律拒絕：
-    /// 刪資料夾會連裡面的東西一起刪，包括 drive.file 看不到、不是 App 建立的檔案。
-    /// 檔案已經不在了就算刪好了
-    func deleteFile(_ file: DriveFile) async throws {
+    /// 資料夾要走 trashFolder，不會誤丟整個資料夾
+    func trashFile(_ file: DriveFile) async throws {
         guard let mime = file.mimeType, mime != Self.folderMime else {
-            throw BackupError.http(0, "不刪除資料夾")
+            throw BackupError.http(0, "不是檔案")
         }
-        let url = URL(string: "https://www.googleapis.com/drive/v3/files/\(file.id)")!
+        try await moveToTrash(file.id)
+    }
+
+    func trashFolder(_ folder: DriveFile) async throws {
+        guard folder.isFolder else { throw BackupError.http(0, "不是資料夾") }
+        try await moveToTrash(folder.id)
+    }
+
+    /// 已經不在了就算丟好了
+    private func moveToTrash(_ id: String) async throws {
+        let url = URL(string: "https://www.googleapis.com/drive/v3/files/\(id)")!
+        let body = try JSONSerialization.data(withJSONObject: ["trashed": true])
         do {
-            _ = try await send { self.request(url, "DELETE", $0) }
+            _ = try await send { token in
+                var r = self.request(url, "PATCH", token)
+                r.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+                r.httpBody = body
+                return r
+            }
         } catch BackupError.http(404, _) {
         }
     }

@@ -2,7 +2,7 @@ import SwiftUI
 
 /// 永久刪除前的確認文字
 enum PermanentDeleteText {
-    static let message = "此操作將會把本機與雲端檔案永久刪除，且無法復原"
+    static let message = "此操作將會把本機檔案永久刪除，且無法復原；雲端檔案會移到 Google Drive 的垃圾桶"
 
     static func title(_ name: String) -> String { "確認刪除\(name)?" }
 }

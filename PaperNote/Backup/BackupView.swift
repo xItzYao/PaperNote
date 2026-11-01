@@ -54,7 +54,7 @@ struct BackupView: View {
                     Toggle("自動備份", isOn: $autoBackup)
                         .onChange(of: autoBackup) { _, v in backup.autoBackup = v }
                 } footer: {
-                    Text("每 10 分鐘，以及關閉筆記本後，自動備份到 Google Drive 的「\(BackupManager.rootFolderName)」資料夾。備份的是原始檔，筆跡、PDF、表格、螢光標示還原後都能繼續編輯；只會上傳有變動的檔案。在 App 裡永久刪除的筆記本，雲端的備份也會永久刪除。")
+                    Text("每 10 分鐘，以及關閉筆記本後，自動備份到 Google Drive 的「\(BackupManager.rootFolderName)」資料夾。備份的是原始檔，筆跡、PDF、表格、螢光標示還原後都能繼續編輯；只會上傳有變動的檔案。在 App 裡永久刪除的筆記本，雲端的備份會移到 Google Drive 的垃圾桶。")
                 }
 
                 Section("狀態") {

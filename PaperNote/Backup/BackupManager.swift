@@ -15,8 +15,8 @@ struct RestoreResult: Equatable {
 /// 本機沒有紀錄時（重新安裝、還原、重新連結）和雲端的 MD5 比，一樣就不傳。
 ///
 /// 雲端的刪除只有兩種來源，都是使用者在 App 裡的動作：永久刪除筆記本、永久刪除頁面留下的舊檔案。
-/// 而且只刪從 PaperNoteBackup 往下走得到的檔案，一個一個刪、不刪資料夾：
-/// drive.file 看不到別人放進資料夾的檔案，刪資料夾會連它們一起刪掉。
+/// 兩種都只移到 Google Drive 的垃圾桶，留一個救回來的機會。
+/// PaperNoteBackup 底下由 App 管理；它本身和它外面的東西一律不動。
 final class BackupManager: ObservableObject {
     static let shared = BackupManager(drive: DriveClient(), library: .shared)
     static let rootFolderName = "PaperNoteBackup"
@@ -223,7 +223,7 @@ final class BackupManager: ObservableObject {
         }
         saveState()
 
-        let removed = try await purgeNotebooks(snapshot.purgedNotebooks.map(\.id), root: root)
+        let removed = try await removeNotebookFolders(purged: snapshot.purgedNotebooks.map(\.id), manifest: manifest, root: root)
             + removeFilesOfDeletedPages(index: snapshot)
         saveState()
         await MainActor.run {
@@ -274,15 +274,19 @@ final class BackupManager: ObservableObject {
 
     // MARK: - 永久刪除
 
-    /// 刪掉永久刪除的筆記本在雲端的檔案（只留下空資料夾，原因見最上面的說明）
-    private func purgeNotebooks(_ ids: [UUID], root: String) async throws -> Int {
-        guard !ids.isEmpty else { return 0 }
+    /// 把 Notebooks 底下永久刪除的筆記本資料夾移到 Drive 垃圾桶，只會動 Notebooks/<id> 這一層。
+    /// 這台 iPad 永久刪除的（purged）整個移。清單記成刪除、但不是這台刪的，只清已經沒有檔案的
+    /// （舊版刪除時留下的空資料夾）：只憑清單不動任何檔案
+    private func removeNotebookFolders(purged ids: [UUID], manifest: BackupManifest, root: String) async throws -> Int {
+        let deleted = Set(manifest.notebooks.filter { $0.status == .deleted }.map(\.id))
+        guard !deleted.isEmpty else { return 0 }
         var removed = 0
         if let folder = try await drive.findFolder(named: Self.notebooksFolderName, in: root) {
-            let remote = try await drive.children(of: folder)
-            for id in ids {
-                for f in remote where f.isFolder && f.name == id.uuidString {
-                    removed += try await deleteFiles(under: f.id)
+            for f in try await drive.children(of: folder) where f.isFolder {
+                guard let id = UUID(uuidString: f.name), deleted.contains(id) else { continue }
+                if try await ids.contains(id) || !containsFiles(f.id) {
+                    try await drive.trashFolder(f)
+                    removed += 1
                 }
             }
         }
@@ -294,20 +298,14 @@ final class BackupManager: ObservableObject {
         return removed
     }
 
-    private func deleteFiles(under folder: String) async throws -> Int {
-        var removed = 0
+    private func containsFiles(_ folder: String) async throws -> Bool {
         for item in try await drive.children(of: folder) {
-            if item.isFolder {
-                removed += try await deleteFiles(under: item.id)
-            } else {
-                try await drive.deleteFile(item)
-                removed += 1
-            }
+            if try await !item.isFolder || containsFiles(item.id) { return true }
         }
-        return removed
+        return false
     }
 
-    /// 筆記本還在、但裡面的檔案在本機沒了（頁面永久刪除後留下的筆跡、縮圖）→ 雲端也刪。
+    /// 筆記本還在、但裡面的檔案在本機沒了（頁面永久刪除後留下的筆跡、縮圖）→ 雲端移到垃圾桶。
     /// document.json 不在就不判斷：那是筆記本壞了，不是使用者刪的
     private func removeFilesOfDeletedPages(index: LibraryIndex) async throws -> Int {
         let fm = FileManager.default
@@ -320,7 +318,7 @@ final class BackupManager: ObservableObject {
             if let parent = state.folders[(rel as NSString).deletingLastPathComponent] {
                 let name = (rel as NSString).lastPathComponent
                 for f in try await drive.children(of: parent) where !f.isFolder && f.name == name {
-                    try await drive.deleteFile(f)
+                    try await drive.trashFile(f)
                     removed += 1
                 }
             }
