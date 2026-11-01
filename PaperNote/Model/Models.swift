@@ -92,6 +92,11 @@ struct PageElement: Codable, Equatable, Identifiable {
         guard isCircuit else { return }
         frame.origin = CircuitData.snap(frame.origin)
     }
+
+    /// 複製出來的電路圖：元件、導線、群組換新的 id（之後和原本的併在一起才不會混）
+    mutating func refreshCircuitIDs() {
+        if case let .circuit(d) = content { content = .circuit(d.withFreshIDs()) }
+    }
 }
 
 /// 自製筆刷的一個取樣點（頁面內容座標）；w 是這一點的線寬
@@ -115,6 +120,8 @@ struct InkStroke: Codable, Equatable, Identifiable {
     var id = UUID()
     var colorHex: String
     var points: [InkPoint]
+    /// 虛線切出來的每一段都是同一個值：整筆擦除時一起拿掉；nil＝不是虛線
+    var dashGroup: UUID?
 }
 
 struct Page: Codable, Equatable, Identifiable {

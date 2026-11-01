@@ -126,19 +126,24 @@ enum InkGeometry {
         return false
     }
 
-    /// 橡皮擦擦過 p：整筆擦除時拿掉碰到的筆跡；局部擦除時剛好沿著圓圈的邊把線切斷，圓圈外的部分留著。沒有變化回傳 nil
+    /// 橡皮擦擦過 p：整筆擦除時拿掉碰到的筆跡（虛線是整條）；局部擦除時剛好沿著圓圈的邊把線切斷，圓圈外的部分留著。沒有變化回傳 nil
     static func erase(_ strokes: [InkStroke], at p: CGPoint, radius: CGFloat, partial: Bool) -> [InkStroke]? {
         var changed = false
         var out: [InkStroke] = []
+        var dashes = Set<UUID>()
         for s in strokes {
             if partial, let pieces = cut(s, at: p, radius: radius) {
                 changed = true
                 out += pieces
             } else if !partial, hits(s, at: p, radius: radius) {
                 changed = true
+                if let g = s.dashGroup { dashes.insert(g) }
             } else {
                 out.append(s)
             }
+        }
+        if !dashes.isEmpty {
+            out.removeAll { s in s.dashGroup.map { dashes.contains($0) } ?? false }
         }
         return changed ? out : nil
     }
@@ -154,7 +159,7 @@ enum InkGeometry {
         var pieces: [InkStroke] = []
         var run: [InkPoint] = inside(first) ? [] : [first]
         func flush() {
-            if run.count >= 2 { pieces.append(InkStroke(colorHex: s.colorHex, points: run)) }
+            if run.count >= 2 { pieces.append(InkStroke(colorHex: s.colorHex, points: run, dashGroup: s.dashGroup)) }
             run = []
         }
         for (a, b) in zip(s.points, s.points.dropFirst()) {
@@ -189,6 +194,7 @@ enum InkGeometry {
     static func dashed(_ s: InkStroke, dash: CGFloat, gap: CGFloat) -> [InkStroke] {
         guard s.points.count > 1, dash > 0, gap > 0 else { return [s] }
         var pieces: [InkStroke] = []
+        let group = UUID()
         var run: [InkPoint] = [s.points[0]]
         var drawing = true
         // 目前這一段（實線或空白）還剩多長
@@ -196,7 +202,7 @@ enum InkGeometry {
         func emit() {
             // 空白剛好在一點結束時，留下的是長度 0 的一段：不算
             let length = zip(run, run.dropFirst()).reduce(0) { $0 + hypot($1.1.point.x - $1.0.point.x, $1.1.point.y - $1.0.point.y) }
-            if length > 0.01 { pieces.append(InkStroke(colorHex: s.colorHex, points: run)) }
+            if length > 0.01 { pieces.append(InkStroke(colorHex: s.colorHex, points: run, dashGroup: group)) }
             run = []
         }
         for (a, b) in zip(s.points, s.points.dropFirst()) {

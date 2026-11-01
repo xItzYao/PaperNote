@@ -151,8 +151,8 @@ extension NotebookViewController {
             }
             for e in page.elements where !e.locked {
                 let f = docFrame(of: e, pageIndex: pi)
-                // 表格、電路圖要整個圈到才算：圈上面的字時，不會連物件一起拿走
-                if e.isTable || e.isCircuit ? LassoGeometry.encloses(f, path: path) : touches(f) {
+                // 表格要整個圈到才算：圈上面的字時，不會連表格一起拿走（電路圖和圖片一樣，不想被圈到就鎖起來）
+                if e.isTable ? LassoGeometry.encloses(f, path: path) : touches(f) {
                     elements.append(ElementRef(pageID: page.id, elementID: e.id))
                     bounds = bounds.union(f)
                 }
@@ -516,10 +516,17 @@ extension NotebookViewController {
         var newElements: [ElementRef] = []
         var newHighlights: [HighlightRef] = []
         var newInk: [InkRef] = []
+        // 貼上的虛線是另一條：之後整筆擦除不會連原本的一起擦
+        var dashes: [UUID: UUID] = [:]
         updatePage(target, undoable: false) { page in
             for s in clip.ink {
                 var s = InkGeometry.offset(s, by: CGPoint(x: d.x - o.x, y: d.y - o.y))
                 s.id = UUID()
+                if let g = s.dashGroup {
+                    let n = dashes[g] ?? UUID()
+                    dashes[g] = n
+                    s.dashGroup = n
+                }
                 page.ink.append(s)
                 newInk.append(InkRef(pageID: page.id, id: s.id))
             }
@@ -527,6 +534,7 @@ extension NotebookViewController {
                 var e = item.element
                 e.id = UUID()
                 e.locked = false
+                e.refreshCircuitIDs()
                 e.frame.origin = CGPoint(x: item.docFrame.minX + d.x - o.x, y: item.docFrame.minY + d.y - o.y)
                 e.snapCircuitToGrid()
                 page.elements.append(e)
@@ -546,16 +554,23 @@ extension NotebookViewController {
 
     // MARK: - 鎖頭
 
-    /// 選取工具：選到的表格旁顯示；套索工具：所有表格旁都顯示
+    /// 選取工具：選到的物件旁顯示；套索工具：所有表格、圖片、電路圖旁都顯示；電路工具：正在編輯的和鎖住的電路圖旁顯示
     func lockIconTargets() -> [(ref: ElementRef, point: CGPoint, locked: Bool)] {
         let off = 36 / canvas.zoomScale
-        // 表格：左上角外側、移動按鈕的上方；圖片：左上角
+        // 表格：左上角外側、移動按鈕的上方；圖片：左上角；電路圖：左上角外側（裡面可能有元件）
         func target(_ e: PageElement, _ pi: Int) -> (ref: ElementRef, point: CGPoint, locked: Bool) {
             let r = docFrame(of: e, pageIndex: pi)
-            let p = e.isTable ? CGPoint(x: r.minX - off, y: r.minY - off - 42 / canvas.zoomScale) : CGPoint(x: r.minX + off * 0.5, y: r.minY + off * 0.5)
+            let p: CGPoint
+            if e.isTable {
+                p = CGPoint(x: r.minX - off, y: r.minY - off - 42 / canvas.zoomScale)
+            } else if e.isCircuit {
+                p = CGPoint(x: r.minX - off * 0.5, y: r.minY - off * 0.5)
+            } else {
+                p = CGPoint(x: r.minX + off * 0.5, y: r.minY + off * 0.5)
+            }
             return (ElementRef(pageID: pages[pi].id, elementID: e.id), p, e.locked)
         }
-        func lockable(_ e: PageElement) -> Bool { e.isTable || e.isImage }
+        func lockable(_ e: PageElement) -> Bool { e.isTable || e.isImage || e.isCircuit }
         if tool == .select || tool == .image, editingTextView == nil, let ref = selected, case let (pi, ei)? = locate(ref),
            lockable(pages[pi].elements[ei]) {
             return [target(pages[pi].elements[ei], pi)]
@@ -564,6 +579,16 @@ extension NotebookViewController {
             var out: [(ref: ElementRef, point: CGPoint, locked: Bool)] = []
             for (pi, page) in pages.enumerated() {
                 for e in page.elements where lockable(e) { out.append(target(e, pi)) }
+            }
+            return out
+        }
+        if tool == .circuit {
+            var out: [(ref: ElementRef, point: CGPoint, locked: Bool)] = []
+            for (pi, page) in pages.enumerated() {
+                for e in page.elements where e.isCircuit {
+                    let ref = ElementRef(pageID: page.id, elementID: e.id)
+                    if e.locked || ref == circuitTarget { out.append(target(e, pi)) }
+                }
             }
             return out
         }
@@ -599,7 +624,19 @@ extension NotebookViewController {
     func toggleLock(_ ref: ElementRef) {
         modifyElement(ref) { $0.locked.toggle() }
         if case let (pi, ei)? = locate(ref) {
-            showToast(pages[pi].elements[ei].locked ? "已鎖定：不能移動，也不會被套索圈到" : "已解除鎖定：可以移動，也能被套索圈到")
+            let e = pages[pi].elements[ei]
+            if e.isCircuit {
+                showToast(e.locked ? "已鎖定：不能編輯、移動，也不會被套索圈到" : "已解除鎖定：可以編輯、移動，也能被套索圈到")
+                // 鎖住正在編輯的電路圖：不能再編輯了
+                if e.locked, circuitTarget == ref {
+                    circuitTarget = nil
+                    circuitSel = nil
+                    if tool == .circuit { rebuildSubBar() }
+                }
+                updateCircuitChrome()
+            } else {
+                showToast(e.locked ? "已鎖定：不能移動，也不會被套索圈到" : "已解除鎖定：可以移動，也能被套索圈到")
+            }
         }
         clearLassoSelection()
         updateLockChrome()

@@ -217,6 +217,19 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var circuitEraseLast: CGPoint?
     /// 每種元件上次的方向與翻轉，連續擺放時沿用
     var circuitPartStyle: [CircuitPart: (rotation: Int, flipH: Bool, flipV: Bool)] = [:]
+    /// 選取模式下 Pencil 從空白處畫的框選；nil＝沒有在框選
+    var circuitMarquee: [CGPoint]?
+    /// 這次拖曳是手指（只能拖元件，其他地方是捲動頁面）
+    var circuitPanByFinger = false
+
+    // 預覽模式：工具列收起來，只能看
+    var previewMode = false
+    var toolBeforePreview: EditorTool = .pen
+    /// 預覽時藏起來的工具列
+    var barChrome: [UIView] = []
+    var canvasBelowBars: NSLayoutConstraint!
+    var canvasFullHeight: NSLayoutConstraint!
+    let previewExitButton = UIButton(configuration: .filled())
 
     // 自製筆刷（見 InkEngine.swift）
     let inkRecognizer = InkCaptureRecognizer(target: nil, action: nil)
@@ -879,6 +892,9 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         // 停住變直線的那一筆：交給 holdToShape 換成直線，不當成新筆跡處理
         if holdToShape.pencilKitEnded() { return }
         let gesture = strokeGesture
+        if tool == .eraser, !settings.pixelEraser, let before = gesture?.before {
+            DispatchQueue.main.async { [weak self] in self?.eraseRestOfDashes(before: before) }
+        }
         if !tool.isDrawing {
             let before = strokeCountAtBegin
             DispatchQueue.main.async { [weak self] in self?.absorbStrayStroke(countBefore: before, gesture: gesture) }
@@ -900,6 +916,15 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
                 self?.processNewStroke(duration: duration, countBefore: before)
             }
         }
+    }
+
+    /// 整筆擦除碰到虛線的其中一段：同一條的其他段也拿掉（和擦掉的那一段算同一步）
+    func eraseRestOfDashes(before: PKDrawing) {
+        var d = canvas.drawing
+        let rest = DashedStroke.removingErasedDashes(from: d.strokes, before: before.strokes)
+        guard rest.count != d.strokes.count else { return }
+        d.strokes = rest
+        setDrawing(d)
     }
 
     private func processNewStroke(duration: TimeInterval, countBefore: Int) {

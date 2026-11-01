@@ -7,6 +7,17 @@ enum CircuitPart: String, Codable, CaseIterable, Identifiable {
     case nmos, pmos
     case andGate, orGate, nandGate, norGate, xorGate, xnorGate, notGate, bufferGate
     case dFlipFlop, dLatch, mux, decoder, encoder, alu
+    // 參考 CircuiTikZ（LPPL／GPL）的元件分類，符號自己畫
+    case signalGround, chassisGround, vss
+    case potentiometer, variableResistor, fuse
+    case polarCapacitor, variableCapacitor, transformer
+    case diode, schottky, zener, tunnelDiode, led, photodiode, varicap
+    case battery, sineSource, squareSource, controlledVoltageSource, controlledCurrentSource
+    case ammeter, voltmeter, ohmmeter, lamp
+    case switchOpen, switchClosed, pushButton, spdt
+    case nmos4, pmos4, npn, pnp, njfet, pjfet, nigbt, pigbt
+    case opAmp, fdOpAmp, ota
+    case adc, dac, mixer, antenna
 
     var id: String { rawValue }
 
@@ -35,13 +46,65 @@ enum CircuitPart: String, Codable, CaseIterable, Identifiable {
         case .decoder: return "解碼器"
         case .encoder: return "編碼器"
         case .alu: return "ALU"
+        case .signalGround: return "信號接地"
+        case .chassisGround: return "機殼接地"
+        case .vss: return "VSS"
+        case .potentiometer: return "電位器"
+        case .variableResistor: return "可變電阻"
+        case .fuse: return "保險絲"
+        case .polarCapacitor: return "極性電容"
+        case .variableCapacitor: return "可變電容"
+        case .transformer: return "變壓器"
+        case .diode: return "二極體"
+        case .schottky: return "蕭特基"
+        case .zener: return "齊納"
+        case .tunnelDiode: return "穿隧"
+        case .led: return "LED"
+        case .photodiode: return "光二極體"
+        case .varicap: return "變容"
+        case .battery: return "電池"
+        case .sineSource: return "弦波源"
+        case .squareSource: return "方波源"
+        case .controlledVoltageSource: return "受控電壓"
+        case .controlledCurrentSource: return "受控電流"
+        case .ammeter: return "電流表"
+        case .voltmeter: return "電壓表"
+        case .ohmmeter: return "歐姆表"
+        case .lamp: return "燈泡"
+        case .switchOpen: return "開關"
+        case .switchClosed: return "閉合開關"
+        case .pushButton: return "按鈕"
+        case .spdt: return "單刀雙擲"
+        case .nmos4: return "NMOS 4端"
+        case .pmos4: return "PMOS 4端"
+        case .npn: return "NPN"
+        case .pnp: return "PNP"
+        case .njfet: return "N-JFET"
+        case .pjfet: return "P-JFET"
+        case .nigbt: return "N-IGBT"
+        case .pigbt: return "P-IGBT"
+        case .opAmp: return "運算放大"
+        case .fdOpAmp: return "全差動"
+        case .ota: return "OTA"
+        case .adc: return "ADC"
+        case .dac: return "DAC"
+        case .mixer: return "混頻器"
+        case .antenna: return "天線"
+        }
+    }
+
+    /// 新放的元件預設上下鏡像：P 型的源極（射極）通常接 VDD，翻過來才在上面
+    var defaultFlipV: Bool {
+        switch self {
+        case .pmos, .pmos4, .pnp, .pjfet, .pigbt: return true
+        default: return false
         }
     }
 
     /// 方塊元件（正反器、閂鎖、多工器、解碼器、編碼器、ALU）
     var isBlock: Bool {
         switch self {
-        case .dFlipFlop, .dLatch, .mux, .decoder, .encoder, .alu: return true
+        case .dFlipFlop, .dLatch, .mux, .decoder, .encoder, .alu, .adc, .dac: return true
         default: return false
         }
     }
@@ -105,6 +168,8 @@ struct CircuitComponent: Codable, Equatable, Identifiable {
     var nameOffset: CGPoint?
     /// 名稱的字級（拖右下角的控制點調整）；nil＝預設大小
     var nameSize: CGFloat?
+    /// 同一個群組的元件、導線一起選、一起動；nil＝沒有群組
+    var groupID: UUID?
 
     var nameFont: CGFloat { nameSize ?? CircuitText.fontSize }
 
@@ -130,9 +195,58 @@ enum CircuitText {
     static let fontSize: CGFloat = 16
     static let sizeRange: ClosedRange<CGFloat> = 8...72
 
-    /// 文字大約佔的範圍（不用 UIKit 量字：英數字算 0.6 個字寬，中文算 1 個）
+    /// 上下標的字縮小成這個比例
+    static let scriptScale: CGFloat = 0.7
+
+    enum Script: Equatable { case normal, sub, sup }
+
+    struct Run: Equatable {
+        var text: String
+        var script: Script
+    }
+
+    /// 切成一般字和上下標：R_1、V_DS、x^2、V_{in+}。_ 或 ^ 後面接著的英數字（或大括號裡的字）是上下標；
+    /// 後面沒有字的 _、^ 就當一般字
+    static func runs(_ text: String) -> [Run] {
+        let cs = Array(text)
+        var out: [Run] = []
+        var plain = ""
+        var i = 0
+        while i < cs.count {
+            let c = cs[i]
+            if c == "_" || c == "^", i + 1 < cs.count {
+                var j = i + 1
+                var body = ""
+                if cs[j] == "{", let end = cs[j...].firstIndex(of: "}") {
+                    body = String(cs[(j + 1)..<end])
+                    j = end + 1
+                } else {
+                    while j < cs.count, cs[j].isLetter || cs[j].isNumber {
+                        body.append(cs[j])
+                        j += 1
+                    }
+                }
+                if !body.isEmpty {
+                    if !plain.isEmpty { out.append(Run(text: plain, script: .normal)) }
+                    plain = ""
+                    out.append(Run(text: body, script: c == "_" ? .sub : .sup))
+                    i = j
+                    continue
+                }
+            }
+            plain.append(c)
+            i += 1
+        }
+        if !plain.isEmpty { out.append(Run(text: plain, script: .normal)) }
+        return out
+    }
+
+    /// 文字大約佔的範圍（不用 UIKit 量字：英數字算 0.6 個字寬，中文算 1 個；上下標照比例縮小）
     static func bounds(_ text: String, center c: CGPoint, size f: CGFloat) -> CGRect {
-        let w = text.unicodeScalars.reduce(CGFloat(0)) { $0 + ($1.isASCII ? 0.6 : 1) * f }
+        let w = runs(text).reduce(CGFloat(0)) { sum, run in
+            let k = run.script == .normal ? 1 : scriptScale
+            return run.text.unicodeScalars.reduce(sum) { $0 + ($1.isASCII ? 0.6 : 1) * f * k }
+        }
         let h = f * 1.25
         return CGRect(x: c.x - w / 2, y: c.y - h / 2, width: w, height: h)
     }
@@ -155,6 +269,8 @@ struct CircuitWire: Codable, Equatable, Identifiable {
     var labelPosition: CGPoint?
     /// 名稱的字級（拖右下角的控制點調整）；nil＝預設大小
     var labelSize: CGFloat?
+    /// 同一個群組的元件、導線一起選、一起動；nil＝沒有群組
+    var groupID: UUID?
 
     static let labelFontSize = CircuitText.fontSize
     static let labelSizeRange = CircuitText.sizeRange
@@ -269,6 +385,9 @@ enum CircuitGeometry {
         case .alu:
             return CircuitBlockLayout(title: "ALU", left: ["A", "B"], bottom: ["OP"], right: ["Y"], clock: nil,
                                       halfWidth: 30, pinX: 50, spacing: 60, trapezoid: true, notch: true)
+        case .adc, .dac:
+            return CircuitBlockLayout(title: c.part == .adc ? "ADC" : "DAC", left: ["IN"], bottom: [], right: ["OUT"], clock: nil,
+                                      halfWidth: 24, pinX: 40)
         default:
             return nil
         }
@@ -313,9 +432,31 @@ enum CircuitGeometry {
     static func localPins(_ c: CircuitComponent) -> [CGPoint] {
         if let b = blockLayout(c) { return blockPins(b) }
         switch c.part {
-        case .resistor, .capacitor, .inductor, .voltageSource, .currentSource:
+        case .resistor, .capacitor, .inductor, .voltageSource, .currentSource,
+             .variableResistor, .fuse, .polarCapacitor, .variableCapacitor,
+             .diode, .schottky, .zener, .tunnelDiode, .led, .photodiode, .varicap,
+             .battery, .sineSource, .squareSource, .controlledVoltageSource, .controlledCurrentSource,
+             .ammeter, .voltmeter, .ohmmeter, .lamp, .switchOpen, .switchClosed, .pushButton:
             return [CGPoint(x: -30, y: 0), CGPoint(x: 30, y: 0)]
-        case .ground:
+        case .potentiometer:
+            return [CGPoint(x: -30, y: 0), CGPoint(x: 30, y: 0), CGPoint(x: 0, y: -20)]
+        case .mixer:
+            return [CGPoint(x: -30, y: 0), CGPoint(x: 30, y: 0), CGPoint(x: 0, y: 30)]
+        case .spdt:
+            return [CGPoint(x: -30, y: 0), CGPoint(x: 30, y: -20), CGPoint(x: 30, y: 20)]
+        case .transformer:
+            return [CGPoint(x: -30, y: -20), CGPoint(x: -30, y: 20), CGPoint(x: 30, y: -20), CGPoint(x: 30, y: 20)]
+        case .nmos4, .pmos4:
+            return [CGPoint(x: -30, y: 0), CGPoint(x: 10, y: -30), CGPoint(x: 10, y: 30), CGPoint(x: 30, y: 0)]
+        case .npn, .pnp, .njfet, .pjfet, .nigbt, .pigbt:
+            return [CGPoint(x: -30, y: 0), CGPoint(x: 10, y: -30), CGPoint(x: 10, y: 30)]
+        case .opAmp, .ota:
+            return [CGPoint(x: -40, y: -20), CGPoint(x: -40, y: 20), CGPoint(x: 40, y: 0)]
+        case .fdOpAmp:
+            return [CGPoint(x: -40, y: -20), CGPoint(x: -40, y: 20), CGPoint(x: 40, y: -10), CGPoint(x: 40, y: 10)]
+        case .antenna:
+            return [CGPoint(x: 0, y: 20)]
+        case .ground, .signalGround, .chassisGround, .vss:
             return [CGPoint(x: 0, y: -20)]
         case .vdd:
             return [CGPoint(x: 0, y: 20)]
@@ -340,8 +481,26 @@ enum CircuitGeometry {
             return CGRect(x: -b.pinX, y: top, width: b.pinX * 2, height: bottom - top)
         }
         switch c.part {
-        case .resistor, .capacitor, .inductor: return CGRect(x: -30, y: -14, width: 60, height: 28)
-        case .voltageSource, .currentSource: return CGRect(x: -30, y: -18, width: 60, height: 36)
+        case .resistor, .capacitor, .inductor, .battery, .switchOpen, .switchClosed, .zener, .diode, .schottky, .tunnelDiode, .varicap:
+            return CGRect(x: -30, y: -14, width: 60, height: 28)
+        case .voltageSource, .currentSource, .sineSource, .squareSource, .controlledVoltageSource, .controlledCurrentSource,
+             .ammeter, .voltmeter, .ohmmeter, .lamp:
+            return CGRect(x: -30, y: -18, width: 60, height: 36)
+        case .variableResistor, .variableCapacitor: return CGRect(x: -30, y: -18, width: 60, height: 36)
+        case .fuse: return CGRect(x: -30, y: -8, width: 60, height: 16)
+        case .potentiometer: return CGRect(x: -30, y: -20, width: 60, height: 34)
+        case .polarCapacitor: return CGRect(x: -30, y: -16, width: 60, height: 30)
+        case .led, .photodiode: return CGRect(x: -30, y: -24, width: 60, height: 38)
+        case .pushButton: return CGRect(x: -30, y: -16, width: 60, height: 22)
+        case .spdt, .transformer: return CGRect(x: -30, y: -22, width: 60, height: 44)
+        case .mixer: return CGRect(x: -30, y: -16, width: 60, height: 46)
+        case .antenna: return CGRect(x: -12, y: -22, width: 24, height: 42)
+        case .nmos4, .pmos4: return CGRect(x: -30, y: -30, width: 60, height: 60)
+        case .npn, .pnp, .njfet, .pjfet, .nigbt, .pigbt: return CGRect(x: -30, y: -30, width: 44, height: 60)
+        case .opAmp, .fdOpAmp, .ota: return CGRect(x: -40, y: -32, width: 80, height: 64)
+        case .signalGround: return CGRect(x: -12, y: -20, width: 24, height: 32)
+        case .chassisGround: return CGRect(x: -18, y: -20, width: 32, height: 30)
+        case .vss: return CGRect(x: -8, y: -20, width: 16, height: 30)
         case .ground: return CGRect(x: -14, y: -20, width: 28, height: 34)
         case .vdd: return CGRect(x: -14, y: -14, width: 28, height: 34)
         case .nmos, .pmos: return CGRect(x: -30, y: -30, width: 44, height: 60)
@@ -387,6 +546,145 @@ enum CircuitGeometry {
 
     static func bounds(_ c: CircuitComponent) -> CGRect {
         localBounds(c).applying(transform(c))
+    }
+}
+
+// MARK: - 一次動很多個（群組、框選）
+
+/// 整組旋轉、翻轉（繞著整組的中心）
+enum CircuitItemTransform {
+    case rotate, flipH, flipV
+}
+
+extension CircuitData {
+    /// id 所在的群組的所有成員；沒有群組回傳 nil
+    func groupMembers(of id: UUID) -> Set<UUID>? {
+        guard let g = components.first(where: { $0.id == id })?.groupID ?? wires.first(where: { $0.id == id })?.groupID else { return nil }
+        return Set(components.filter { $0.groupID == g }.map(\.id) + wires.filter { $0.groupID == g }.map(\.id))
+    }
+
+    /// 這些東西剛好是一整個群組
+    func isOneGroup(_ ids: Set<UUID>) -> Bool {
+        guard let first = ids.first, let members = groupMembers(of: first) else { return false }
+        return members == ids
+    }
+
+    mutating func setGroup(_ ids: Set<UUID>, to g: UUID?) {
+        for i in components.indices where ids.contains(components[i].id) { components[i].groupID = g }
+        for i in wires.indices where ids.contains(wires[i].id) { wires[i].groupID = g }
+    }
+
+    /// 只留這些元件、導線（座標不變）
+    func subset(_ ids: Set<UUID>) -> CircuitData {
+        var d = self
+        d.components.removeAll { !ids.contains($0.id) }
+        d.wires.removeAll { !ids.contains($0.id) }
+        return d
+    }
+
+    var itemIDs: Set<UUID> { Set(components.map(\.id) + wires.map(\.id)) }
+
+    /// 存進自訂電路：只留這些，中心移到原點（對齊格點），不帶群組、縮放
+    func extracted(_ ids: Set<UUID>) -> CircuitData {
+        var d = CircuitData()
+        d.components = components.filter { ids.contains($0.id) }
+        d.wires = wires.filter { ids.contains($0.id) }
+        d.setGroup(ids, to: nil)
+        let b = d.contentBounds
+        guard !b.isNull else { return d }
+        let c = Self.snap(CGPoint(x: b.midX, y: b.midY))
+        d.offset(by: CGPoint(x: -c.x, y: -c.y))
+        return d
+    }
+
+    /// 每個元件、導線換新的 id（貼上、複製、從自訂電路放出來，和原本的才不會混在一起）。
+    /// groupAll：全部放進同一個新群組；否則原本的群組換新的 id、沒群組的維持沒群組
+    func withFreshIDs(groupAll: Bool = false) -> CircuitData {
+        var d = self
+        var map: [UUID: UUID] = [:]
+        let all = UUID()
+        func group(_ old: UUID?) -> UUID? {
+            if groupAll { return all }
+            guard let old else { return nil }
+            if let n = map[old] { return n }
+            let n = UUID()
+            map[old] = n
+            return n
+        }
+        for i in d.components.indices {
+            d.components[i].id = UUID()
+            d.components[i].groupID = group(d.components[i].groupID)
+        }
+        for i in d.wires.indices {
+            d.wires[i].id = UUID()
+            d.wires[i].groupID = group(d.wires[i].groupID)
+        }
+        return d
+    }
+
+    /// 這些東西一起換位置：外面接在它們接腳上（或 T 字接在它們導線上）的線跟著走
+    private mutating func mapItems(_ ids: Set<UUID>, point f: (CGPoint) -> CGPoint, change: (inout CircuitComponent) -> Void) {
+        let moved = wires.filter { ids.contains($0.id) }
+        var from: [CGPoint] = [], to: [CGPoint] = []
+        for i in components.indices where ids.contains(components[i].id) {
+            from += CircuitGeometry.pins(components[i])
+            change(&components[i])
+            to += CircuitGeometry.pins(components[i])
+        }
+        wires.removeAll { ids.contains($0.id) }
+        for w in wires {
+            for end in [w.points.first, w.points.last].compactMap({ $0 }) where !from.contains(end) {
+                if moved.contains(where: { Self.polyline($0.points, contains: end) }) {
+                    from.append(end)
+                    to.append(f(end))
+                }
+            }
+        }
+        reattach(from: from, to: to)
+        wires += moved.map { w in
+            var w = w
+            w.points = w.points.map(f)
+            w.labelPosition = w.labelPosition.map(f)
+            return w
+        }
+    }
+
+    mutating func moveItems(_ ids: Set<UUID>, by d: CGPoint) {
+        mapItems(ids, point: { CGPoint(x: $0.x + d.x, y: $0.y + d.y) }) { c in
+            c.position = CGPoint(x: c.position.x + d.x, y: c.position.y + d.y)
+        }
+    }
+
+    mutating func transformItems(_ ids: Set<UUID>, _ t: CircuitItemTransform) {
+        let b = subset(ids).contentBounds
+        guard !b.isNull else { return }
+        let o = Self.snap(CGPoint(x: b.midX, y: b.midY))
+        func vector(_ v: CGPoint) -> CGPoint {
+            switch t {
+            case .rotate: return CGPoint(x: -v.y, y: v.x)
+            case .flipH: return CGPoint(x: -v.x, y: v.y)
+            case .flipV: return CGPoint(x: v.x, y: -v.y)
+            }
+        }
+        func point(_ p: CGPoint) -> CGPoint {
+            let v = vector(CGPoint(x: p.x - o.x, y: p.y - o.y))
+            return CGPoint(x: o.x + v.x, y: o.y + v.y)
+        }
+        mapItems(ids, point: point) { c in
+            c.position = point(c.position)
+            // 名稱的字維持正的，只有位置跟著轉
+            c.nameOffset = c.nameOffset.map(vector)
+            switch t {
+            case .rotate:
+                c.rotation = (c.rotation + 90) % 360
+            case .flipH:
+                c.rotation = (360 - c.rotation) % 360
+                c.flipH.toggle()
+            case .flipV:
+                c.rotation = (360 - c.rotation) % 360
+                c.flipV.toggle()
+            }
+        }
     }
 }
 
@@ -449,13 +747,15 @@ extension CircuitData {
     /// 兩條線的線頭接在同一點、剛好接成一直線，那點又沒有接腳、也沒有別的線碰到（線頭、轉角或從中間經過）：
     /// 其實是同一條線，接成一條。有別的線碰到的話，線頭停在那裡就是接點，接起來會變成跨線，所以不接
     /// 接起來的線沿用 keep 的 id（是其中一條的話），否則沿用前面那條的
-    mutating func joinStraightRuns(keeping keep: UUID? = nil) {
+    /// 不同群組的線不接；frozen 裡的線（一起選著的）也不接，id 才不會不見
+    mutating func joinStraightRuns(keeping keep: UUID? = nil, frozen: Set<UUID> = []) {
         let pins = Set(allPins.map(PointKey.init))
         var joined = true
         while joined {
             joined = false
             search: for i in wires.indices {
-                for j in wires.indices where j > i {
+                for j in wires.indices where j > i && wires[i].groupID == wires[j].groupID
+                    && !frozen.contains(wires[i].id) && !frozen.contains(wires[j].id) {
                     for a in [wires[i].points, Array(wires[i].points.reversed())] {
                         for b in [wires[j].points, Array(wires[j].points.reversed())] {
                             guard a.count >= 2, b.count >= 2, let p = a.last, p == b[0],

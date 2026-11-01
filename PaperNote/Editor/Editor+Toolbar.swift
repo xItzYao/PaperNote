@@ -19,6 +19,8 @@ extension NotebookViewController {
         sep.backgroundColor = UIColor(white: 0.82, alpha: 1)
         view.addSubview(sep)
 
+        canvasBelowBars = canvas.topAnchor.constraint(equalTo: sep.bottomAnchor)
+        canvasFullHeight = canvas.topAnchor.constraint(equalTo: view.topAnchor)
         NSLayoutConstraint.activate([
             topBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             topBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -32,7 +34,7 @@ extension NotebookViewController {
             sep.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             sep.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             sep.heightAnchor.constraint(equalToConstant: 0.5),
-            canvas.topAnchor.constraint(equalTo: sep.bottomAnchor),
+            canvasBelowBars,
             canvas.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             canvas.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             canvas.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -46,6 +48,10 @@ extension NotebookViewController {
             self.canvas.contentInset.bottom = self.bottomInset
         }
         circuitLibrary.onSelectMode = { [weak self] mode in self?.selectCircuitMode(mode) }
+        circuitLibrary.onDropCustom = { [weak self] id, p in self?.dropCustomCircuit(id, at: p) }
+        circuitLibrary.onAddCustom = { [weak self] in self?.addSelectionToCustomCircuits() }
+        circuitLibrary.onRenameCustom = { [weak self] id in self?.promptRenameCustomCircuit(id) }
+        circuitLibrary.onDeleteCustom = { [weak self] id in self?.deleteCustomCircuit(id) }
 
         // 插入圖片：一排照片浮在畫布下方，只在圖片工具顯示
         photoStrip.translatesAutoresizingMaskIntoConstraints = false
@@ -73,6 +79,8 @@ extension NotebookViewController {
             topFill.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             topFill.bottomAnchor.constraint(equalTo: topBar.topAnchor),
         ])
+        barChrome = [topFill, topBar, subBar, sep]
+        setupPreviewExitButton()
 
         // 左：標題（回資料庫用分頁列最左邊的「<」）；長按看完整名稱、改名
         let titleLabel = UILabel()
@@ -240,6 +248,10 @@ extension NotebookViewController {
             wireDraft = nil
             overlay.showCircuitDraft(nil, ink: nil)
             clearCircuitErasing()
+            if circuitMarquee != nil {
+                circuitMarquee = nil
+                overlay.showLassoPath(nil)
+            }
         }
         if t == .pageResize, resizePageIndex == nil || t != tool { resizePageIndex = currentPageIndex }
         if t == .eraser, tool.isInking || tool == .lasso { toolBeforeEraser = tool }
@@ -257,8 +269,51 @@ extension NotebookViewController {
         updateCircuitChrome()
     }
 
+    // MARK: - 預覽模式
+
+    private func setupPreviewExitButton() {
+        var c = UIButton.Configuration.filled()
+        c.image = UIImage(systemName: "eye.slash")
+        c.title = "結束預覽"
+        c.imagePadding = 4
+        c.baseBackgroundColor = UIColor.black.withAlphaComponent(0.55)
+        c.baseForegroundColor = .white
+        c.cornerStyle = .capsule
+        previewExitButton.configuration = c
+        previewExitButton.translatesAutoresizingMaskIntoConstraints = false
+        previewExitButton.isHidden = true
+        previewExitButton.addAction(UIAction { [weak self] _ in self?.setPreviewMode(false) }, for: .touchUpInside)
+        view.addSubview(previewExitButton)
+        NSLayoutConstraint.activate([
+            previewExitButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
+            previewExitButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
+        ])
+    }
+
+    /// 預覽模式：工具列、貼圖收起來，頁面佔滿畫面，只能捲動、縮放（筆跡還是看得到）
+    func setPreviewMode(_ on: Bool) {
+        guard on != previewMode else { return }
+        let oldTop = canvas.frame.minY
+        if on {
+            toolBeforePreview = tool
+            setTool(.select)
+        }
+        previewMode = on
+        barChrome.forEach { $0.isHidden = on }
+        pinOverlay.isHidden = on
+        previewExitButton.isHidden = !on
+        canvasBelowBars.isActive = false
+        canvasFullHeight.isActive = false
+        (on ? canvasFullHeight : canvasBelowBars)?.isActive = true
+        if on { applyTool() } else { setTool(toolBeforePreview) }
+        view.layoutIfNeeded()
+        // 畫布變高或變矮：頁面留在畫面上原本的位置
+        let maxY = max(0, canvas.contentSize.height + canvas.contentInset.bottom - canvas.bounds.height)
+        canvas.contentOffset.y = min(max(0, canvas.contentOffset.y + oldTop - canvas.frame.minY), maxY)
+    }
+
     func applyTool() {
-        canvas.drawingGestureRecognizer.isEnabled = tool.isDrawing
+        canvas.drawingGestureRecognizer.isEnabled = tool.isDrawing && !previewMode
         circuitLibrary.isHidden = tool != .circuit
         photoStrip.isHidden = tool != .image
         if tool == .image { photoStrip.reload() }
@@ -910,6 +965,9 @@ extension NotebookViewController {
             },
         ])
         let actions = UIMenu(options: .displayInline, children: [
+            UIAction(title: "預覽模式（收合工具列）", image: UIImage(systemName: "eye")) { [weak self] _ in
+                self?.setPreviewMode(true)
+            },
             UIAction(title: "管理常用筆刷…", image: UIImage(systemName: "swatchpalette")) { [weak self] _ in
                 self?.presentBrushManager()
             },

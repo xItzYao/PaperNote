@@ -336,7 +336,7 @@ extension NotebookViewController: UIPencilInteractionDelegate {
 
     /// Apple Pencil 筆身點兩下：切換橡皮擦，同時在筆尖旁出現調色盤小圖示（點了才打開）
     func handlePencilDoubleTap(at hover: CGPoint? = nil) {
-        guard UIPencilInteraction.preferredTapAction != .ignore else { return }
+        guard UIPencilInteraction.preferredTapAction != .ignore, !previewMode else { return }
         // 編輯表格的格線：在畫線和擦線之間切換（不切到橡皮擦）
         if tool == .tableDraw, tableDrawTarget != nil {
             toggleTableEraseLines()

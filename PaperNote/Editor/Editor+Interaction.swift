@@ -121,8 +121,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         toolPan.isEnabled = tool.usesToolPan
         // 筆／橡皮擦／套索模式下，手指點物件也能直接選取（見 shouldReceive）
         tapGesture.isEnabled = true
-        // 電路工具：點兩下元件輸入名稱
-        doubleTapGesture.isEnabled = tool == .select || tool == .circuit
+        doubleTapGesture.isEnabled = tool == .select
         pencilPointTracker.isEnabled = true
         holdRecognizer.isEnabled = tool.isInking && settings.shapeSnap && !customInkActive
         inkRecognizer.isEnabled = customInkActive
@@ -131,6 +130,14 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         eraserTracker.isEnabled = tool == .eraser
         eraserTracker.allowFinger = settings.fingerDrawing
         longPressGesture.isEnabled = tool == .select || tool == .image
+        textLongPress.isEnabled = true
+        textHandlePan.isEnabled = true
+        // 預覽模式只能捲動、縮放
+        if previewMode {
+            let off: [UIGestureRecognizer] = [toolPan, tapGesture, doubleTapGesture, longPressGesture, textLongPress, textHandlePan,
+                                              holdRecognizer, inkRecognizer, eraserTracker]
+            for g in off { g.isEnabled = false }
+        }
     }
 
     func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
@@ -221,6 +228,12 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             if touch.type == .pencil { return (tool == .lasso || tool == .capture) && clipboardHasContent }
             guard touch.type == .direct, let i = pageIndex(containing: p) else { return false }
             return clipboardHasContent || session.pdfPage(for: pages[i]) != nil
+        }
+        // 電路工具：手指可以拖元件，其他地方是捲動頁面
+        if g === toolPan, tool == .circuit {
+            let finger = touch.type == .direct && !settings.fingerDrawing
+            if toolPan.numberOfTouches == 0 { circuitPanByFinger = finger }
+            return !finger || circuitAcceptsFinger(at: touch.location(in: pagesContainer))
         }
         // 截圖、PDF 文字、手繪表格、套索：沒開「用手指書寫」時只接受 Pencil，手指只用來捲動
         if g === toolPan, tool.drawsWithPan {
@@ -413,10 +426,6 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
 
     @objc func handleDoubleTap(_ g: UITapGestureRecognizer) {
         let p = g.location(in: pagesContainer)
-        if tool == .circuit {
-            handleCircuitDoubleTap(at: p)
-            return
-        }
         guard tool == .select else { return }
         guard let hit = hitElement(at: p), case let (pi, ei)? = locate(hit) else { return }
         select(hit)
@@ -436,6 +445,10 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
 
     /// 切到電路工具編輯這個電路圖
     func editCircuit(_ ref: ElementRef) {
+        if case let (pi, ei)? = locate(ref), pages[pi].elements[ei].locked {
+            showToast("電路圖已鎖定，點鎖頭解除才能編輯")
+            return
+        }
         setTool(.circuit)
         circuitTarget = ref
         rebuildSubBar()
@@ -922,6 +935,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         var e = pages[pi].elements[ei]
         e.id = UUID()
         e.locked = false
+        e.refreshCircuitIDs()
         e.frame = e.frame.offsetBy(dx: 24, dy: 24)
         e.snapCircuitToGrid()
         let copy = e
@@ -1020,6 +1034,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             var e = clip.element
             e.id = UUID()
             e.locked = false
+            e.refreshCircuitIDs()
             _ = insertElement(e.content, size: e.frame.size, at: p)
             return
         }

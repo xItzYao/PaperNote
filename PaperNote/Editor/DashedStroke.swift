@@ -35,6 +35,21 @@ enum DashedStroke {
         return pieces.isEmpty ? [stroke] : pieces
     }
 
+    /// 整筆擦除：PencilKit 的橡皮擦只會擦掉碰到的那幾段。同一條虛線切出來的每一段有一樣的建立時間和亂數種子，
+    /// 比對擦之前的筆跡：有一段不見了，就把同一條的其他段也拿掉
+    static func removingErasedDashes(from after: [PKStroke], before: [PKStroke]) -> [PKStroke] {
+        struct Key: Hashable {
+            var date: Date
+            var seed: UInt32
+        }
+        func key(_ s: PKStroke) -> Key { Key(date: s.path.creationDate, seed: s.randomSeed) }
+        var left: [Key: Int] = [:]
+        for s in before { left[key(s), default: 0] += 1 }
+        for s in after { left[key(s), default: 0] -= 1 }
+        let erased = Set(left.filter { $0.value > 0 }.keys)
+        return erased.isEmpty ? after : after.filter { !erased.contains(key($0)) }
+    }
+
     /// 依這支筆的設定切；不是虛線就原樣回傳
     static func apply(_ stroke: PKStroke, dashed: Bool, lineWidth: CGFloat, preset: BrushPreset? = nil) -> [PKStroke] {
         guard dashed else { return [stroke] }

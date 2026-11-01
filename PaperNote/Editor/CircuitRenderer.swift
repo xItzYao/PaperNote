@@ -37,12 +37,29 @@ enum CircuitRenderer {
 
     static func wireLabelFont(_ size: CGFloat) -> UIFont { .systemFont(ofSize: size, weight: .medium) }
 
+    /// 名稱的字：R_1、x^2 畫成上下標
+    static func nameString(_ text: String, size: CGFloat, color: UIColor) -> NSAttributedString {
+        let out = NSMutableAttributedString()
+        for run in CircuitText.runs(text) {
+            let small = size * CircuitText.scriptScale
+            switch run.script {
+            case .normal:
+                out.append(NSAttributedString(string: run.text, attributes: [.font: wireLabelFont(size), .foregroundColor: color]))
+            case .sub:
+                out.append(NSAttributedString(string: run.text, attributes: [.font: wireLabelFont(small), .foregroundColor: color, .baselineOffset: -size * 0.2]))
+            case .sup:
+                out.append(NSAttributedString(string: run.text, attributes: [.font: wireLabelFont(small), .foregroundColor: color, .baselineOffset: size * 0.35]))
+            }
+        }
+        return out
+    }
+
     /// 導線名稱、元件名稱：字的中心在名稱的位置
     static func drawNames(_ d: CircuitData, color: UIColor) {
         let names = d.wires.map { ($0.label, $0.labelPosition, $0.labelFont) }
             + d.components.map { ($0.name, $0.namePosition, $0.nameFont) }
         for case let (text?, c?, size) in names where !text.isEmpty {
-            let str = NSAttributedString(string: text, attributes: [.font: wireLabelFont(size), .foregroundColor: color])
+            let str = nameString(text, size: size, color: color)
             let sz = str.size()
             str.draw(at: CGPoint(x: c.x - sz.width / 2, y: c.y - sz.height / 2))
         }
@@ -163,19 +180,280 @@ enum CircuitRenderer {
 
     private static func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x, y: y) }
 
+    /// 實心箭頭：尖端在 tip，從 from 的方向來
+    private static func head(_ f: UIBezierPath, tip: CGPoint, from: CGPoint, size s: CGFloat = 7) {
+        let dx = tip.x - from.x, dy = tip.y - from.y
+        let len = max(hypot(dx, dy), 0.001)
+        let ux = dx / len, uy = dy / len
+        let bx = tip.x - ux * s, by = tip.y - uy * s, w = s * 0.6
+        f.move(to: tip)
+        f.addLine(to: pt(bx - uy * w, by + ux * w))
+        f.addLine(to: pt(bx + uy * w, by - ux * w))
+        f.close()
+    }
+
+    /// 帶箭頭的線（可變元件的斜箭頭、LED 的光）
+    private static func arrow(_ s: UIBezierPath, _ f: UIBezierPath, from: CGPoint, to: CGPoint, size: CGFloat = 6) {
+        line(s, from, to)
+        head(f, tip: to, from: from, size: size)
+    }
+
+    private static func zigzag(_ s: UIBezierPath) {
+        line(s, pt(-30, 0), pt(-20, 0))
+        s.move(to: pt(-20, 0))
+        for k in 0..<6 {
+            s.addLine(to: pt(-20 + 40 * CGFloat(2 * k + 1) / 12, k % 2 == 0 ? -7 : 7))
+        }
+        s.addLine(to: pt(20, 0))
+        s.addLine(to: pt(30, 0))
+    }
+
+    private static func diodeBody(_ s: UIBezierPath) {
+        line(s, pt(-30, 0), pt(-8, 0))
+        s.move(to: pt(-8, -9)); s.addLine(to: pt(-8, 9)); s.addLine(to: pt(8, 0)); s.close()
+        line(s, pt(8, -9), pt(8, 9))
+        line(s, pt(8, 0), pt(30, 0))
+    }
+
+    /// 圓形本體和左右引腳（電源、儀表、燈泡、混頻器）
+    private static func circleBody(_ s: UIBezierPath) {
+        s.append(UIBezierPath(ovalIn: CGRect(x: -15, y: -15, width: 30, height: 30)))
+        line(s, pt(-30, 0), pt(-15, 0))
+        line(s, pt(15, 0), pt(30, 0))
+    }
+
+    private static func diamondBody(_ s: UIBezierPath) {
+        s.move(to: pt(-16, 0)); s.addLine(to: pt(0, -16)); s.addLine(to: pt(16, 0)); s.addLine(to: pt(0, 16)); s.close()
+        line(s, pt(-30, 0), pt(-16, 0))
+        line(s, pt(16, 0), pt(30, 0))
+    }
+
+    /// 開關的兩個接點
+    private static func switchContacts(_ s: UIBezierPath, right: [CGPoint]) {
+        line(s, pt(-30, 0), pt(-14, 0))
+        s.append(UIBezierPath(ovalIn: CGRect(x: -14, y: -2, width: 4, height: 4)))
+        for p in right {
+            s.append(UIBezierPath(ovalIn: CGRect(x: p.x, y: p.y - 2, width: 4, height: 4)))
+            line(s, pt(p.x + 4, p.y), pt(30, p.y))
+        }
+    }
+
+    /// 放大器的兩個輸入和正負號（上面是負、下面是正）
+    private static func ampInputs(_ s: UIBezierPath) {
+        for y in [-20, 20] as [CGFloat] { line(s, pt(-40, y), pt(-24, y)) }
+        line(s, pt(-20, -20), pt(-14, -20))
+        line(s, pt(-20, 20), pt(-14, 20))
+        line(s, pt(-17, 17), pt(-17, 23))
+    }
+
+    private static func ampTriangle(_ s: UIBezierPath) {
+        s.move(to: pt(-24, -30)); s.addLine(to: pt(-24, 30)); s.addLine(to: pt(26, 0)); s.close()
+    }
+
+    /// 雙極性、IGBT 的集極和射極；箭頭在射極那條線上，outward＝朝外
+    private static func bipolarLegs(_ s: UIBezierPath, _ f: UIBezierPath, baseX x: CGFloat, outward: Bool) {
+        s.move(to: pt(x, -6)); s.addLine(to: pt(10, -20)); s.addLine(to: pt(10, -30))
+        s.move(to: pt(x, 6)); s.addLine(to: pt(10, 20)); s.addLine(to: pt(10, 30))
+        let a = pt(x, 6), b = pt(10, 20)
+        if outward {
+            head(f, tip: b, from: a)
+        } else {
+            head(f, tip: pt(a.x + (b.x - a.x) * 0.3, a.y + (b.y - a.y) * 0.3), from: b)
+        }
+    }
+
+    /// 儀表的字母（A、V、Ω）用線條畫，匯出 SVG 時和其他符號一樣是路徑
+    private static func meterLetter(_ part: CircuitPart, _ s: UIBezierPath) {
+        switch part {
+        case .ammeter:
+            s.move(to: pt(-5, 7)); s.addLine(to: pt(0, -7)); s.addLine(to: pt(5, 7))
+            line(s, pt(-3, 2), pt(3, 2))
+        case .voltmeter:
+            s.move(to: pt(-5, -7)); s.addLine(to: pt(0, 7)); s.addLine(to: pt(5, -7))
+        default:
+            s.move(to: pt(-7, 7)); s.addLine(to: pt(-3.8, 7)); s.addLine(to: pt(-3.8, 4.26))
+            s.addArc(withCenter: pt(0, -1), radius: 6.5, startAngle: 0.7 * .pi, endAngle: 0.3 * .pi, clockwise: true)
+            s.addLine(to: pt(3.8, 7)); s.addLine(to: pt(7, 7))
+        }
+    }
+
     /// 回傳（要描邊的路徑, 要填滿的路徑）
     static func symbol(_ c: CircuitComponent) -> (UIBezierPath, UIBezierPath) {
         let s = UIBezierPath()
         let f = UIBezierPath()
         switch c.part {
         case .resistor:
-            line(s, pt(-30, 0), pt(-20, 0))
-            s.move(to: pt(-20, 0))
-            for k in 0..<6 {
-                s.addLine(to: pt(-20 + 40 * CGFloat(2 * k + 1) / 12, k % 2 == 0 ? -7 : 7))
+            zigzag(s)
+        case .potentiometer:
+            zigzag(s)
+            arrow(s, f, from: pt(0, -20), to: pt(0, -8))
+        case .variableResistor:
+            zigzag(s)
+            arrow(s, f, from: pt(-16, 15), to: pt(16, -16))
+        case .fuse:
+            line(s, pt(-30, 0), pt(30, 0))
+            s.append(UIBezierPath(rect: CGRect(x: -15, y: -6, width: 30, height: 12)))
+        case .polarCapacitor:
+            line(s, pt(-30, 0), pt(-4, 0))
+            line(s, pt(-4, -12), pt(-4, 12))
+            s.move(to: pt(8, -12)); s.addQuadCurve(to: pt(8, 12), controlPoint: pt(0, 0))
+            line(s, pt(4, 0), pt(30, 0))
+            line(s, pt(-14, -10), pt(-8, -10))
+            line(s, pt(-11, -13), pt(-11, -7))
+        case .variableCapacitor:
+            line(s, pt(-30, 0), pt(-4, 0))
+            line(s, pt(4, 0), pt(30, 0))
+            line(s, pt(-4, -12), pt(-4, 12))
+            line(s, pt(4, -12), pt(4, 12))
+            arrow(s, f, from: pt(-16, 15), to: pt(16, -16))
+        case .transformer:
+            line(s, pt(-30, -20), pt(-10, -20))
+            line(s, pt(-30, 20), pt(-10, 20))
+            line(s, pt(10, -20), pt(30, -20))
+            line(s, pt(10, 20), pt(30, 20))
+            s.move(to: pt(-10, -20))
+            for cy in [-15, -5, 5, 15] as [CGFloat] {
+                s.addArc(withCenter: pt(-10, cy), radius: 5, startAngle: -.pi / 2, endAngle: .pi / 2, clockwise: true)
             }
-            s.addLine(to: pt(20, 0))
-            s.addLine(to: pt(30, 0))
+            s.move(to: pt(10, -20))
+            for cy in [-15, -5, 5, 15] as [CGFloat] {
+                s.addArc(withCenter: pt(10, cy), radius: 5, startAngle: -.pi / 2, endAngle: .pi / 2, clockwise: false)
+            }
+            line(s, pt(-1.5, -22), pt(-1.5, 22))
+            line(s, pt(1.5, -22), pt(1.5, 22))
+        case .diode:
+            diodeBody(s)
+        case .schottky:
+            diodeBody(s)
+            s.move(to: pt(8, -9)); s.addLine(to: pt(12, -9)); s.addLine(to: pt(12, -6))
+            s.move(to: pt(8, 9)); s.addLine(to: pt(4, 9)); s.addLine(to: pt(4, 6))
+        case .zener:
+            diodeBody(s)
+            line(s, pt(8, -9), pt(12, -12))
+            line(s, pt(8, 9), pt(4, 12))
+        case .tunnelDiode:
+            diodeBody(s)
+            line(s, pt(8, -9), pt(3, -9))
+            line(s, pt(8, 9), pt(3, 9))
+        case .led:
+            diodeBody(s)
+            arrow(s, f, from: pt(-3, -11), to: pt(5, -20), size: 5)
+            arrow(s, f, from: pt(5, -11), to: pt(13, -20), size: 5)
+        case .photodiode:
+            diodeBody(s)
+            arrow(s, f, from: pt(5, -20), to: pt(-3, -11), size: 5)
+            arrow(s, f, from: pt(13, -20), to: pt(5, -11), size: 5)
+        case .varicap:
+            diodeBody(s)
+            line(s, pt(12, -9), pt(12, 9))
+        case .battery:
+            line(s, pt(-30, 0), pt(-9, 0))
+            line(s, pt(-9, -12), pt(-9, 12))
+            line(s, pt(-3, -6), pt(-3, 6))
+            line(s, pt(3, -12), pt(3, 12))
+            line(s, pt(9, -6), pt(9, 6))
+            line(s, pt(9, 0), pt(30, 0))
+        case .sineSource:
+            circleBody(s)
+            s.move(to: pt(-9, 0))
+            s.addQuadCurve(to: pt(0, 0), controlPoint: pt(-4.5, -12))
+            s.addQuadCurve(to: pt(9, 0), controlPoint: pt(4.5, 12))
+        case .squareSource:
+            circleBody(s)
+            s.move(to: pt(-9, 5)); s.addLine(to: pt(-4.5, 5)); s.addLine(to: pt(-4.5, -5)); s.addLine(to: pt(4.5, -5))
+            s.addLine(to: pt(4.5, 5)); s.addLine(to: pt(9, 5))
+        case .controlledVoltageSource:
+            diamondBody(s)
+            line(s, pt(-11, 0), pt(-3, 0))
+            line(s, pt(-7, -4), pt(-7, 4))
+            line(s, pt(3, 0), pt(11, 0))
+        case .controlledCurrentSource:
+            diamondBody(s)
+            arrow(s, f, from: pt(-9, 0), to: pt(10, 0))
+        case .ammeter, .voltmeter, .ohmmeter:
+            circleBody(s)
+            meterLetter(c.part, s)
+        case .lamp:
+            circleBody(s)
+            line(s, pt(-10.6, -10.6), pt(10.6, 10.6))
+            line(s, pt(-10.6, 10.6), pt(10.6, -10.6))
+        case .mixer:
+            circleBody(s)
+            line(s, pt(-10.6, -10.6), pt(10.6, 10.6))
+            line(s, pt(-10.6, 10.6), pt(10.6, -10.6))
+            line(s, pt(0, 15), pt(0, 30))
+        case .antenna:
+            line(s, pt(0, 20), pt(0, -20))
+            s.move(to: pt(-10, -20)); s.addLine(to: pt(10, -20)); s.addLine(to: pt(0, -6)); s.close()
+        case .switchOpen:
+            switchContacts(s, right: [pt(10, 0)])
+            line(s, pt(-12, -1), pt(10, -12))
+        case .switchClosed:
+            switchContacts(s, right: [pt(10, 0)])
+            line(s, pt(-12, -2), pt(12, -2))
+        case .pushButton:
+            switchContacts(s, right: [pt(10, 0)])
+            line(s, pt(-14, -7), pt(14, -7))
+            line(s, pt(0, -7), pt(0, -15))
+        case .spdt:
+            switchContacts(s, right: [pt(10, -20), pt(10, 20)])
+            line(s, pt(-12, -1), pt(10, -18))
+        case .nmos4, .pmos4:
+            line(s, pt(-30, 0), pt(c.part == .pmos4 ? -18 : -12, 0))
+            if c.part == .pmos4 { s.append(UIBezierPath(ovalIn: CGRect(x: -18, y: -3, width: 6, height: 6))) }
+            line(s, pt(-12, -14), pt(-12, 14))
+            line(s, pt(-6, -16), pt(-6, 16))
+            s.move(to: pt(-6, -10)); s.addLine(to: pt(10, -10)); s.addLine(to: pt(10, -30))
+            s.move(to: pt(-6, 10)); s.addLine(to: pt(10, 10)); s.addLine(to: pt(10, 30))
+            line(s, pt(-6, 0), pt(30, 0))
+            // 基底的箭頭：N 型指向通道、P 型指向外面
+            if c.part == .nmos4 { head(f, tip: pt(-5, 0), from: pt(10, 0)) } else { head(f, tip: pt(6, 0), from: pt(-6, 0)) }
+        case .npn, .pnp:
+            line(s, pt(-30, 0), pt(-10, 0))
+            line(s, pt(-10, -14), pt(-10, 14))
+            bipolarLegs(s, f, baseX: -10, outward: c.part == .npn)
+        case .njfet, .pjfet:
+            line(s, pt(-30, 0), pt(-6, 0))
+            line(s, pt(-6, -14), pt(-6, 14))
+            s.move(to: pt(-6, -10)); s.addLine(to: pt(10, -10)); s.addLine(to: pt(10, -30))
+            s.move(to: pt(-6, 10)); s.addLine(to: pt(10, 10)); s.addLine(to: pt(10, 30))
+            if c.part == .njfet { head(f, tip: pt(-7, 0), from: pt(-20, 0)) } else { head(f, tip: pt(-18, 0), from: pt(-6, 0)) }
+        case .nigbt, .pigbt:
+            line(s, pt(-30, 0), pt(-14, 0))
+            line(s, pt(-14, -12), pt(-14, 12))
+            line(s, pt(-8, -14), pt(-8, 14))
+            bipolarLegs(s, f, baseX: -8, outward: c.part == .nigbt)
+        case .opAmp:
+            ampInputs(s)
+            ampTriangle(s)
+            line(s, pt(26, 0), pt(40, 0))
+        case .fdOpAmp:
+            ampInputs(s)
+            ampTriangle(s)
+            // 輸出從斜邊拉出來
+            line(s, pt(9.33, -10), pt(40, -10))
+            line(s, pt(9.33, 10), pt(40, 10))
+            line(s, pt(20, -19), pt(26, -19))
+            line(s, pt(23, -22), pt(23, -16))
+            line(s, pt(20, 19), pt(26, 19))
+        case .ota:
+            // OTA：切掉尖端的三角形，輸出端多一條線
+            ampInputs(s)
+            s.move(to: pt(-24, -30)); s.addLine(to: pt(-24, 30)); s.addLine(to: pt(12, 8)); s.addLine(to: pt(12, -8)); s.close()
+            line(s, pt(18, -8), pt(18, 8))
+            line(s, pt(18, 0), pt(40, 0))
+        case .signalGround:
+            line(s, pt(0, -20), pt(0, 0))
+            s.move(to: pt(-10, 0)); s.addLine(to: pt(10, 0)); s.addLine(to: pt(0, 10)); s.close()
+        case .chassisGround:
+            line(s, pt(0, -20), pt(0, 0))
+            line(s, pt(-12, 0), pt(12, 0))
+            line(s, pt(-12, 0), pt(-16, 8))
+            line(s, pt(0, 0), pt(-4, 8))
+            line(s, pt(12, 0), pt(8, 8))
+        case .vss:
+            line(s, pt(0, -20), pt(0, 0))
+            f.move(to: pt(0, 8)); f.addLine(to: pt(-6, 0)); f.addLine(to: pt(6, 0)); f.close()
         case .capacitor:
             line(s, pt(-30, 0), pt(-4, 0))
             line(s, pt(4, 0), pt(30, 0))
@@ -241,7 +519,7 @@ enum CircuitRenderer {
             } else {
                 line(s, pt(15, 0), pt(30, 0))
             }
-        case .dFlipFlop, .dLatch, .mux, .decoder, .encoder, .alu:
+        case .dFlipFlop, .dLatch, .mux, .decoder, .encoder, .alu, .adc, .dac:
             if let b = CircuitGeometry.blockLayout(c) { blockSymbol(b, s) }
         default:
             gateSymbol(c, s)
@@ -323,8 +601,9 @@ enum CircuitRenderer {
 
     /// 工具列用的元件小圖示
     static func icon(_ part: CircuitPart, size: CGFloat = 30) -> UIImage {
-        let c = CircuitComponent(part: part, position: .zero, inputs: 2)
-        let b = CircuitGeometry.localBounds(c).insetBy(dx: -2, dy: -2)
+        var c = CircuitComponent(part: part, position: .zero, inputs: 2)
+        c.flipV = part.defaultFlipV
+        let b = CircuitGeometry.bounds(c).insetBy(dx: -2, dy: -2)
         let scale = min(size / b.width, size / b.height)
         return UIGraphicsImageRenderer(size: CGSize(width: size, height: size)).image { rc in
             let ctx = rc.cgContext
@@ -332,6 +611,25 @@ enum CircuitRenderer {
             ctx.scaleBy(x: scale, y: scale)
             ctx.translateBy(x: -b.midX, y: -b.midY)
             drawComponent(c, color: .label, lineWidth: 1.6 / scale, labels: false)
+        }.withRenderingMode(.alwaysTemplate)
+    }
+
+    /// 自訂電路的小圖示：整個電路縮小，不畫名稱
+    static func icon(_ data: CircuitData, size: CGFloat = 30) -> UIImage {
+        var d = data
+        for i in d.components.indices { d.components[i].name = nil }
+        for i in d.wires.indices { d.wires[i].label = nil }
+        let box = d.contentBounds
+        let b = box.isNull ? CGRect(x: -10, y: -10, width: 20, height: 20) : box.insetBy(dx: -2, dy: -2)
+        let scale = min(size / max(b.width, 1), size / max(b.height, 1))
+        d.lineWidth = 1.2 / scale
+        return UIGraphicsImageRenderer(size: CGSize(width: size, height: size)).image { rc in
+            let ctx = rc.cgContext
+            ctx.translateBy(x: size / 2, y: size / 2)
+            ctx.scaleBy(x: scale, y: scale)
+            ctx.translateBy(x: -b.midX, y: -b.midY)
+            for c in d.components { drawComponent(c, color: .label, lineWidth: d.lineWidth, labels: false) }
+            drawWires(d, color: .label)
         }.withRenderingMode(.alwaysTemplate)
     }
 }
@@ -356,7 +654,20 @@ extension CircuitRenderer {
         }
         func text(_ s: String, at c: CGPoint, size: CGFloat, weight: String, overline: Bool = false) {
             let deco = overline ? #" text-decoration="overline""# : ""
-            out.append(#"<text x="\#(num(c.x))" y="\#(num(c.y))" font-family="\#(font)" font-size="\#(num(size))" font-weight="\#(weight)" text-anchor="middle" dominant-baseline="central" fill="\#(color)"\#(deco)>\#(xmlEscaped(s))</text>"#)
+            out.append(#"<text x="\#(num(c.x))" y="\#(num(c.y))" font-family="\#(font)" font-size="\#(num(size))" font-weight="\#(weight)" text-anchor="middle" dominant-baseline="central" fill="\#(color)"\#(deco)>\#(s)</text>"#)
+        }
+        /// 名稱的字：上下標用 tspan 上下移。dy 是相對上一段的位移
+        func nameMarkup(_ s: String, size: CGFloat) -> String {
+            let runs = CircuitText.runs(s)
+            guard runs.contains(where: { $0.script != .normal }) else { return xmlEscaped(s) }
+            var shift: CGFloat = 0
+            return runs.map { run in
+                let target: CGFloat = run.script == .sub ? size * 0.2 : (run.script == .sup ? -size * 0.35 : 0)
+                let dy = target - shift
+                shift = target
+                let small = run.script == .normal ? "" : #" font-size="\#(num(size * CircuitText.scriptScale))""#
+                return #"<tspan dy="\#(num(dy))"\#(small)>\#(xmlEscaped(run.text))</tspan>"#
+            }.joined()
         }
         for c in d.components {
             let t = CircuitGeometry.transform(c)
@@ -366,7 +677,7 @@ extension CircuitRenderer {
             stroke(s)
             if !f.isEmpty { out.append(#"<path d="\#(pathData(f.cgPath))" fill="\#(color)"/>"#) }
             if let b = CircuitGeometry.blockLayout(c) {
-                for item in blockTexts(c, b) { text(item.text, at: item.center, size: item.size, weight: item.bold ? "600" : "400", overline: item.inverted) }
+                for item in blockTexts(c, b) { text(xmlEscaped(item.text), at: item.center, size: item.size, weight: item.bold ? "600" : "400", overline: item.inverted) }
             }
         }
         stroke(wirePath(d))
@@ -375,11 +686,11 @@ extension CircuitRenderer {
         }
         for w in d.wires {
             guard let s = w.label, !s.isEmpty, let c = w.labelPosition else { continue }
-            text(s, at: c, size: w.labelFont, weight: "500")
+            text(nameMarkup(s, size: w.labelFont), at: c, size: w.labelFont, weight: "500")
         }
         for comp in d.components {
             guard let s = comp.name, !s.isEmpty, let c = comp.namePosition else { continue }
-            text(s, at: c, size: comp.nameFont, weight: "500")
+            text(nameMarkup(s, size: comp.nameFont), at: c, size: comp.nameFont, weight: "500")
         }
         out.append("</svg>")
         return out.joined(separator: "\n") + "\n"

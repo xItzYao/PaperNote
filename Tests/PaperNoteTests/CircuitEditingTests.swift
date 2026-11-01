@@ -3,7 +3,7 @@ import XCTest
 
 /// 回報的需求：
 /// - 導線可以加名稱，名稱可以拖動
-/// - 套索要把整個電路圖圈起來才選到
+/// - 套索圈到一部分就選到電路圖（不想被圈到就上鎖，見 CircuitGroupTests）
 /// - 匯出 SVG（只匯出電路圖）
 /// - 導線點第二下跳出刪除；元件旁邊有叉叉和複製
 /// - 元件庫放下面兩列，「⋯」可以改放左邊
@@ -64,11 +64,6 @@ final class CircuitEditingTests: XCTestCase {
     // MARK: 導線名稱
 
     func testNamingAWire() throws {
-        // 點兩下導線只會跳選單（第二下），不會再多跳一個輸入框
-        editor.handleCircuitDoubleTap(at: onWire(80))
-        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-        XCTAssertNil(editor.presentedViewController)
-
         editor.promptWireLabel(ref, wire: wireID, near: .zero)
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
         let alert = try XCTUnwrap(editor.presentedViewController as? UIAlertController, "選單的「導線名稱」：跳出輸入名稱")
@@ -154,12 +149,13 @@ final class CircuitEditingTests: XCTestCase {
 
     private var part: CircuitComponent? { data?.components.first }
 
-    /// 回報的需求：元件也可以命名（點兩下元件，或工具列的「元件名稱」）
-    func testDoubleTapAComponentToNameIt() throws {
+    /// 回報的需求：元件也可以命名（選取中再點一下，或工具列的「元件名稱」）
+    func testTapASelectedComponentToNameIt() throws {
         let c = try XCTUnwrap(part)
-        editor.handleCircuitDoubleTap(at: editor.circuitDoc(c.position, ref))
+        editor.handleCircuitTap(at: editor.circuitDoc(c.position, ref))
+        editor.handleCircuitTap(at: editor.circuitDoc(c.position, ref))
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
-        let alert = try XCTUnwrap(editor.presentedViewController as? UIAlertController, "點兩下元件：跳出輸入名稱")
+        let alert = try XCTUnwrap(editor.presentedViewController as? UIAlertController, "再點一下：跳出輸入名稱")
         XCTAssertEqual(alert.title, "元件名稱")
         XCTAssertEqual(editor.circuitSel, .component(c.id))
         alert.dismiss(animated: false)
@@ -584,7 +580,7 @@ final class CircuitEditingTests: XCTestCase {
 
     // MARK: 套索、移動
 
-    func testLassoTakesTheCircuitOnlyWhenFullyCircled() {
+    func testLassoTakesTheCircuitWhenPartlyCircled() {
         editor.setTool(.lasso)
         func lasso(_ r: CGRect) {
             let pts = [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY), CGPoint(x: r.maxX, y: r.maxY),
@@ -597,10 +593,10 @@ final class CircuitEditingTests: XCTestCase {
         }
         let f = frame
         lasso(CGRect(x: f.minX + 20, y: f.minY + 20, width: f.width / 2, height: f.height / 2))
-        XCTAssertEqual(editor.lassoSel?.elements.count ?? 0, 0, "只圈到一部分：不選電路圖")
+        XCTAssertEqual(editor.lassoSel?.elements, [ref], "圈到一部分就選到，和圖片一樣")
         editor.clearLassoSelection()
         lasso(f.insetBy(dx: -20, dy: -20))
-        XCTAssertEqual(editor.lassoSel?.elements, [ref], "整個圈起來才選到")
+        XCTAssertEqual(editor.lassoSel?.elements, [ref])
     }
 
     private func word(at p: CGPoint) -> InkStroke {
