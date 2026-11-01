@@ -116,6 +116,11 @@ final class EditorSettings {
         get { bool("customInk", true) }
         set { d.set(newValue, forKey: "customInk") }
     }
+    /// 電路元件庫放左邊；預設放下面
+    var circuitLibraryOnLeft: Bool {
+        get { bool("circuitLibraryOnLeft", false) }
+        set { d.set(newValue, forKey: "circuitLibraryOnLeft") }
+    }
 }
 
 /// 筆記本編輯畫面。整本筆記本是一張長畫布（一個 PKCanvasView），頁面背景與物件放在筆跡底下。
@@ -193,7 +198,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var circuitDrag: CircuitDrag?
     var wireDraft: WireDraft?
     var circuitGateInputs: [CircuitPart: Int] = [:]
-    /// 電路元件庫（浮在頁面左邊，見 CircuitLibrary.swift）
+    /// 電路元件庫（浮在頁面下面或左邊，見 CircuitLibrary.swift）
     let circuitLibrary = CircuitLibraryView()
     /// 插入圖片工具：下方一排最近的照片
     let photoStrip = PhotoStripView()
@@ -567,7 +572,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     /// 畫布底下的留白：鍵盤擋住的高度；擴展頁面時再多留半個畫面，才拉得到最後一頁下緣的控制點
     var bottomInset: CGFloat {
-        keyboardInset + (tool == .pageResize ? max(200, canvas.bounds.height * 0.5) : 0)
+        keyboardInset + (tool == .pageResize ? max(200, canvas.bounds.height * 0.5) : 0) + (tool == .circuit ? circuitLibrary.bottomOverlap : 0)
     }
 
     /// 讓文件座標 p 出現在畫面左上角

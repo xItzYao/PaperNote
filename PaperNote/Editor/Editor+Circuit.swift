@@ -331,8 +331,6 @@ extension NotebookViewController {
             } else {
                 placeComponent(part, at: p)
             }
-        case .wire:
-            break
         case .erase:
             // 點一下：筆尖已經離開了，直接刪
             if let hit = circuitHit(at: p) {
@@ -340,9 +338,14 @@ extension NotebookViewController {
                 circuitSel = hit.selection
                 deleteCircuitSelection()
             }
-        case .select:
+        case .select, .wire:
             let old = circuitSel, oldTarget = circuitTarget
             if let hit = circuitHit(at: p) {
+                // 再點一下選取中的導線：跳出命名、刪除
+                if case let .wire(id) = hit.selection, hit.selection == old, hit.ref == oldTarget {
+                    presentWireMenu(hit.ref, wire: id, at: p)
+                    return
+                }
                 circuitTarget = hit.ref
                 circuitSel = hit.selection
             } else {
@@ -356,7 +359,7 @@ extension NotebookViewController {
 
     func circuitPanShouldBegin(at p: CGPoint) -> Bool {
         // 點在小圓鈕上：當成點擊
-        if let h = circuitPartHandleCenters(), [h.rotate, h.flip].contains(where: { p.distance(to: $0) <= h.radius }) { return false }
+        if let h = circuitPartHandleCenters(), [h.rotate, h.flip, h.copy, h.delete].contains(where: { p.distance(to: $0) <= h.radius }) { return false }
         switch circuitMode {
         case .wire, .erase: return true
         case .select, .place:
@@ -699,17 +702,30 @@ extension NotebookViewController {
         updateCircuit(ref, data: data)
     }
 
-    /// 長按元件、導線（或它們的名稱）：選起來，跳出刪除選項。選取、接線、放置元件時都可以
-    func presentCircuitMenu(at p: CGPoint) {
-        guard let hit = circuitHit(at: p) else { return }
-        circuitTarget = hit.ref
-        circuitSel = hit.selection
-        rebuildSubBar()
-        updateCircuitChrome()
+    /// 導線旁邊沒有按鈕：命名、刪除放在選單裡
+    private func presentWireMenu(_ ref: ElementRef, wire id: UUID, at p: CGPoint) {
+        let local = circuitLocal(p, ref)
+        let name = UIAction(title: "導線名稱", image: UIImage(systemName: "character.textbox")) { [weak self] _ in
+            self?.promptWireLabel(ref, wire: id, near: local)
+        }
         let delete = UIAction(title: "刪除", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
             self?.deleteCircuitSelection()
         }
-        presentMenu(UIMenu(children: [delete]), atDocPoint: p)
+        presentMenu(UIMenu(children: [name, delete]), atDocPoint: p)
+    }
+
+    /// 複製選取的元件，放在它正下方（接在格點上、不會疊在一起），並選起新的這個
+    func copySelectedComponent() {
+        guard let ref = circuitTarget, case let .component(id)? = circuitSel, var data = circuitInfo(ref)?.data,
+              let c = data.components.first(where: { $0.id == id }) else { return }
+        var copy = c
+        copy.id = UUID()
+        let g = CircuitData.grid
+        copy.position.y += ((CircuitGeometry.bounds(c).height + g) / g).rounded(.up) * g
+        data.components.append(copy)
+        circuitSel = .component(copy.id)
+        updateCircuit(ref, data: data)
+        rebuildSubBar()
     }
 
     func deleteCircuitSelection() {
@@ -726,19 +742,16 @@ extension NotebookViewController {
 
     // MARK: 名稱
 
-    /// 點兩下導線、元件（或它們的名稱）：輸入名稱
+    /// 點兩下元件（或它的名稱）：輸入名稱。導線的第二下是跳選單（見 handleCircuitTap）
     func handleCircuitDoubleTap(at p: CGPoint) {
-        guard circuitMode == .select, let hit = circuitHit(at: p) else { return }
+        guard circuitMode == .select, let hit = circuitHit(at: p), case let .component(id) = hit.selection else { return }
         circuitTarget = hit.ref
         if circuitSel != hit.selection {
             circuitSel = hit.selection
             rebuildSubBar()
         }
         updateCircuitChrome()
-        switch hit.selection {
-        case let .wire(id): promptWireLabel(hit.ref, wire: id, near: circuitLocal(p, hit.ref))
-        case let .component(id): promptComponentName(hit.ref, component: id)
-        }
+        promptComponentName(hit.ref, component: id)
     }
 
     /// 輸入元件名稱（例如 R1、U2）
@@ -777,7 +790,7 @@ extension NotebookViewController {
         updateCircuit(ref, data: data)
     }
 
-    private func promptWireLabel(_ ref: ElementRef, wire id: UUID, near local: CGPoint) {
+    func promptWireLabel(_ ref: ElementRef, wire id: UUID, near local: CGPoint) {
         guard let w = circuitInfo(ref)?.data.wires.first(where: { $0.id == id }) else { return }
         let a = UIAlertController(title: "導線名稱", message: "例如 Vin、CLK；留空就拿掉名稱", preferredStyle: .alert)
         a.addTextField { tf in
@@ -845,7 +858,7 @@ extension NotebookViewController {
 
     func updateCircuitChrome() {
         let h = circuitPartHandleCenters()
-        overlay.showCircuitPartHandles(rotate: h?.rotate, flip: h?.flip, labelResize: labelResizePoint())
+        overlay.showCircuitPartHandles(rotate: h?.rotate, flip: h?.flip, copy: h?.copy, delete: h?.delete, labelResize: labelResizePoint())
         guard tool == .circuit, let ref = circuitTarget, let info = circuitInfo(ref) else {
             overlay.showCircuit(frame: nil, selection: nil)
             return
@@ -963,6 +976,11 @@ extension NotebookViewController {
 
     // MARK: 元件庫
 
+    func setCircuitLibraryOnLeft(_ left: Bool) {
+        settings.circuitLibraryOnLeft = left
+        circuitLibrary.setOnLeft(left)
+    }
+
     func selectCircuitMode(_ mode: CircuitMode) {
         circuitMode = mode
         if case let .place(part) = mode {
@@ -981,10 +999,10 @@ extension NotebookViewController {
         placeComponent(part, at: pagesContainer.convert(p, from: view))
     }
 
-    // MARK: 元件旁的旋轉、翻轉小圓鈕
+    // MARK: 元件旁的旋轉、翻轉、複製、刪除小圓鈕
 
-    /// 選取元件時旋轉、水平翻轉按鈕的位置（文件座標）
-    func circuitPartHandleCenters() -> (rotate: CGPoint, flip: CGPoint, radius: CGFloat)? {
+    /// 選取元件時旁邊按鈕的位置（文件座標）
+    func circuitPartHandleCenters() -> (rotate: CGPoint, flip: CGPoint, copy: CGPoint, delete: CGPoint, radius: CGFloat)? {
         guard tool == .circuit, let ref = circuitTarget, let info = circuitInfo(ref),
               case let .component(id)? = circuitSel, let c = info.data.components.first(where: { $0.id == id }) else { return nil }
         let t = circuitTransform(ref) ?? .identity
@@ -992,14 +1010,15 @@ extension NotebookViewController {
         let b = CircuitGeometry.bounds(c).applying(t)
         var right = b.maxX
         // 名稱在按鈕那一排旁邊：按鈕移到名稱（和右下角的縮放箭頭）右邊，不會疊在一起
-        if let r = selectedLabelRect()?.rect, r.maxY + s > b.minY, r.minY < b.minY + s * 2.2 {
+        if let r = selectedLabelRect()?.rect, r.maxY + s > b.minY, r.minY < b.minY + s * 4.6 {
             right = max(right, r.maxX + s * 0.6)
         }
         let x = right + s * 0.9
-        return (CGPoint(x: x, y: b.minY + s * 0.3), CGPoint(x: x, y: b.minY + s * 1.5), s * 0.7)
+        func button(_ i: CGFloat) -> CGPoint { CGPoint(x: x, y: b.minY + s * (0.3 + 1.2 * i)) }
+        return (button(0), button(1), button(2), button(3), s * 0.7)
     }
 
-    /// 點到旋轉、翻轉按鈕就處理，回傳 true
+    /// 點到旁邊的按鈕就處理，回傳 true
     private func handleCircuitPartHandleTap(_ p: CGPoint) -> Bool {
         guard let h = circuitPartHandleCenters() else { return false }
         if p.distance(to: h.rotate) <= h.radius {
@@ -1008,6 +1027,14 @@ extension NotebookViewController {
         }
         if p.distance(to: h.flip) <= h.radius {
             modifySelectedComponent { $0.flipH.toggle() }
+            return true
+        }
+        if p.distance(to: h.copy) <= h.radius {
+            copySelectedComponent()
+            return true
+        }
+        if p.distance(to: h.delete) <= h.radius {
+            deleteCircuitSelection()
             return true
         }
         return false

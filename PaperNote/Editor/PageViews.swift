@@ -218,6 +218,8 @@ final class OverlayView: UIView {
     /// 電路元件旁的旋轉、水平翻轉按鈕
     let circuitRotateHandle = CALayer()
     let circuitFlipHandle = CALayer()
+    let circuitCopyHandle = CALayer()
+    let circuitDeleteHandle = CALayer()
     /// 選取導線名稱時右下角的縮放控制點
     let circuitLabelResizeHandle = CALayer()
     private static let handleSize: CGFloat = 30
@@ -347,6 +349,8 @@ final class OverlayView: UIView {
                                    (resizeHandleImage, "arrow.up.left.and.arrow.down.right", UIColor.systemTeal),
                                    (circuitRotateHandle, "rotate.right", UIColor.systemBlue),
                                    (circuitFlipHandle, "arrow.left.and.right", UIColor.systemBlue),
+                                   (circuitCopyHandle, "plus.square.on.square", UIColor.systemBlue),
+                                   (circuitDeleteHandle, "xmark", UIColor.systemRed),
                                    (circuitLabelResizeHandle, "arrow.up.left.and.arrow.down.right", UIColor.systemBlue)] {
             l.contents = Self.handleImage(symbol, color: color)
             l.contentsGravity = .resizeAspect
@@ -662,12 +666,13 @@ final class OverlayView: UIView {
         CATransaction.commit()
     }
 
-    /// 電路元件旁的旋轉、翻轉按鈕（文件座標的中心點；nil 隱藏）
-    func showCircuitPartHandles(rotate: CGPoint?, flip: CGPoint?, labelResize: CGPoint? = nil) {
+    /// 電路元件旁的旋轉、翻轉、複製、刪除按鈕（文件座標的中心點；nil 隱藏）
+    func showCircuitPartHandles(rotate: CGPoint?, flip: CGPoint?, copy: CGPoint?, delete: CGPoint?, labelResize: CGPoint? = nil) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         let s = Self.handleSize * lineScale
         let items: [(CALayer, CGPoint?, CGFloat)] = [(circuitRotateHandle, rotate, 1), (circuitFlipHandle, flip, 1),
+                                                     (circuitCopyHandle, copy, 1), (circuitDeleteHandle, delete, 1),
                                                      (circuitLabelResizeHandle, labelResize, Self.labelResizeHandleScale)]
         for (l, p, k) in items {
             if let p {

@@ -38,14 +38,13 @@ extension NotebookViewController {
             canvas.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
 
-        // 電路元件庫：浮在畫布左邊，只在電路工具顯示
-        view.addSubview(circuitLibrary)
+        // 電路元件庫：浮在畫布下面（「⋯」可以改放左邊），只在電路工具顯示
+        circuitLibrary.install(in: view, top: canvas.topAnchor, onLeft: settings.circuitLibraryOnLeft)
         circuitLibrary.isHidden = true
-        NSLayoutConstraint.activate([
-            circuitLibrary.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 10),
-            circuitLibrary.topAnchor.constraint(equalTo: canvas.topAnchor, constant: 10),
-            circuitLibrary.bottomAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -10),
-        ])
+        circuitLibrary.onLayoutChange = { [weak self] in
+            guard let self else { return }
+            self.canvas.contentInset.bottom = self.bottomInset
+        }
         circuitLibrary.onSelectMode = { [weak self] mode in self?.selectCircuitMode(mode) }
 
         // 插入圖片：一排照片浮在畫布下方，只在圖片工具顯示
@@ -886,6 +885,9 @@ extension NotebookViewController {
                 s.customInk.toggle()
                 self?.applyTool()
                 self?.showToast(s.customInk ? "「筆」改用自製筆刷：照筆尖原始軌跡畫，不做圓滑" : "「筆」改回 PencilKit")
+            },
+            UIAction(title: "電路元件庫放左邊", image: UIImage(systemName: "sidebar.left"), state: s.circuitLibraryOnLeft ? .on : .off) { [weak self] _ in
+                self?.setCircuitLibraryOnLeft(!s.circuitLibraryOnLeft)
             },
             UIAction(title: "拷貝除錯紀錄", image: UIImage(systemName: "ladybug")) { [weak self] _ in
                 UIPasteboard.general.string = DebugLog.text
