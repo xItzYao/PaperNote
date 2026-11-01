@@ -350,7 +350,7 @@ final class CircuitEditingTests: XCTestCase {
         lib.layoutIfNeeded()
         let rows = Set(lib.visibleTiles.map { ($0.convert($0.bounds, to: lib).minY).rounded() })
         XCTAssertEqual(rows.count, 2, "元件排成兩列")
-        XCTAssertEqual(lib.visibleTiles.count, 23, "每種元件都有")
+        XCTAssertEqual(lib.visibleTiles.count, CircuitPart.allCases.count, "每種元件都有")
         XCTAssertEqual(editor.bottomInset, lib.bottomOverlap, accuracy: 0.5, "頁面可以多捲，最下面不會被擋住")
         XCTAssertGreaterThan(lib.bottomOverlap, 100)
 
@@ -368,7 +368,7 @@ final class CircuitEditingTests: XCTestCase {
         XCTAssertLessThan(lib.frame.width, 200, "放左邊是窄的")
         XCTAssertLessThan(lib.frame.minX, 50)
         XCTAssertEqual(lib.bottomOverlap, 0)
-        XCTAssertEqual(lib.visibleTiles.count, 23)
+        XCTAssertEqual(lib.visibleTiles.count, CircuitPart.allCases.count)
         XCTAssertEqual(item(editor.makeSettingsMenuItems())?.state, .on)
         XCTAssertTrue(editor.settings.circuitLibraryOnLeft, "記住選擇")
     }

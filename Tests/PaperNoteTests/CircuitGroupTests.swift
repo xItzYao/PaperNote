@@ -113,23 +113,23 @@ final class CircuitGroupTests: XCTestCase {
 
     // MARK: 改名
 
-    func testTappingTheSelectedComponentRenamesItInEveryMode() throws {
-        for mode: CircuitMode in [.select, .wire, .place(.capacitor)] {
-            editor.selectCircuitMode(mode)
-            editor.circuitSel = nil
-            let count = data.components.count
-            editor.handleCircuitTap(at: at(left))
-            XCTAssertEqual(editor.circuitSel, .component(left))
-            XCTAssertNil(editor.presentedViewController, "第一下只有選取")
-            editor.handleCircuitTap(at: at(left))
-            RunLoop.main.run(until: Date().addingTimeInterval(0.3))
-            let alert = try XCTUnwrap(editor.presentedViewController as? UIAlertController, "選取中再點一下：改名")
-            XCTAssertEqual(alert.title, "元件名稱")
-            XCTAssertEqual(data.components.count, count, "放置模式也不會多放一個")
-            alert.dismiss(animated: false)
-            RunLoop.main.run(until: Date().addingTimeInterval(0.3))
-        }
+    private func checkTapRenames(in mode: CircuitMode) throws {
+        editor.selectCircuitMode(mode)
+        editor.circuitSel = nil
+        let count = data.components.count
+        editor.handleCircuitTap(at: at(left))
+        XCTAssertEqual(editor.circuitSel, .component(left))
+        XCTAssertNil(editor.presentedViewController, "第一下只有選取")
+        editor.handleCircuitTap(at: at(left))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        let alert = try XCTUnwrap(editor.presentedViewController as? UIAlertController, "選取中再點一下：改名")
+        XCTAssertEqual(alert.title, "元件名稱")
+        XCTAssertEqual(data.components.count, count, "放置模式也不會多放一個")
     }
+
+    func testTappingTheSelectedComponentRenamesItWhenSelecting() throws { try checkTapRenames(in: .select) }
+    func testTappingTheSelectedComponentRenamesItWhenWiring() throws { try checkTapRenames(in: .wire) }
+    func testTappingTheSelectedComponentRenamesItWhenPlacing() throws { try checkTapRenames(in: .place(.capacitor)) }
 
     func testDoubleTapGestureIsNotUsedInTheCircuitTool() {
         XCTAssertFalse(editor.doubleTapGesture.isEnabled, "第二下已經是改名，不要再跳一次")
@@ -159,7 +159,7 @@ final class CircuitGroupTests: XCTestCase {
     func testSVGHasSubscripts() throws {
         var d = CircuitData()
         var c = CircuitComponent(part: .resistor, position: CGPoint(x: 60, y: 60))
-        c.name = "R_<1>"
+        c.name = "R_1<2"
         c.nameOffset = CGPoint(x: 0, y: -30)
         d.components = [c]
         let svg = CircuitRenderer.svg(d)
@@ -333,7 +333,7 @@ final class CircuitGroupTests: XCTestCase {
         XCTAssertFalse(placed.itemIDs.contains(left), "是新的元件")
 
         // 再放一個到同一張電路圖：兩組互不相干
-        editor.placeCustomCircuit(custom.id, at: editor.circuitDoc(CGPoint(x: 400, y: 300), newRef))
+        editor.placeCustomCircuit(custom.id, at: editor.circuitDoc(CGPoint(x: 150, y: 150), newRef))
         let twice = try XCTUnwrap(editor.circuitInfo(editor.circuitTarget ?? newRef)?.data)
         XCTAssertEqual(twice.components.count, 4)
         XCTAssertEqual(Set(twice.components.compactMap(\.groupID)).count, 2)
