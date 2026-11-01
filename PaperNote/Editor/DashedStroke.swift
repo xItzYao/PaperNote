@@ -35,14 +35,32 @@ enum DashedStroke {
         return pieces.isEmpty ? [stroke] : pieces
     }
 
-    /// 整筆擦除：PencilKit 的橡皮擦只會擦掉碰到的那幾段。同一條虛線切出來的每一段有一樣的建立時間和亂數種子，
+    /// 同一條虛線切出來的每一段有一樣的建立時間和亂數種子
+    private struct Key: Hashable {
+        var date: Date
+        var seed: UInt32
+    }
+    private static func key(_ s: PKStroke) -> Key { Key(date: s.path.creationDate, seed: s.randomSeed) }
+
+    /// 套索：圈到一段就是整條虛線
+    static func wholeDashes(in strokes: [PKStroke], picked: [Int]) -> [Int] {
+        let keys = Set(picked.map { key(strokes[$0]) })
+        return strokes.indices.filter { keys.contains(key(strokes[$0])) }
+    }
+
+    /// 貼上的是另一條：換亂數種子（同一條的每一段換成同一個），之後選取、擦除才不會連原本的一起
+    static func copies(of strokes: [PKStroke]) -> [PKStroke] {
+        var seeds: [Key: UInt32] = [:]
+        return strokes.map { s in
+            let seed = seeds[key(s)] ?? UInt32.random(in: .min ... .max)
+            seeds[key(s)] = seed
+            return PKStroke(ink: s.ink, path: s.path, transform: s.transform, mask: s.mask, randomSeed: seed)
+        }
+    }
+
+    /// 整筆擦除：PencilKit 的橡皮擦只會擦掉碰到的那幾段。
     /// 比對擦之前的筆跡：有一段不見了，就把同一條的其他段也拿掉
     static func removingErasedDashes(from after: [PKStroke], before: [PKStroke]) -> [PKStroke] {
-        struct Key: Hashable {
-            var date: Date
-            var seed: UInt32
-        }
-        func key(_ s: PKStroke) -> Key { Key(date: s.path.creationDate, seed: s.randomSeed) }
         var left: [Key: Int] = [:]
         for s in before { left[key(s), default: 0] += 1 }
         for s in after { left[key(s), default: 0] -= 1 }

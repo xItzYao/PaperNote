@@ -493,6 +493,72 @@ final class CircuitGroupTests: XCTestCase {
         XCTAssertEqual(DashedStroke.removingErasedDashes(from: before, before: before).count, before.count, "沒擦到就不動")
     }
 
+    // MARK: 套索把虛線當成一條
+
+    func testLassoTakesTheWholeDashedLine() throws {
+        editor.setTool(.lasso)
+        let o = editor.contentOrigin(0)
+        let line = InkStroke(colorHex: "#000000FF", points: [InkPoint(CGPoint(x: 100, y: 650), width: 2), InkPoint(CGPoint(x: 400, y: 650), width: 2)])
+        let dashes = InkGeometry.dashed(line, dash: 10, gap: 5)
+        let another = InkGeometry.dashed(InkGeometry.offset(line, by: CGPoint(x: 0, y: 40)), dash: 10, gap: 5)
+        let solid = InkStroke(colorHex: "#000000FF", points: [InkPoint(CGPoint(x: 100, y: 720), width: 2), InkPoint(CGPoint(x: 400, y: 720), width: 2)])
+        editor.updatePage(0) { $0.ink = dashes + another + [solid] }
+
+        lasso(CGRect(x: o.x + 95, y: o.y + 640, width: 30, height: 20))
+        let sel = try XCTUnwrap(editor.lassoSel)
+        XCTAssertEqual(Set(sel.ink.map(\.id)), Set(dashes.map(\.id)), "圈到一段就是整條；別條不算")
+        XCTAssertGreaterThan(sel.bounds.width, 280, "選取框包住整條")
+
+        // 整條拖走
+        let start = CGPoint(x: sel.bounds.midX, y: sel.bounds.midY)
+        TouchPan().drag(from: start, to: CGPoint(x: start.x, y: start.y + 150)) { editor.handleLassoPan($0, $0.location(in: nil)) }
+        let moved = editor.pages[0].ink.filter { $0.dashGroup == dashes[0].dashGroup }
+        XCTAssertEqual(moved.count, dashes.count)
+        XCTAssertTrue(moved.allSatisfy { InkGeometry.bounds(of: $0).midY > 700 }, "每一段都一起走")
+    }
+
+    func testLassoTakesTheWholePencilKitDashedLineButNotItsCopy() throws {
+        func stroke(y: CGFloat, date: Date) -> PKStroke {
+            let pts = (0...300).map { PKStrokePoint(location: CGPoint(x: 100 + CGFloat($0), y: y), timeOffset: TimeInterval($0) / 100, size: CGSize(width: 3, height: 3), opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2) }
+            return PKStroke(ink: PKInk(.pen, color: .black), path: PKStrokePath(controlPoints: pts, creationDate: date))
+        }
+        editor.setTool(.lasso)
+        let o = editor.contentOrigin(0)
+        let y = o.y + 650
+        let pieces = DashedStroke.split(stroke(y: y, date: Date(timeIntervalSince1970: 1000)), dash: 10, gap: 5).map { s -> PKStroke in
+            var s = s
+            s.transform = CGAffineTransform(translationX: o.x, y: 0)
+            return s
+        }
+        var solid = stroke(y: y + 40, date: Date(timeIntervalSince1970: 2000))
+        solid.transform = CGAffineTransform(translationX: o.x, y: 0)
+        var d = PKDrawing()
+        d.strokes = pieces + [solid]
+        editor.setDrawing(d)
+        XCTAssertGreaterThan(pieces.count, 5)
+
+        lasso(CGRect(x: o.x + 95, y: y - 10, width: 25, height: 20))
+        XCTAssertEqual(editor.lassoSel?.strokeIndices, Array(pieces.indices), "圈到一段就是整條；實線不算")
+
+        // 複製出來的是另一條
+        let clip = LassoClipboard(strokes: pieces + [solid], elements: [], highlights: [], bounds: CGRect(x: o.x + 100, y: y, width: 300, height: 40), changeCount: 0)
+        editor.clearLassoSelection()
+        editor.pasteLasso(clip, center: CGPoint(x: o.x + 250, y: y + 170))
+        editor.clearLassoSelection()
+        lasso(CGRect(x: o.x + 95, y: y - 10, width: 25, height: 20))
+        XCTAssertEqual(editor.lassoSel?.strokeIndices, Array(pieces.indices), "原本的那條不會連複製的一起選")
+        editor.clearLassoSelection()
+
+        let all = editor.canvas.drawing.strokes
+        XCTAssertEqual(all.count, 2 * (pieces.count + 1))
+        var afterErase = all
+        afterErase.remove(at: pieces.count + 1 + pieces.count)
+        XCTAssertEqual(DashedStroke.removingErasedDashes(from: afterErase, before: all).count, all.count - 1, "擦掉複製的實線，原本的實線還在")
+        afterErase = all
+        afterErase.remove(at: pieces.count + 1)
+        XCTAssertEqual(DashedStroke.removingErasedDashes(from: afterErase, before: all).count, pieces.count + 2, "擦掉複製的虛線，原本的虛線還在")
+    }
+
     // MARK: 預覽模式
 
     func testPreviewModeHidesTheBarsAndOnlyAllowsViewing() throws {

@@ -122,11 +122,10 @@ extension NotebookViewController {
         let area = path.bounds
 
         var bounds = CGRect.null
-        var strokes: [Int] = []
-        for (i, s) in canvas.drawing.strokes.enumerated() where LassoGeometry.circles(s, path: path, area: area) {
-            strokes.append(i)
-            bounds = bounds.union(s.renderBounds)
-        }
+        // 虛線圈到一段就是整條
+        let allStrokes = canvas.drawing.strokes
+        let strokes = DashedStroke.wholeDashes(in: allStrokes, picked: allStrokes.indices.filter { LassoGeometry.circles(allStrokes[$0], path: path, area: area) })
+        for i in strokes { bounds = bounds.union(allStrokes[i].renderBounds) }
         /// 套索和矩形有重疊（圈到一部分）就算
         func touches(_ r: CGRect) -> Bool {
             guard area.intersects(r) else { return false }
@@ -143,11 +142,13 @@ extension NotebookViewController {
         var ink: [InkRef] = []
         for (pi, page) in pages.enumerated() where pageFrames[pi].intersects(area) {
             let io = contentOrigin(pi)
-            for s in page.ink {
-                let b = InkGeometry.bounds(of: s).offsetBy(dx: io.x, dy: io.y)
-                guard b.intersects(area), InkGeometry.circled(s, offset: io, path: path) else { continue }
+            let circled = page.ink.filter { s in
+                InkGeometry.bounds(of: s).offsetBy(dx: io.x, dy: io.y).intersects(area) && InkGeometry.circled(s, offset: io, path: path)
+            }
+            let circledIDs = Set(circled.map(\.id)), dashGroups = Set(circled.compactMap(\.dashGroup))
+            for s in page.ink where circledIDs.contains(s.id) || s.dashGroup.map({ dashGroups.contains($0) }) == true {
                 ink.append(InkRef(pageID: page.id, id: s.id))
-                bounds = bounds.union(b)
+                bounds = bounds.union(InkGeometry.bounds(of: s).offsetBy(dx: io.x, dy: io.y))
             }
             for e in page.elements where !e.locked {
                 let f = docFrame(of: e, pageIndex: pi)
@@ -505,7 +506,7 @@ extension NotebookViewController {
         var drawing = canvas.drawing
         let base = drawing.strokes.count
         let t = CGAffineTransform(translationX: d.x, y: d.y)
-        drawing.strokes.append(contentsOf: clip.strokes.map { s in
+        drawing.strokes.append(contentsOf: DashedStroke.copies(of: clip.strokes).map { s in
             var s = s
             s.transform = s.transform.concatenating(t)
             return s
