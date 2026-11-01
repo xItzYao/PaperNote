@@ -1,4 +1,5 @@
 import UIKit
+import CryptoKit
 
 /// 還原的結果
 struct RestoreResult: Equatable {
@@ -9,7 +10,9 @@ struct RestoreResult: Equatable {
 
 /// 備份到 Google Drive 的「PaperNoteBackup」資料夾。
 /// 備份的是 App 內的原始檔（library.json、每本筆記本的 document.json、筆跡、PDF、圖片），
-/// 還原後筆跡、表格、螢光標示都能繼續編輯。只上傳有變動的檔案。
+/// 還原後筆跡、表格、螢光標示都能繼續編輯。
+/// 只上傳內容有變的檔案：大小和修改時間沒變就不看；變了再比 MD5（重畫一樣的縮圖不用重傳）；
+/// 本機沒有紀錄時（重新安裝、還原、重新連結）和雲端的 MD5 比，一樣就不傳。
 ///
 /// 雲端的刪除只有兩種來源，都是使用者在 App 裡的動作：永久刪除筆記本、永久刪除頁面留下的舊檔案。
 /// 而且只刪從 PaperNoteBackup 往下走得到的檔案，一個一個刪、不刪資料夾：
@@ -33,6 +36,8 @@ final class BackupManager: ObservableObject {
         var id: String
         var size: Int
         var mtime: Double
+        /// 舊版的紀錄沒有
+        var md5: String?
     }
 
     private struct BackupState: Codable {
@@ -144,6 +149,8 @@ final class BackupManager: ObservableObject {
     }
 
     private func sync() async throws -> Int {
+        // 中途失敗或被系統暫停也要記下傳好的，下次才不用重新比對
+        defer { saveState() }
         let root = try await rootFolder()
         let docs = library.documentsURL
         var files: [(url: URL, rel: String)] = []
@@ -174,24 +181,45 @@ final class BackupManager: ObservableObject {
             let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("manifest-\(UUID().uuidString).json")
             try manifestData.write(to: tmp, options: .atomic)
             defer { try? FileManager.default.removeItem(at: tmp) }
-            let id = try await uploadFile(tmp, rel: BackupManifest.fileName, parent: root)
-            state.files[BackupManifest.fileName] = FileRecord(id: id, size: manifestData.count, mtime: 0)
+            let existing = try await drive.findFile(named: BackupManifest.fileName, in: root)
+            let id = try await drive.upload(tmp, name: BackupManifest.fileName, parent: root, existingID: existing?.id)
+            state.files[BackupManifest.fileName] = FileRecord(id: id, size: manifestData.count, mtime: 0, md5: nil)
             saveState()
         }
 
-        var uploaded = 0
-        for (index, f) in files.enumerated() {
+        // 先挑出內容真的變了的，進度才會是「要傳幾個」，不是全部幾個
+        var changed: [(url: URL, rel: String, size: Int, mtime: Double, md5: String?)] = []
+        for f in files {
             let values = try? f.url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
             let size = values?.fileSize ?? 0
             let mtime = values?.contentModificationDate?.timeIntervalSince1970 ?? 0
-            if let rec = state.files[f.rel], rec.size == size, rec.mtime == mtime { continue }
-            await setStatus("上傳中…（\(index + 1)/\(files.count)）")
+            let rec = state.files[f.rel]
+            if let rec, rec.size == size, rec.mtime == mtime { continue }
+            let md5 = try? Self.md5(of: f.url)
+            if let rec, let md5, rec.md5 == md5 {
+                state.files[f.rel] = FileRecord(id: rec.id, size: size, mtime: mtime, md5: md5)
+                continue
+            }
+            changed.append((f.url, f.rel, size, mtime, md5))
+        }
+
+        var uploaded = 0
+        for (i, f) in changed.enumerated() {
+            await setStatus("備份中…（\(i + 1)/\(changed.count)）")
             let parentRel = (f.rel as NSString).deletingLastPathComponent
             let parent = try await folderID(for: parentRel, root: root)
-            let id = try await uploadFile(f.url, rel: f.rel, parent: parent)
-            state.files[f.rel] = FileRecord(id: id, size: size, mtime: mtime)
-            uploaded += 1
-            if uploaded % 10 == 0 { saveState() }
+            let name = (f.rel as NSString).lastPathComponent
+            // 用名稱找雲端的檔案，不靠紀錄的 ID：重新安裝後不會多一份
+            let remote = try await drive.findFile(named: name, in: parent)
+            let id: String
+            if let remote, let md5 = f.md5, remote.md5Checksum == md5 {
+                id = remote.id
+            } else {
+                id = try await drive.upload(f.url, name: name, parent: parent, existingID: remote?.id)
+                uploaded += 1
+            }
+            state.files[f.rel] = FileRecord(id: id, size: f.size, mtime: f.mtime, md5: f.md5)
+            if (i + 1) % 10 == 0 { saveState() }
         }
         saveState()
 
@@ -204,18 +232,15 @@ final class BackupManager: ObservableObject {
         return uploaded + removed
     }
 
-    /// 上傳；雲端已經有同名的檔案就覆蓋它（重新安裝後不會多出一份）
-    private func uploadFile(_ url: URL, rel: String, parent: String) async throws -> String {
-        let name = (rel as NSString).lastPathComponent
-        if let known = state.files[rel]?.id {
-            do {
-                return try await drive.upload(url, name: name, parent: parent, existingID: known)
-            } catch BackupError.http(404, _) {
-                // 這個檔案在雲端被刪了：重新上傳
-            }
+    /// 和 Google Drive 的 md5Checksum 一樣的格式。分段讀，大 PDF 不會整個載入記憶體
+    static func md5(of url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hash = Insecure.MD5()
+        while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty {
+            hash.update(data: chunk)
         }
-        let existing = try await drive.findFile(named: name, in: parent)
-        return try await drive.upload(url, name: name, parent: parent, existingID: existing)
+        return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     /// Notebooks/<id>/… 的 id
@@ -228,14 +253,14 @@ final class BackupManager: ObservableObject {
     // MARK: - 清單
 
     private func storedManifest(in root: String) async throws -> BackupManifest? {
-        guard let id = try await drive.findFile(named: BackupManifest.fileName, in: root) else { return nil }
-        return try await BackupManifest.decode(downloadData(id))
+        guard let file = try await drive.findFile(named: BackupManifest.fileName, in: root) else { return nil }
+        return try await BackupManifest.decode(downloadData(file.id))
     }
 
     private func legacyManifest(in root: String) async throws -> BackupManifest? {
-        guard let id = try await drive.findFile(named: "library.json", in: root) else { return nil }
+        guard let file = try await drive.findFile(named: "library.json", in: root) else { return nil }
         // 下載失敗要往外丟：不然會當成沒有舊資料，接著蓋掉雲端的 library.json
-        let data = try await downloadData(id)
+        let data = try await downloadData(file.id)
         guard let index = try? JSONDecoder.app.decode(LibraryIndex.self, from: data) else { return nil }
         return BackupManifest(legacy: index)
     }

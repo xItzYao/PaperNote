@@ -1,4 +1,5 @@
 import XCTest
+import CryptoKit
 @testable import PaperNote
 
 /// 假的 Google Drive。行為照 drive.file：App 只看得到自己建立的檔案；
@@ -29,6 +30,10 @@ private final class FakeDrive: DriveAPI {
     var items: [String: Item] = [:]
     private(set) var deleted: [String] = []
     private(set) var violations: [String] = []
+    /// 真的傳上來的檔案名稱
+    var uploads: [String] = []
+    /// 用名稱找過的檔案
+    var lookups: [String] = []
     private var next = 0
 
     private func newID() -> String {
@@ -62,8 +67,14 @@ private final class FakeDrive: DriveAPI {
         visible(in: parent).first { $0.isFolder && $0.name == name }?.id
     }
 
-    func findFile(named name: String, in parent: String) async throws -> String? {
-        visible(in: parent).first { !$0.isFolder && $0.name == name }?.id
+    func findFile(named name: String, in parent: String) async throws -> DriveFile? {
+        lookups.append(name)
+        return visible(in: parent).first { !$0.isFolder && $0.name == name }.map(driveFile)
+    }
+
+    private func driveFile(_ item: Item) -> DriveFile {
+        DriveFile(id: item.id, name: item.name, mimeType: item.isFolder ? DriveClient.folderMime : "application/octet-stream",
+                  md5Checksum: item.isFolder ? nil : Insecure.MD5.hash(data: item.data).map { String(format: "%02x", $0) }.joined())
     }
 
     func createFolder(named name: String, in parent: String) async throws -> String {
@@ -74,13 +85,12 @@ private final class FakeDrive: DriveAPI {
     }
 
     func children(of folder: String) async throws -> [DriveFile] {
-        visible(in: folder).map {
-            DriveFile(id: $0.id, name: $0.name, mimeType: $0.isFolder ? DriveClient.folderMime : "application/octet-stream")
-        }
+        visible(in: folder).map(driveFile)
     }
 
     func upload(_ fileURL: URL, name: String, parent: String, existingID: String?) async throws -> String {
         let data = try Data(contentsOf: fileURL)
+        uploads.append(name)
         next += 1
         if let existingID {
             guard let item = items[existingID] else { throw BackupError.http(404, "") }
@@ -195,8 +205,8 @@ final class BackupTests: XCTestCase {
     }
 
     private func fileID(_ name: String, in folder: String) async throws -> String {
-        let id = try await drive.findFile(named: name, in: folder)
-        return try XCTUnwrap(id)
+        let file = try await drive.findFile(named: name, in: folder)
+        return try XCTUnwrap(file).id
     }
 
     private func status(_ id: UUID) throws -> BackupManifest.Status? {
@@ -350,7 +360,7 @@ final class BackupTests: XCTestCase {
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("m-\(UUID().uuidString).json")
         try tombstone.encoded().write(to: tmp)
         let existing = try await drive.findFile(named: BackupManifest.fileName, in: root.id)
-        _ = try await drive.upload(tmp, name: BackupManifest.fileName, parent: root.id, existingID: existing)
+        _ = try await drive.upload(tmp, name: BackupManifest.fileName, parent: root.id, existingID: existing?.id)
 
         let other = try device()
         _ = try await other.backup.syncWithRetry()
@@ -540,6 +550,176 @@ final class BackupTests: XCTestCase {
         XCTAssertEqual(drive.count(named: "document.json", in: folder.id), 0)
     }
 
+    // MARK: 回報的問題：看起來每次都全部重傳
+
+    private func relaunched(_ d: Device, drive api: DriveAPI? = nil) -> BackupManager {
+        BackupManager(drive: api ?? drive, library: d.store, stateURL: d.dir.appendingPathComponent("state.json"))
+    }
+
+    private func resetCounters() {
+        drive.uploads = []
+        drive.lookups = []
+    }
+
+    /// 關掉 App 再打開：紀錄要讀得回來、修改時間要對得上，連比對都不用
+    func testRelaunchDoesNotCheckOrUploadAgain() async throws {
+        let d = try device()
+        let nb = notebook("不變", on: d)
+        try Data("筆跡".utf8).write(to: d.store.notebookURL(nb.id).appendingPathComponent("page.drawing"))
+        _ = try await d.backup.syncWithRetry()
+        resetCounters()
+
+        let count = try await relaunched(d).syncWithRetry()
+
+        XCTAssertEqual(count, 0)
+        XCTAssertEqual(drive.uploads, [])
+        XCTAssertFalse(drive.lookups.contains("document.json"), "修改時間存檔後要一模一樣")
+        XCTAssertFalse(drive.lookups.contains("page.drawing"))
+    }
+
+    /// 更新 App 前留下的紀錄沒有 MD5：不能因此全部重傳
+    func testOldStateFileDoesNotReupload() async throws {
+        let d = try device()
+        let nb = notebook("舊紀錄", on: d)
+        _ = try await d.backup.syncWithRetry()
+        let url = d.dir.appendingPathComponent("state.json")
+        var state = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        var files = try XCTUnwrap(state["files"] as? [String: [String: Any]])
+        for key in files.keys { files[key]?["md5"] = nil }
+        state["files"] = files
+        try JSONSerialization.data(withJSONObject: state).write(to: url)
+        resetCounters()
+
+        // 內容沒變、時間也沒變
+        _ = try await relaunched(d).syncWithRetry()
+        XCTAssertEqual(drive.uploads, [])
+
+        // 時間變了、紀錄沒有 MD5：和雲端比，一樣就不傳
+        let doc = NotebookSession.documentURL(in: d.store.notebookURL(nb.id))
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-500)], ofItemAtPath: doc.path)
+        _ = try await relaunched(d).syncWithRetry()
+        XCTAssertEqual(drive.uploads, [])
+    }
+
+    /// 內容一樣、只是重新存過（例如打開筆記本重畫縮圖）：不傳，也不用問雲端
+    func testSameContentWithNewDateIsNotUploaded() async throws {
+        let d = try device()
+        let nb = notebook("重存", on: d)
+        let thumb = d.store.notebookURL(nb.id).appendingPathComponent("cover.jpg")
+        try Data("縮圖".utf8).write(to: thumb)
+        _ = try await d.backup.syncWithRetry()
+        resetCounters()
+
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-500)], ofItemAtPath: thumb.path)
+        let count = try await d.backup.syncWithRetry()
+
+        XCTAssertEqual(count, 0)
+        XCTAssertEqual(drive.uploads, [])
+        XCTAssertFalse(drive.lookups.contains("cover.jpg"))
+
+        // 之後時間沒再變：也不用再算一次
+        let again = try await relaunched(d).syncWithRetry()
+        XCTAssertEqual(again, 0)
+    }
+
+    /// 只改一個檔案：只傳那一個
+    func testOnlyTheChangedFileIsUploaded() async throws {
+        let d = try device()
+        let nb = notebook("改這本", on: d)
+        _ = notebook("不動這本", on: d)
+        let ink = d.store.notebookURL(nb.id).appendingPathComponent("page.drawing")
+        try Data("舊筆跡".utf8).write(to: ink)
+        _ = try await d.backup.syncWithRetry()
+        resetCounters()
+
+        try Data("新的筆跡內容".utf8).write(to: ink)
+        let count = try await d.backup.syncWithRetry()
+
+        XCTAssertEqual(drive.uploads, ["page.drawing"])
+        XCTAssertEqual(count, 1)
+    }
+
+    /// 中斷連結再連結、或雲端資料夾 404 造成紀錄清空：內容沒變就不重傳
+    func testLosingTheRecordsDoesNotReupload() async throws {
+        let d = try device()
+        _ = notebook("紀錄不見", on: d)
+        _ = try await d.backup.syncWithRetry()
+        resetCounters()
+
+        d.backup.resetRemoteState()
+        let count = try await d.backup.syncWithRetry()
+
+        XCTAssertEqual(drive.uploads, [])
+        XCTAssertEqual(count, 0)
+    }
+
+    /// 還原後的第一次備份：筆記本都是剛從雲端下載的，不用傳回去
+    func testBackupAfterRestoreDoesNotReuploadNotebooks() async throws {
+        let a = try device()
+        let nb = notebook("換 iPad", on: a)
+        try Data("筆跡".utf8).write(to: a.store.notebookURL(nb.id).appendingPathComponent("page.drawing"))
+        _ = try await a.backup.syncWithRetry()
+
+        let b = try device()
+        _ = try await b.backup.restore()
+        resetCounters()
+        _ = try await b.backup.syncWithRetry()
+
+        XCTAssertFalse(drive.uploads.contains("document.json"))
+        XCTAssertFalse(drive.uploads.contains("page.drawing"))
+    }
+
+    /// 備份到一半被中斷：傳好的要記得，不足 10 個也一樣
+    func testInterruptedBackupKeepsProgress() async throws {
+        let d = try device()
+        let nb = notebook("中斷", on: d)
+        let dir = d.store.notebookURL(nb.id)
+        for i in 1...4 { try Data("頁 \(i)".utf8).write(to: dir.appendingPathComponent("p\(i).drawing")) }
+        // 清單、library.json、第一個檔案會成功
+        let flaky = relaunched(d, drive: FailingDeleteDrive(drive, uploadsBeforeFailure: 3))
+        do {
+            _ = try await flaky.syncWithRetry()
+            XCTFail("上傳失敗要回報")
+        } catch {}
+        resetCounters()
+
+        _ = try await relaunched(d).syncWithRetry()
+
+        let names = drive.lookups.filter { $0 != BackupManifest.fileName && $0 != "library.json" }
+        XCTAssertEqual(names.count, 4, "共 5 個檔案，傳好的那個不用再比對")
+    }
+
+    func testMD5MatchesTheFormatDriveUses() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("md5-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Data("abc".utf8).write(to: url)
+        XCTAssertEqual(try BackupManager.md5(of: url), "900150983cd24fb0d6963f7d28e17f72")
+    }
+
+    /// 真的向 Drive 要 MD5，沒要的話永遠比對不到
+    func testClientAsksDriveForTheChecksum() async throws {
+        URLProtocol.registerClass(RecordingProtocol.self)
+        defer {
+            URLProtocol.unregisterClass(RecordingProtocol.self)
+            RecordingProtocol.reset()
+        }
+        RecordingProtocol.statusCode = 200
+        RecordingProtocol.body = Data(#"{"files":[{"id":"x","name":"a","mimeType":"text/plain","md5Checksum":"abc"}]}"#.utf8)
+
+        let file = try await DriveClient(accessToken: { "token" }).findFile(named: "a", in: "root")
+
+        XCTAssertEqual(file?.md5Checksum, "abc")
+        let query = try XCTUnwrap(RecordingProtocol.requests.first?.url?.query)
+        XCTAssertTrue(query.contains("md5Checksum"))
+    }
+
+    // MARK: 永久刪除的確認
+
+    func testPermanentDeleteConfirmationText() {
+        XCTAssertEqual(PermanentDeleteText.title("期中筆記"), "確認刪除期中筆記?")
+        XCTAssertEqual(PermanentDeleteText.message, "此操作將會把本機與雲端檔案永久刪除，且無法復原")
+    }
+
     // MARK: 格式
 
     /// 更新前的 library.json 沒有 purged：一定要讀得出來，不然整個資料庫會不見
@@ -593,15 +773,21 @@ final class BackupTests: XCTestCase {
 /// 刪除時會失敗的 Drive（例如網路斷了）
 private final class FailingDeleteDrive: DriveAPI {
     private let base: FakeDrive
+    private var uploadsLeft: Int
 
-    init(_ base: FakeDrive) { self.base = base }
+    init(_ base: FakeDrive, uploadsBeforeFailure: Int = .max) {
+        self.base = base
+        uploadsLeft = uploadsBeforeFailure
+    }
 
     func findFolder(named name: String, in parent: String) async throws -> String? { try await base.findFolder(named: name, in: parent) }
-    func findFile(named name: String, in parent: String) async throws -> String? { try await base.findFile(named: name, in: parent) }
+    func findFile(named name: String, in parent: String) async throws -> DriveFile? { try await base.findFile(named: name, in: parent) }
     func createFolder(named name: String, in parent: String) async throws -> String { try await base.createFolder(named: name, in: parent) }
     func children(of folder: String) async throws -> [DriveFile] { try await base.children(of: folder) }
     func upload(_ fileURL: URL, name: String, parent: String, existingID: String?) async throws -> String {
-        try await base.upload(fileURL, name: name, parent: parent, existingID: existingID)
+        guard uploadsLeft > 0 else { throw BackupError.http(500, "斷線") }
+        uploadsLeft -= 1
+        return try await base.upload(fileURL, name: name, parent: parent, existingID: existingID)
     }
     func download(_ fileID: String, to destination: URL) async throws { try await base.download(fileID, to: destination) }
     func deleteFile(_ file: DriveFile) async throws { throw BackupError.http(500, "斷線") }
@@ -611,10 +797,12 @@ private final class FailingDeleteDrive: DriveAPI {
 private final class RecordingProtocol: URLProtocol {
     nonisolated(unsafe) static var requests: [URLRequest] = []
     nonisolated(unsafe) static var statusCode = 204
+    nonisolated(unsafe) static var body = Data()
 
     static func reset() {
         requests = []
         statusCode = 204
+        body = Data()
     }
 
     override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "www.googleapis.com" }
@@ -624,7 +812,7 @@ private final class RecordingProtocol: URLProtocol {
         Self.requests.append(request)
         let resp = HTTPURLResponse(url: request.url!, statusCode: Self.statusCode, httpVersion: nil, headerFields: nil)!
         client?.urlProtocol(self, didReceive: resp, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data())
+        client?.urlProtocol(self, didLoad: Self.body)
         client?.urlProtocolDidFinishLoading(self)
     }
 

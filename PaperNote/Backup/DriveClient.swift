@@ -4,6 +4,8 @@ struct DriveFile: Decodable {
     let id: String
     let name: String
     let mimeType: String?
+    /// 檔案內容的 MD5（資料夾沒有）
+    var md5Checksum: String? = nil
 
     var isFolder: Bool { mimeType == DriveClient.folderMime }
 }
@@ -11,7 +13,7 @@ struct DriveFile: Decodable {
 /// 備份用到的 Google Drive 操作。刪除只有 deleteFile：只刪單一檔案、不進垃圾桶、不能刪資料夾
 protocol DriveAPI {
     func findFolder(named name: String, in parent: String) async throws -> String?
-    func findFile(named name: String, in parent: String) async throws -> String?
+    func findFile(named name: String, in parent: String) async throws -> DriveFile?
     func createFolder(named name: String, in parent: String) async throws -> String
     func children(of folder: String) async throws -> [DriveFile]
     func upload(_ fileURL: URL, name: String, parent: String, existingID: String?) async throws -> String
@@ -62,7 +64,7 @@ final class DriveClient: DriveAPI {
         repeat {
             var comps = URLComponents(string: "https://www.googleapis.com/drive/v3/files")!
             var items = [URLQueryItem(name: "q", value: query),
-                         URLQueryItem(name: "fields", value: "nextPageToken,files(id,name,mimeType)"),
+                         URLQueryItem(name: "fields", value: "nextPageToken,files(id,name,mimeType,md5Checksum)"),
                          URLQueryItem(name: "pageSize", value: "1000"),
                          // 同名的檔案，最新的排最前面
                          URLQueryItem(name: "orderBy", value: "modifiedTime desc"),
@@ -82,8 +84,8 @@ final class DriveClient: DriveAPI {
         try await list(query: "name = '\(escape(name))' and mimeType = '\(Self.folderMime)' and trashed = false and '\(parent)' in parents").first?.id
     }
 
-    func findFile(named name: String, in parent: String) async throws -> String? {
-        try await list(query: "name = '\(escape(name))' and mimeType != '\(Self.folderMime)' and trashed = false and '\(parent)' in parents").first?.id
+    func findFile(named name: String, in parent: String) async throws -> DriveFile? {
+        try await list(query: "name = '\(escape(name))' and mimeType != '\(Self.folderMime)' and trashed = false and '\(parent)' in parents").first
     }
 
     func createFolder(named name: String, in parent: String) async throws -> String {

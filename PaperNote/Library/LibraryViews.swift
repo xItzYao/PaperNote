@@ -162,7 +162,6 @@ struct FolderView: View {
     @State private var renameTarget: LibraryItem?
     @State private var renameText = ""
     @State private var moveTarget: LibraryItem?
-    @State private var deleteTarget: LibraryItem?
     @State private var shareItem: ShareItem?
     @State private var errorMessage: String?
     @State private var importSummary: String?
@@ -179,7 +178,6 @@ struct FolderView: View {
     @State private var selecting = false
     @State private var selection: Set<UUID> = []
     @State private var showBatchMove = false
-    @State private var confirmBatchDelete = false
     @Environment(\.dismiss) private var dismissFolder
     @Environment(\.horizontalSizeClass) private var hSize
     @AppStorage("library.viewMode") private var viewMode = "grid"
@@ -593,20 +591,6 @@ struct FolderView: View {
                 moveTarget = nil
             }
         }
-        .confirmationDialog(deleteTitle, isPresented: Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } }),
-                            titleVisibility: .visible) {
-            Button("刪除", role: .destructive) {
-                switch deleteTarget {
-                case let .folder(f): store.deleteFolder(f.id)
-                case let .notebook(n): store.deleteNotebook(n.id)
-                case nil: break
-                }
-                deleteTarget = nil
-            }
-            Button("取消", role: .cancel) { deleteTarget = nil }
-        } message: {
-            Text(deleteMessage)
-        }
         .sheet(isPresented: $showBatchMove) {
             MoveSheet(items: selectedItems) { dest in
                 for item in selectedItems {
@@ -624,21 +608,6 @@ struct FolderView: View {
                 showBatchMove = false
             }
             .environmentObject(store)
-        }
-        .confirmationDialog("刪除 \(selection.count) 個項目？", isPresented: $confirmBatchDelete, titleVisibility: .visible) {
-            Button("刪除", role: .destructive) {
-                for item in selectedItems {
-                    switch item {
-                    case let .folder(f): store.deleteFolder(f.id)
-                    case let .notebook(n): store.deleteNotebook(n.id)
-                    }
-                }
-                selection = []
-                selecting = false
-            }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("選取的筆記本（以及資料夾裡的所有內容）會被永久刪除，無法復原。")
         }
         .sheet(isPresented: $showTrash) { TrashView().environmentObject(store) }
         .sheet(isPresented: $showAbout) { AboutView() }
@@ -781,19 +750,6 @@ struct FolderView: View {
                 store.trashNotebook(n.id)
                 TabStore.shared.close(n.id)
             }
-        }
-    }
-
-    private var deleteTitle: String {
-        guard let t = deleteTarget else { return "" }
-        return "刪除「\(t.name)」？"
-    }
-
-    private var deleteMessage: String {
-        switch deleteTarget {
-        case .folder: return "資料夾裡的所有筆記本和子資料夾都會一起刪除，無法復原。"
-        case .notebook: return "這本筆記本會被永久刪除，無法復原。"
-        case nil: return ""
         }
     }
 

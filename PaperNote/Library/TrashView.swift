@@ -1,10 +1,30 @@
 import SwiftUI
 
+/// 永久刪除前的確認文字
+enum PermanentDeleteText {
+    static let message = "此操作將會把本機與雲端檔案永久刪除，且無法復原"
+
+    static func title(_ name: String) -> String { "確認刪除\(name)?" }
+}
+
 /// 垃圾桶：被刪除的資料夾、筆記本，以及各筆記本最近刪除的頁面（30 天後自動永久刪除）
 struct TrashView: View {
+    private enum Target {
+        case folder(Folder)
+        case notebook(NotebookMeta)
+
+        var name: String {
+            switch self {
+            case let .folder(f): return f.name
+            case let .notebook(nb): return nb.title
+            }
+        }
+    }
+
     @EnvironmentObject var store: LibraryStore
     @Environment(\.dismiss) private var dismiss
     @State private var confirmEmpty = false
+    @State private var deleteTarget: Target?
     @State private var pagesOf: NotebookMeta?
 
     var body: some View {
@@ -21,27 +41,27 @@ struct TrashView: View {
                                 detail: "\(store.index.notebooks.filter { $0.folderId == f.id }.count) 本筆記本",
                                 deletedAt: f.deletedAt)
                                 .swipeActions(edge: .trailing) {
-                                    Button("永久刪除", role: .destructive) { store.deleteFolder(f.id) }
+                                    Button("永久刪除") { deleteTarget = .folder(f) }.tint(.red)
                                 }
                                 .swipeActions(edge: .leading) {
                                     Button("還原") { store.restoreFolder(f.id) }.tint(.blue)
                                 }
                                 .contextMenu {
                                     Button { store.restoreFolder(f.id) } label: { Label("還原", systemImage: "arrow.uturn.backward") }
-                                    Button(role: .destructive) { store.deleteFolder(f.id) } label: { Label("永久刪除", systemImage: "trash") }
+                                    Button(role: .destructive) { deleteTarget = .folder(f) } label: { Label("永久刪除", systemImage: "trash") }
                                 }
                         }
                         ForEach(store.trashedNotebooks) { nb in
                             row(icon: "book.closed.fill", title: nb.title, detail: "\(nb.pageCount) 頁", deletedAt: nb.deletedAt)
                                 .swipeActions(edge: .trailing) {
-                                    Button("永久刪除", role: .destructive) { store.deleteNotebook(nb.id) }
+                                    Button("永久刪除") { deleteTarget = .notebook(nb) }.tint(.red)
                                 }
                                 .swipeActions(edge: .leading) {
                                     Button("還原") { store.restoreNotebook(nb.id) }.tint(.blue)
                                 }
                                 .contextMenu {
                                     Button { store.restoreNotebook(nb.id) } label: { Label("還原", systemImage: "arrow.uturn.backward") }
-                                    Button(role: .destructive) { store.deleteNotebook(nb.id) } label: { Label("永久刪除", systemImage: "trash") }
+                                    Button(role: .destructive) { deleteTarget = .notebook(nb) } label: { Label("永久刪除", systemImage: "trash") }
                                 }
                         }
                     }
@@ -71,11 +91,24 @@ struct TrashView: View {
                         .disabled(store.trashedFolders.isEmpty && store.trashedNotebooks.isEmpty && store.notebooksWithTrashedPages.isEmpty)
                 }
             }
-            .confirmationDialog("清空垃圾桶？", isPresented: $confirmEmpty, titleVisibility: .visible) {
+            .alert(PermanentDeleteText.title("垃圾桶裡的全部項目"), isPresented: $confirmEmpty) {
                 Button("永久刪除全部", role: .destructive) { emptyAll() }
                 Button("取消", role: .cancel) {}
             } message: {
-                Text("垃圾桶裡的筆記本、資料夾和頁面都會被永久刪除，雲端備份也會一起刪除，無法復原。")
+                Text(PermanentDeleteText.message)
+            }
+            .alert(PermanentDeleteText.title(deleteTarget?.name ?? ""),
+                   isPresented: Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } }),
+                   presenting: deleteTarget) { target in
+                Button("永久刪除", role: .destructive) {
+                    switch target {
+                    case let .folder(f): store.deleteFolder(f.id)
+                    case let .notebook(nb): store.deleteNotebook(nb.id)
+                    }
+                }
+                Button("取消", role: .cancel) {}
+            } message: { _ in
+                Text(PermanentDeleteText.message)
             }
             .sheet(item: $pagesOf) { nb in
                 TrashedPagesSheet(notebookID: nb.id, title: nb.title)
@@ -166,6 +199,7 @@ struct TrashedPagesList: View {
     let items: [TrashedPageItem]
     let onRestore: (UUID) -> Void
     let onDelete: (UUID) -> Void
+    @State private var deleteTarget: TrashedPageItem?
 
     var body: some View {
         List {
@@ -192,7 +226,7 @@ struct TrashedPagesList: View {
                         HStack(spacing: 12) {
                             Button { onRestore(item.id) } label: { Label("還原", systemImage: "arrow.uturn.backward") }
                                 .buttonStyle(.bordered)
-                            Button(role: .destructive) { onDelete(item.id) } label: { Label("永久刪除", systemImage: "trash") }
+                            Button(role: .destructive) { deleteTarget = item } label: { Label("永久刪除", systemImage: "trash") }
                                 .buttonStyle(.bordered)
                         }
                         .font(.subheadline)
@@ -200,6 +234,14 @@ struct TrashedPagesList: View {
                 }
                 .padding(.vertical, 4)
             }
+        }
+        .alert(PermanentDeleteText.title(deleteTarget.map { "原本的第 \($0.originalNumber) 頁" } ?? ""),
+               isPresented: Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } }),
+               presenting: deleteTarget) { item in
+            Button("永久刪除", role: .destructive) { onDelete(item.id) }
+            Button("取消", role: .cancel) {}
+        } message: { _ in
+            Text(PermanentDeleteText.message)
         }
     }
 }
