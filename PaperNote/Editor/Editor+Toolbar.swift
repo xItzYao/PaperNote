@@ -240,6 +240,7 @@ extension NotebookViewController {
             circuitMode = .select
             wireDraft = nil
             overlay.showCircuitDraft(nil, ink: nil)
+            clearCircuitErasing()
         }
         if t == .pageResize, resizePageIndex == nil || t != tool { resizePageIndex = currentPageIndex }
         if t == .eraser, tool.isInking || tool == .lasso { toolBeforeEraser = tool }

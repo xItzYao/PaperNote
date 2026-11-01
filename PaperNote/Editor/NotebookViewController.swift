@@ -204,8 +204,12 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var uiTestOffset: UILabel?
     /// PencilKit 開始書寫的時間（收尾後清掉）；下筆時還沒清掉就代表上一筆卡住了
     var pkUsingSince: CFTimeInterval?
-    /// 筆身點兩下切到接線前的模式（再點兩下切回來）
-    var circuitModeBeforeWire: CircuitMode = .select
+    /// 筆身點兩下切到橡皮擦前的模式（再點兩下切回來）
+    var circuitModeBeforeErase: CircuitMode = .select
+    /// 橡皮擦這一筆擦到的元件和導線：筆尖離開才刪
+    var circuitErasing: [ElementRef: Set<UUID>] = [:]
+    /// 橡皮擦這一筆上一次的位置；nil＝沒有在擦
+    var circuitEraseLast: CGPoint?
     /// 每種元件上次的方向與翻轉，連續擺放時沿用
     var circuitPartStyle: [CircuitPart: (rotation: Int, flipH: Bool, flipV: Bool)] = [:]
 

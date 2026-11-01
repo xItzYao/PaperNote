@@ -27,7 +27,7 @@ struct HelpView: View {
     ]
 
     private let others: [Item] = [
-        Item(symbol: "bolt", title: "電路圖", detail: "從左邊的元件庫點或拖元件；「接線」模式照路線畫就會排成直角導線。點兩下導線或元件可以命名，名稱可以拖動、拉大；長按元件或導線可以刪除；可以匯出 SVG。"),
+        Item(symbol: "bolt", title: "電路圖", detail: "從左邊的元件庫點或拖元件；「接線」模式照路線畫就會排成直角導線。點兩下導線或元件可以命名，名稱可以拖動、拉大；長按元件或導線可以刪除，也可以用「橡皮擦」（Pencil 筆身點兩下切換）劃過去，筆尖離開後才刪；可以匯出 SVG。"),
         Item(symbol: "star", title: "我的最愛", detail: "筆記本裡的星號收藏頁面；資料庫裡筆記本旁的星星加入「我的最愛文件」，按左上角的星星打開。"),
         Item(symbol: "number", title: "跳到頁碼", detail: "點第二列右邊的頁碼，輸入頁數。"),
         Item(symbol: "rectangle.stack", title: "分頁", detail: "打開的筆記本排在最上面；把分頁拖到另一個分頁上可以組成群組。"),

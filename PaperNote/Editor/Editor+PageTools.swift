@@ -348,14 +348,14 @@ extension NotebookViewController: UIPencilInteractionDelegate {
             showToast("手繪格線：筆身點兩下切換畫線／擦線，按「完成」結束")
             return
         }
-        // 電路工具：在接線和原本的模式（選取或放置元件）之間切換
+        // 電路工具：在橡皮擦和原本的模式（選取、接線或放置元件）之間切換
         if tool == .circuit {
-            if circuitMode == .wire {
-                selectCircuitMode(circuitModeBeforeWire)
+            if circuitMode == .erase {
+                selectCircuitMode(circuitModeBeforeErase)
             } else {
-                circuitModeBeforeWire = circuitMode
-                selectCircuitMode(.wire)
-                showToast("接線（筆身點兩下切回）")
+                circuitModeBeforeErase = circuitMode
+                selectCircuitMode(.erase)
+                showToast("橡皮擦（筆身點兩下切回）")
             }
             return
         }

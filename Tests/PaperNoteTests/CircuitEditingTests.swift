@@ -7,6 +7,7 @@ import XCTest
 /// - 匯出 SVG（只匯出電路圖）
 /// - 長按元件、導線跳出刪除選項，不限選取模式
 /// - 移動電路圖時，寫在上面的字跟著走
+/// - 橡皮擦：擦到的先變透明灰色，筆尖離開才刪；Pencil 筆身點兩下切換橡皮擦
 final class CircuitEditingTests: XCTestCase {
     private var window: UIWindow!
     private var editor: NotebookViewController!
@@ -295,6 +296,167 @@ final class CircuitEditingTests: XCTestCase {
         XCTAssertNotNil(editor.circuitPartHandleCenters(), "元件旁邊有旋轉、翻轉")
         let labels = editor.buildCircuitRibbon().compactMap(\.accessibilityLabel)
         XCTAssertFalse(labels.contains("刪除"), "第二排不放刪除工具")
+    }
+
+    // MARK: 橡皮擦
+
+    private var circuitView: DrawnElementView? {
+        editor.pageViews[ref.pageID]?.elementView(ref.elementID) as? DrawnElementView
+    }
+
+    /// 回報的需求：擦到的先變灰，筆尖離開後才刪
+    func testEraserDeletesOnlyWhenThePencilLifts() throws {
+        editor.selectCircuitMode(.erase)
+        let c = try XCTUnwrap(part)
+        XCTAssertTrue(editor.circuitPanShouldBegin(at: CGPoint(x: onWire(0).x, y: onWire(0).y + 300)), "哪裡都可以開始擦")
+
+        TouchPan().drag(from: onWire(20), to: onWire(60)) { g in
+            if g.fake == .ended {
+                XCTAssertNotNil(wire, "筆尖還沒離開，不會刪")
+                XCTAssertEqual(editor.circuitErasing[ref], [wireID])
+                XCTAssertEqual(circuitView?.circuitErasing, [wireID], "畫面上變灰")
+            }
+            editor.handleCircuitPan(g, g.location(in: nil))
+        }
+
+        XCTAssertNil(wire, "筆尖離開就刪")
+        XCTAssertEqual(part?.id, c.id, "沒擦到的不動")
+        XCTAssertTrue(editor.circuitErasing.isEmpty)
+        XCTAssertEqual(circuitView?.circuitErasing, [], "不再是灰色")
+        XCTAssertEqual(editor.circuitMode, .erase, "還是橡皮擦，可以繼續擦")
+
+        editor.undoTapped()
+        XCTAssertNotNil(wire, "可以復原")
+    }
+
+    /// 一筆擦到好幾個：一起刪、復原一次全部回來；全部擦完電路圖也不見
+    func testOneStrokeErasesEverythingItTouches() throws {
+        editor.selectCircuitMode(.erase)
+        let c = try XCTUnwrap(part)
+        TouchPan().drag(from: onWire(80), to: editor.circuitDoc(c.position, ref)) { editor.handleCircuitPan($0, $0.location(in: nil)) }
+        XCTAssertNil(editor.circuitInfo(ref), "都擦掉了，電路圖也不留")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        editor.undoTapped()
+        XCTAssertNotNil(wire, "復原一次：導線回來")
+        XCTAssertEqual(part?.id, c.id, "同一次復原：元件也回來")
+    }
+
+    /// 筆動得快：兩次回報之間跨過導線也要擦到
+    func testFastStrokeStillHitsWhatItCrosses() {
+        editor.selectCircuitMode(.erase)
+        let on = onWire(80)
+        TouchPan().drag(from: CGPoint(x: on.x, y: on.y - 30), to: CGPoint(x: on.x, y: on.y + 30), steps: 1) { editor.handleCircuitPan($0, $0.location(in: nil)) }
+        XCTAssertNil(wire)
+    }
+
+    func testCancelledEraseDeletesNothing() {
+        editor.selectCircuitMode(.erase)
+        let g = TouchPan()
+        g.point = onWire(40)
+        g.fake = .began
+        editor.handleCircuitPan(g, g.point)
+        XCTAssertEqual(circuitView?.circuitErasing, [wireID])
+        g.fake = .cancelled
+        editor.handleCircuitPan(g, g.point)
+        XCTAssertNotNil(wire)
+        XCTAssertEqual(circuitView?.circuitErasing, [])
+        XCTAssertNil(editor.circuitEraseLast)
+    }
+
+    /// 擦到一半用筆身切回去：這一筆照樣收尾，不會一直灰著
+    func testSwitchingModeMidStrokeStillFinishes() {
+        editor.selectCircuitMode(.erase)
+        let g = TouchPan()
+        g.point = onWire(40)
+        g.fake = .began
+        editor.handleCircuitPan(g, g.point)
+        editor.selectCircuitMode(.select)
+        g.fake = .ended
+        editor.handleCircuitPan(g, g.point)
+        XCTAssertNil(wire)
+        XCTAssertNil(editor.circuitEraseLast)
+        XCTAssertEqual(circuitView?.circuitErasing, [])
+    }
+
+    func testLeavingTheToolDropsThePendingErase() {
+        editor.selectCircuitMode(.erase)
+        let g = TouchPan()
+        g.point = onWire(40)
+        g.fake = .began
+        editor.handleCircuitPan(g, g.point)
+        let view = circuitView
+        editor.setTool(.select)
+        XCTAssertTrue(editor.circuitErasing.isEmpty)
+        XCTAssertEqual(view?.circuitErasing, [])
+        XCTAssertNotNil(wire, "沒有收尾就不刪")
+    }
+
+    func testTappingWithTheEraserDeletes() throws {
+        editor.selectCircuitMode(.erase)
+        XCTAssertNil(editor.circuitSel, "進橡皮擦時取消選取")
+        editor.handleCircuitTap(at: CGPoint(x: onWire(0).x, y: onWire(0).y + 300))
+        XCTAssertNotNil(wire, "點空白處沒事")
+        XCTAssertEqual(data?.components.count, 1)
+        editor.handleCircuitTap(at: onWire(80))
+        XCTAssertNil(wire)
+        XCTAssertEqual(data?.components.count, 1)
+        XCTAssertEqual(editor.circuitMode, .erase)
+    }
+
+    func testHoldingTheEraserShowsNoMenu() {
+        editor.selectCircuitMode(.erase)
+        XCTAssertFalse(editor.gestureRecognizerShouldBegin(editor.longPressGesture))
+    }
+
+    /// 回報的需求：電路圖模式筆身點兩下從切換接線改成切換橡皮擦
+    func testPencilDoubleTapTogglesTheEraser() throws {
+        try XCTSkipIf(UIPencilInteraction.preferredTapAction == .ignore, "系統設定成點兩下不做事")
+        for mode: CircuitMode in [.select, .wire, .place(.resistor)] {
+            editor.selectCircuitMode(mode)
+            editor.handlePencilDoubleTap()
+            XCTAssertEqual(editor.circuitMode, .erase)
+            XCTAssertEqual(editor.tool, .circuit, "不是切到一般的橡皮擦")
+            editor.handlePencilDoubleTap()
+            XCTAssertEqual(editor.circuitMode, mode, "再點兩下切回原本的模式")
+        }
+    }
+
+    func testEraserButtonIsOnTheSecondRow() throws {
+        let eraser = try XCTUnwrap(editor.buildCircuitRibbon().compactMap { $0 as? UIButton }.first { $0.accessibilityLabel == "橡皮擦" })
+        eraser.sendActions(for: .touchUpInside)
+        XCTAssertEqual(editor.circuitMode, .erase)
+        let after = editor.buildCircuitRibbon().compactMap { $0 as? UIButton }
+        XCTAssertEqual(after.first { $0.accessibilityLabel == "橡皮擦" }?.configuration?.baseForegroundColor, .systemBlue, "目前的模式亮起來")
+    }
+
+    /// 擦到的畫成透明灰色，沒擦到的不變
+    func testErasedPartsAreDrawnTranslucentGray() throws {
+        var d = CircuitData()
+        let top = CircuitWire(points: [CGPoint(x: 10, y: 30), CGPoint(x: 90, y: 30)])
+        let bottom = CircuitWire(points: [CGPoint(x: 10, y: 70), CGPoint(x: 90, y: 70)])
+        d.wires = [top, bottom]
+        let size = 100
+        let ctx = try XCTUnwrap(CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: size * 4,
+                                          space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        UIGraphicsPushContext(ctx)
+        CircuitRenderer.draw(d, in: CGRect(x: 0, y: 0, width: 100, height: 100), erasing: [top.id])
+        UIGraphicsPopContext()
+        let pixels = try XCTUnwrap(ctx.data).bindMemory(to: UInt8.self, capacity: size * size * 4)
+        // x = 50 這一欄，y 附近最深的一點：(紅, 透明度)。CGContext 的 y 由下往上
+        func darkest(_ y: Int) -> (red: Double, alpha: Double) {
+            var best = (red: 0.0, alpha: 0.0)
+            for row in (y - 4)...(y + 4) {
+                let i = (size - 1 - row) * size * 4 + 50 * 4
+                let a = Double(pixels[i + 3]) / 255
+                if a > best.alpha { best = (a > 0 ? Double(pixels[i]) / 255 / a : 0, a) }
+            }
+            return best
+        }
+        let erased = darkest(30), kept = darkest(70)
+        XCTAssertEqual(erased.alpha, 0.45, accuracy: 0.1, "透明")
+        XCTAssertEqual(erased.red, 0.55, accuracy: 0.1, "灰色")
+        XCTAssertGreaterThan(kept.alpha, 0.9, "沒擦到的不透明")
     }
 
     // MARK: 匯出 SVG

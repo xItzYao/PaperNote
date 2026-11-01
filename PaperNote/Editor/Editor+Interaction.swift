@@ -151,8 +151,8 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
                 return false
             }
         }
-        // 電路圖：長按元件、導線才接手；空白處留給貼上、選字
-        if g === longPressGesture, tool == .circuit { return circuitHit(at: g.location(in: pagesContainer)) != nil }
+        // 電路圖：長按元件、導線才接手；空白處留給貼上、選字。橡皮擦按著不動不跳選單
+        if g === longPressGesture, tool == .circuit { return circuitMode != .erase && circuitHit(at: g.location(in: pagesContainer)) != nil }
         return true
     }
 

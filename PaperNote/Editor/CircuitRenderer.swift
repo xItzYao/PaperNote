@@ -4,15 +4,28 @@ import UIKit
 enum CircuitRenderer {
     static let hopRadius: CGFloat = 5
     static let dotRadius: CGFloat = 3.5
+    /// 橡皮擦擦到、筆尖還沒離開的元件和導線
+    static let erasingColor = UIColor(white: 0.55, alpha: 0.45)
 
-    /// 在目前的 UIKit context 中畫；rect 的左上角是電路圖座標原點
-    static func draw(_ d: CircuitData, in rect: CGRect) {
+    /// 在目前的 UIKit context 中畫；rect 的左上角是電路圖座標原點。
+    /// erasing 裡的元件、導線畫成透明灰色，其他的畫成刪掉它們之後的樣子（接點、跨線也一樣）
+    static func draw(_ d: CircuitData, in rect: CGRect, erasing: Set<UUID> = []) {
         guard let ctx = UIGraphicsGetCurrentContext() else { return }
         ctx.saveGState()
         ctx.translateBy(x: rect.minX, y: rect.minY)
         // 符號、線寬、跨線、圓點一起縮放
         ctx.scaleBy(x: d.scale, y: d.scale)
-        let color = UIColor(hex: d.colorHex)
+        var kept = d, erased = d
+        kept.components.removeAll { erasing.contains($0.id) }
+        kept.wires.removeAll { erasing.contains($0.id) }
+        erased.components.removeAll { !erasing.contains($0.id) }
+        erased.wires.removeAll { !erasing.contains($0.id) }
+        drawContent(erased, color: erasingColor)
+        drawContent(kept, color: UIColor(hex: d.colorHex))
+        ctx.restoreGState()
+    }
+
+    private static func drawContent(_ d: CircuitData, color: UIColor) {
         for c in d.components { drawComponent(c, color: color, lineWidth: d.lineWidth) }
         drawWires(d, color: color)
         color.setFill()
@@ -20,7 +33,6 @@ enum CircuitRenderer {
             UIBezierPath(ovalIn: CGRect(x: p.x - dotRadius, y: p.y - dotRadius, width: dotRadius * 2, height: dotRadius * 2)).fill()
         }
         drawNames(d, color: color)
-        ctx.restoreGState()
     }
 
     static func wireLabelFont(_ size: CGFloat) -> UIFont { .systemFont(ofSize: size, weight: .medium) }

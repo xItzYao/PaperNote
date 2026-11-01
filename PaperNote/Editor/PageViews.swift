@@ -42,6 +42,8 @@ final class PageBackgroundView: UIView {
 final class DrawnElementView: UIView {
     var element: PageElement { didSet { setNeedsDisplay() } }
     weak var session: NotebookSession?
+    /// 電路圖：橡皮擦擦到、筆尖還沒離開的元件和導線
+    var circuitErasing: Set<UUID> = [] { didSet { setNeedsDisplay() } }
 
     init(element: PageElement, session: NotebookSession) {
         self.element = element
@@ -56,7 +58,11 @@ final class DrawnElementView: UIView {
     required init?(coder: NSCoder) { fatalError() }
 
     override func draw(_ rect: CGRect) {
-        ElementRenderer.draw(element, in: bounds, session: session)
+        if case let .circuit(c) = element.content {
+            CircuitRenderer.draw(c, in: bounds, erasing: circuitErasing)
+        } else {
+            ElementRenderer.draw(element, in: bounds, session: session)
+        }
     }
 
     /// 要用的解析度（螢幕倍率 × 縮放）。系統把 view 放回視窗時（例如切分頁再切回來）會把 contentScaleFactor
@@ -161,6 +167,10 @@ final class PageContainerView: UIView {
     }
 
     func elementView(_ id: UUID) -> UIView? { elementViews[id] }
+
+    func setCircuitErasing(_ id: UUID, _ erasing: Set<UUID>) {
+        (elementViews[id] as? DrawnElementView)?.circuitErasing = erasing
+    }
 
     /// 拖曳中即時更新，不重建整頁
     func liveUpdate(_ e: PageElement) {

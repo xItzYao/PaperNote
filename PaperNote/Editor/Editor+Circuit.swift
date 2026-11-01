@@ -1,7 +1,7 @@
 import UIKit
 
 enum CircuitMode: Equatable {
-    case select, wire, place(CircuitPart)
+    case select, wire, place(CircuitPart), erase
 }
 
 enum CircuitSelection: Equatable {
@@ -333,6 +333,13 @@ extension NotebookViewController {
             }
         case .wire:
             break
+        case .erase:
+            // 點一下：筆尖已經離開了，直接刪
+            if let hit = circuitHit(at: p) {
+                circuitTarget = hit.ref
+                circuitSel = hit.selection
+                deleteCircuitSelection()
+            }
         case .select:
             let old = circuitSel, oldTarget = circuitTarget
             if let hit = circuitHit(at: p) {
@@ -351,7 +358,7 @@ extension NotebookViewController {
         // 點在小圓鈕上：當成點擊
         if let h = circuitPartHandleCenters(), [h.rotate, h.flip].contains(where: { p.distance(to: $0) <= h.radius }) { return false }
         switch circuitMode {
-        case .wire: return true
+        case .wire, .erase: return true
         case .select, .place:
             return circuitDragTarget(at: p) != nil
         }
@@ -360,6 +367,11 @@ extension NotebookViewController {
     // MARK: 拖曳：移動元件／接線
 
     func handleCircuitPan(_ g: UIPanGestureRecognizer, _ p: CGPoint) {
+        // 擦到一半切換模式（筆身點兩下）：這一筆還是要收尾，擦到的才不會一直灰著
+        if g.state != .began, circuitEraseLast != nil {
+            handleErasePan(g, p)
+            return
+        }
         if g.state == .began {
             // 起點用筆尖剛碰到的位置，接線才會從碰到的那條線開始
             let start = panTouchDownPoint(g)
@@ -368,13 +380,73 @@ extension NotebookViewController {
                 wireDraft = WireDraft(ref: circuitAt(start, margin: 80), ink: [start])
                 handleWirePan(g, p)
             case .select, .place: handleSelectDrag(g, start)
+            case .erase:
+                circuitEraseLast = start
+                handleErasePan(g, p)
             }
             return
         }
         switch circuitMode {
         case .wire: handleWirePan(g, p)
         case .select, .place: handleSelectDrag(g, p)
+        case .erase: break
         }
+    }
+
+    // MARK: 橡皮擦
+
+    private func handleErasePan(_ g: UIPanGestureRecognizer, _ p: CGPoint) {
+        switch g.state {
+        case .began, .changed:
+            markForErasing(to: p)
+        case .ended:
+            markForErasing(to: p)
+            commitCircuitErase()
+        default:
+            clearCircuitErasing()
+        }
+    }
+
+    /// 從上一個位置到 p 一路找：筆動得快時兩個位置隔很遠，只看端點會漏掉中間的導線
+    private func markForErasing(to p: CGPoint) {
+        let from = circuitEraseLast ?? p
+        circuitEraseLast = p
+        let n = max(1, Int((from.distance(to: p) / (4 / canvas.zoomScale)).rounded(.up)))
+        var changed = Set<ElementRef>()
+        for i in 0...n {
+            let k = CGFloat(i) / CGFloat(n)
+            guard let hit = circuitHit(at: CGPoint(x: from.x + (p.x - from.x) * k, y: from.y + (p.y - from.y) * k)) else { continue }
+            let id: UUID
+            switch hit.selection {
+            case let .component(c): id = c
+            case let .wire(w): id = w
+            }
+            if circuitErasing[hit.ref, default: []].insert(id).inserted { changed.insert(hit.ref) }
+        }
+        for ref in changed {
+            pageViews[ref.pageID]?.setCircuitErasing(ref.elementID, circuitErasing[ref] ?? [])
+        }
+    }
+
+    /// 筆尖離開：真的刪掉（一次復原）
+    private func commitCircuitErase() {
+        let marks = circuitErasing
+        clearCircuitErasing()
+        guard !marks.isEmpty else { return }
+        for (ref, ids) in marks {
+            guard var data = circuitInfo(ref)?.data else { continue }
+            data.components.removeAll { ids.contains($0.id) }
+            data.wires.removeAll { ids.contains($0.id) }
+            updateCircuit(ref, data: data)
+        }
+        rebuildSubBar()
+    }
+
+    func clearCircuitErasing() {
+        let refs = circuitErasing.keys
+        circuitErasing = [:]
+        circuitEraseLast = nil
+        for ref in refs { pageViews[ref.pageID]?.setCircuitErasing(ref.elementID, []) }
     }
 
     private func handleSelectDrag(_ g: UIPanGestureRecognizer, _ p: CGPoint) {
@@ -823,8 +895,9 @@ extension NotebookViewController {
 
     func buildCircuitRibbon() -> [UIView] {
         circuitLibrary.currentMode = circuitMode
-        // 選取、接線（從元件庫點的元件也是一種模式：兩個都不亮）
-        var views: [UIView] = [circuitModeButton("cursorarrow", "選取", .select), circuitModeButton("line.diagonal", "接線", .wire)]
+        // 選取、接線、橡皮擦（從元件庫點的元件也是一種模式：都不亮）
+        var views: [UIView] = [circuitModeButton("cursorarrow", "選取", .select), circuitModeButton("line.diagonal", "接線", .wire),
+                               circuitModeButton("eraser", "橡皮擦", .erase)]
         func action(_ symbol: String, _ label: String, _ handler: @escaping () -> Void) -> UIButton {
             let b = makeButton(symbol: symbol, title: nil, action: nil)
             b.accessibilityLabel = label
@@ -875,7 +948,7 @@ extension NotebookViewController {
         return views
     }
 
-    /// 第二列的「選取」「接線」：目前的模式亮起來
+    /// 第二列的「選取」「接線」「橡皮擦」：目前的模式亮起來
     private func circuitModeButton(_ symbol: String, _ title: String, _ mode: CircuitMode) -> UIButton {
         let b = makeButton(symbol: symbol, title: title, action: nil)
         b.accessibilityLabel = title
@@ -896,6 +969,7 @@ extension NotebookViewController {
             circuitSel = nil
             showToast("連續點頁面放置\(part.title)，按「選取」結束")
         }
+        if mode == .erase { circuitSel = nil }
         rebuildSubBar()
         updateCircuitChrome()
     }
