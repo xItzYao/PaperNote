@@ -75,7 +75,7 @@ struct TrashView: View {
                 Button("永久刪除全部", role: .destructive) { emptyAll() }
                 Button("取消", role: .cancel) {}
             } message: {
-                Text("垃圾桶裡的筆記本、資料夾和頁面都會被永久刪除，無法復原。")
+                Text("垃圾桶裡的筆記本、資料夾和頁面都會被永久刪除，雲端備份也會一起刪除，無法復原。")
             }
             .sheet(item: $pagesOf) { nb in
                 TrashedPagesSheet(notebookID: nb.id, title: nb.title)

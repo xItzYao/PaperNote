@@ -236,9 +236,28 @@ struct NotebookMeta: Codable, Equatable, Identifiable {
     }
 }
 
+/// 永久刪除的項目：雲端備份還沒跟著刪掉之前先記著
+struct PurgedItem: Codable, Equatable {
+    var id: UUID
+    var purgedAt: Date
+}
+
 struct LibraryIndex: Codable {
     var folders: [Folder] = []
     var notebooks: [NotebookMeta] = []
+    var purgedFolders: [PurgedItem] = []
+    var purgedNotebooks: [PurgedItem] = []
+
+    init() {}
+
+    /// 舊版的 library.json 沒有 purged 這兩項
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        folders = try c.decode([Folder].self, forKey: .folders)
+        notebooks = try c.decode([NotebookMeta].self, forKey: .notebooks)
+        purgedFolders = try c.decodeIfPresent([PurgedItem].self, forKey: .purgedFolders) ?? []
+        purgedNotebooks = try c.decodeIfPresent([PurgedItem].self, forKey: .purgedNotebooks) ?? []
+    }
 }
 
 extension JSONEncoder {

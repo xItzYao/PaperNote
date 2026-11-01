@@ -70,7 +70,7 @@ struct ZipImportResult {
 /// 管理資料夾與筆記本清單（Documents/library.json）。
 /// 每本筆記本的內容放在 Documents/Notebooks/<id>/，可在「檔案」App 直接備份。
 final class LibraryStore: ObservableObject {
-    static let shared = LibraryStore()
+    static let shared = LibraryStore(documentsURL: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0])
 
     @Published private(set) var index = LibraryIndex()
 
@@ -79,8 +79,8 @@ final class LibraryStore: ObservableObject {
     private var indexURL: URL { documentsURL.appendingPathComponent("library.json") }
     private let fm = FileManager.default
 
-    private init() {
-        documentsURL = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    init(documentsURL: URL) {
+        self.documentsURL = documentsURL
         try? fm.createDirectory(at: notebooksURL, withIntermediateDirectories: true)
         load()
     }
@@ -119,17 +119,21 @@ final class LibraryStore: ObservableObject {
         if changed { save() }
     }
 
-    /// 從雲端還原後：補上資料夾與筆記本清單
-    func mergeRestored(_ remote: LibraryIndex?) {
-        if let remote {
-            for f in remote.folders where folder(f.id) == nil { index.folders.append(f) }
-            for nb in remote.notebooks where notebook(nb.id) == nil
-                && fm.fileExists(atPath: NotebookSession.documentURL(in: notebookURL(nb.id)).path) {
-                index.notebooks.append(nb)
-            }
-            save()
-        }
+    /// 從雲端還原後：補上資料夾與筆記本清單（照雲端的狀態，在垃圾桶的還是在垃圾桶）
+    func mergeRestored(folders: [Folder], notebooks: [NotebookMeta]) {
+        for f in folders where folder(f.id) == nil { index.folders.append(f) }
+        for nb in notebooks where notebook(nb.id) == nil { index.notebooks.append(nb) }
+        save()
         recoverOrphans()
+        purgeExpiredTrash()
+    }
+
+    /// 雲端備份已經跟著刪了，不用再記
+    func clearPurged(notebooks: [UUID], folders: [UUID]) {
+        guard !notebooks.isEmpty || !folders.isEmpty else { return }
+        index.purgedNotebooks.removeAll { notebooks.contains($0.id) }
+        index.purgedFolders.removeAll { folders.contains($0.id) }
+        save()
     }
 
     func notebookURL(_ id: UUID) -> URL {
@@ -325,6 +329,7 @@ final class LibraryStore: ObservableObject {
         // 包含已經在垃圾桶裡的子項目
         for sub in index.folders where sub.parentId == id { deleteFolder(sub.id) }
         for nb in index.notebooks where nb.folderId == id { deleteNotebook(nb.id) }
+        if folder(id) != nil { index.purgedFolders.append(PurgedItem(id: id, purgedAt: Date())) }
         index.folders.removeAll { $0.id == id }
         save()
     }
@@ -535,6 +540,7 @@ final class LibraryStore: ObservableObject {
 
     func deleteNotebook(_ id: UUID) {
         try? fm.removeItem(at: notebookURL(id))
+        if notebook(id) != nil { index.purgedNotebooks.append(PurgedItem(id: id, purgedAt: Date())) }
         index.notebooks.removeAll { $0.id == id }
         save()
     }

@@ -8,6 +8,8 @@ enum BackupError: LocalizedError {
     case notSignedIn
     case authFailed(String)
     case http(Int, String)
+    case newerManifest
+    case badManifest
 
     var errorDescription: String? {
         switch self {
@@ -15,6 +17,8 @@ enum BackupError: LocalizedError {
         case .notSignedIn: return "還沒有連結 Google Drive。"
         case let .authFailed(msg): return "Google 登入失敗：\(msg)"
         case let .http(code, body): return "Google Drive 回應錯誤（\(code)）：\(body.prefix(200))"
+        case .newerManifest: return "雲端備份是比較新的 PaperNote 建立的，請先更新 App。"
+        case .badManifest: return "雲端的備份清單無法讀取，這次沒有備份，雲端的資料也沒有變動。"
         }
     }
 }
@@ -51,7 +55,7 @@ final class GoogleAuth: NSObject, ASWebAuthenticationPresentationContextProvidin
     /// 內建的 iOS OAuth 用戶端 ID（iOS 用戶端沒有密鑰，這串本來就是公開的）
     static let builtInClientID = "690341226153-isrph8gpe8nuiu72fsen66p363k4hn3s.apps.googleusercontent.com"
 
-    private static let scope = "https://www.googleapis.com/auth/drive.file"
+    static let scope = "https://www.googleapis.com/auth/drive.file"
     private var accessToken: String?
     private var expiry = Date.distantPast
     private var session: ASWebAuthenticationSession?

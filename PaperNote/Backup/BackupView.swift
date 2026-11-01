@@ -54,7 +54,7 @@ struct BackupView: View {
                     Toggle("自動備份", isOn: $autoBackup)
                         .onChange(of: autoBackup) { _, v in backup.autoBackup = v }
                 } footer: {
-                    Text("每 10 分鐘，以及關閉筆記本後，自動備份到 Google Drive 的「\(BackupManager.rootFolderName)」資料夾。備份的是原始檔，筆跡、PDF、表格、螢光標示還原後都能繼續編輯；只會上傳有變動的檔案。")
+                    Text("每 10 分鐘，以及關閉筆記本後，自動備份到 Google Drive 的「\(BackupManager.rootFolderName)」資料夾。備份的是原始檔，筆跡、PDF、表格、螢光標示還原後都能繼續編輯；只會上傳有變動的檔案。在 App 裡永久刪除的筆記本，雲端的備份也會永久刪除。")
                 }
 
                 Section("狀態") {
@@ -97,7 +97,7 @@ struct BackupView: View {
                 Button("還原") { restore() }
                 Button("取消", role: .cancel) {}
             } message: {
-                Text("只會加入本機沒有的筆記本，不會覆蓋或刪除本機現有的筆記本。")
+                Text("只會加入本機沒有的筆記本，不會覆蓋或刪除本機現有的筆記本。垃圾桶裡的項目還原後還在垃圾桶，永久刪除的不會還原。")
             }
             .confirmationDialog("中斷與 Google Drive 的連結？", isPresented: $confirmSignOut, titleVisibility: .visible) {
                 Button("中斷連結", role: .destructive) {
@@ -132,8 +132,16 @@ struct BackupView: View {
     private func restore() {
         Task {
             do {
-                let n = try await backup.restore()
-                await MainActor.run { message = n == 0 ? "本機已經有全部的筆記本。" : "已還原 \(n) 本筆記本。" }
+                let r = try await backup.restore()
+                await MainActor.run {
+                    if r.notebooks == 0 {
+                        message = "本機已經有全部的筆記本。"
+                    } else if r.trashed == 0 {
+                        message = "已還原 \(r.notebooks) 本筆記本。"
+                    } else {
+                        message = "已還原 \(r.notebooks) 本筆記本，其中 \(r.trashed) 本在垃圾桶裡。"
+                    }
+                }
             } catch {
                 await MainActor.run { message = "還原失敗：\(error.localizedDescription)" }
             }

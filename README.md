@@ -95,7 +95,8 @@ PaperNote 沒有上架 App Store，需要用 [Sideloadly](https://sideloadly.io)
 2. 按「**連結 Google Drive**」，選擇你的 Google 帳號 →「**允許**」。
    如果出現「Google 尚未驗證這個應用程式」，點「進階 → 前往 PaperNote」即可。
 3. 完成。App 會在你的 Google Drive 建立「PaperNoteBackup」資料夾，每 10 分鐘以及關閉筆記本後自動備份；
-   換新 iPad 時，在同一頁按「從 Google Drive 還原」即可。
+   換新 iPad 時，在同一頁按「從 Google Drive 還原」即可。垃圾桶裡的項目還原後還在垃圾桶，永久刪除的不會還原。
+   在 App 裡永久刪除筆記本時，下次備份也會把雲端的檔案永久刪除，無法復原。
 
 App 只使用 `drive.file` 權限，**只能存取它自己建立的檔案**，看不到你雲端硬碟裡的其他東西；
 備份直接在你的 iPad 和你的 Google Drive 之間傳輸，不經過任何第三方伺服器。詳見[隱私權政策](PRIVACY.md)。
