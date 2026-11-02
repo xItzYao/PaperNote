@@ -899,17 +899,6 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         }
     }
 
-    func presentFontPicker(_ ref: ElementRef) {
-        guard case let (pi, ei)? = locate(ref), case let .text(t) = pages[pi].elements[ei].content else { return }
-        let picker = UIHostingController(rootView: TextFontPicker(selected: t.fontName, onPick: { [weak self] name in
-            self?.setTextBoxFont(ref, name: name)
-        }, onDone: { [weak self] in
-            self?.dismiss(animated: true)
-        }))
-        picker.modalPresentationStyle = .formSheet
-        present(picker, animated: true)
-    }
-
     /// 換字體；新的文字框沿用
     func setTextBoxFont(_ ref: ElementRef, name: String?) {
         TextFonts.lastUsed = name
