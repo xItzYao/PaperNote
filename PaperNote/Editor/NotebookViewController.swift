@@ -116,6 +116,11 @@ final class EditorSettings {
         get { bool("customInk", true) }
         set { d.set(newValue, forKey: "customInk") }
     }
+    /// 電路圖放完元件留在放置模式；關掉的話放好就回到選取
+    var circuitContinuousPlace: Bool {
+        get { bool("circuitContinuousPlace", true) }
+        set { d.set(newValue, forKey: "circuitContinuousPlace") }
+    }
     /// 電路元件庫放左邊；預設放下面
     var circuitLibraryOnLeft: Bool {
         get { bool("circuitLibraryOnLeft", false) }

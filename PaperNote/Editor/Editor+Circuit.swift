@@ -357,7 +357,7 @@ extension NotebookViewController {
             d.components = [comp]
             circuitTarget = createCircuit(at: p, data: d)
         }
-        // 停在放置模式，可以連續點著放；剛放的這個先選起來，方便旋轉、翻轉
+        // 剛放的這個先選起來，方便旋轉、翻轉
         circuitSel = .component(comp.id)
         rebuildSubBar()
         updateCircuitChrome()
@@ -366,20 +366,22 @@ extension NotebookViewController {
     /// 從自訂電路放一份到 p（中心對齊格點），放好是一個群組，並選起來
     func placeCustomCircuit(_ id: UUID, at p: CGPoint) {
         guard let custom = CustomCircuitStore.shared.circuit(id) else { return }
-        var stamp = custom.data.withFreshIDs(groupAll: true)
+        // 自己畫的元件是一個元件；存起來的電路是一個群組
+        var stamp = custom.data.withFreshIDs(groupAll: custom.symbol == nil)
+        let sel: CircuitSelection = custom.symbol != nil && !stamp.components.isEmpty ? .component(stamp.components[0].id) : .items(stamp.itemIDs)
         if let ref = circuitAt(p, margin: 60), var d = circuitInfo(ref)?.data {
             stamp.offset(by: CircuitData.snap(circuitLocal(p, ref)))
             d.components += stamp.components
             d.wires += stamp.wires
             circuitTarget = ref
-            circuitSel = .items(stamp.itemIDs)
+            circuitSel = sel
             updateCircuit(ref, data: d)
         } else {
             var d = CircuitData.newCircuit
             stamp.offset(by: CGPoint(x: 60, y: 60))
             d.components = stamp.components
             d.wires = stamp.wires
-            circuitSel = .items(stamp.itemIDs)
+            circuitSel = sel
             circuitTarget = createCircuit(at: p, data: d)
         }
         rebuildSubBar()
@@ -387,6 +389,14 @@ extension NotebookViewController {
     }
 
     // MARK: 點選
+
+    /// 沒勾「連續放置元件」：放好就回到選取（剛放的還是選著）
+    private func finishPlacingIfNeeded() {
+        guard !settings.circuitContinuousPlace else { return }
+        circuitMode = .select
+        rebuildSubBar()
+        updateCircuitChrome()
+    }
 
     /// 放置模式點到已經有的元件：選它，不在上面再疊一個；已經選起來的再點一下是改名
     private func tapExistingComponent(at p: CGPoint) -> Bool {
@@ -411,9 +421,15 @@ extension NotebookViewController {
         if handleCircuitPartHandleTap(p) { return }
         switch circuitMode {
         case let .place(part):
-            if !tapExistingComponent(at: p) { placeComponent(part, at: p) }
+            if !tapExistingComponent(at: p) {
+                placeComponent(part, at: p)
+                finishPlacingIfNeeded()
+            }
         case let .placeCustom(id):
-            if !tapExistingComponent(at: p) { placeCustomCircuit(id, at: p) }
+            if !tapExistingComponent(at: p) {
+                placeCustomCircuit(id, at: p)
+                finishPlacingIfNeeded()
+            }
         case .erase:
             // 點一下：筆尖已經離開了，直接刪（群組是整組）
             if let hit = circuitHit(at: p), let data = circuitInfo(hit.ref)?.data {
@@ -939,6 +955,31 @@ extension NotebookViewController {
         showToast("已加入「\(c.name)」")
     }
 
+    /// 畫新的自訂元件，或改元件庫裡已經有的（頁面上已經放好的不受影響）
+    func presentSymbolEditor(editing id: UUID? = nil) {
+        let existing = id.flatMap { CustomCircuitStore.shared.circuit($0) }
+        let editor = CircuitSymbolEditorViewController(name: existing?.name ?? "", symbol: existing?.symbol) { [weak self] name, symbol in
+            self?.saveCustomSymbol(id: id, name: name, symbol: symbol)
+        }
+        let nav = UINavigationController(rootViewController: editor)
+        nav.modalPresentationStyle = .formSheet
+        nav.preferredContentSize = CGSize(width: 720, height: 820)
+        present(nav, animated: true)
+    }
+
+    /// 沒打名稱就編號
+    func saveCustomSymbol(id: UUID?, name: String, symbol: CircuitSymbol) {
+        let store = CustomCircuitStore.shared
+        let t = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let data = CustomCircuit.symbolData(symbol)
+        if let id {
+            store.update(id, name: t.isEmpty ? store.circuit(id)?.name ?? "自訂元件" : t, data: data)
+        } else {
+            let c = store.add(name: t.isEmpty ? "自訂元件 \(store.circuits.count + 1)" : t, data: data)
+            showToast("已加入「\(c.name)」")
+        }
+    }
+
     func promptRenameCustomCircuit(_ id: UUID) {
         guard let c = CustomCircuitStore.shared.circuit(id) else { return }
         let a = UIAlertController(title: "自訂電路名稱", message: nil, preferredStyle: .alert)
@@ -1273,11 +1314,12 @@ extension NotebookViewController {
         circuitMode = mode
         if case let .place(part) = mode {
             circuitSel = nil
-            showToast("連續點頁面放置\(part.title)，按「選取」結束")
+            showToast(settings.circuitContinuousPlace ? "連續點頁面放置\(part.title)，按「選取」結束" : "點頁面放置\(part.title)")
         }
         if case let .placeCustom(id) = mode {
             circuitSel = nil
-            showToast("連續點頁面放置\(CustomCircuitStore.shared.circuit(id)?.name ?? "自訂電路")，按「選取」結束")
+            let name = CustomCircuitStore.shared.circuit(id)?.name ?? "自訂電路"
+            showToast(settings.circuitContinuousPlace ? "連續點頁面放置\(name)，按「選取」結束" : "點頁面放置\(name)")
         }
         if mode == .erase { circuitSel = nil }
         rebuildSubBar()

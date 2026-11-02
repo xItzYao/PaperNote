@@ -282,6 +282,12 @@ enum CircuitRenderer {
         let s = UIBezierPath()
         let f = UIBezierPath()
         switch c.part {
+        case .customSymbol:
+            for stroke in c.symbol?.strokes ?? [] {
+                guard let first = stroke.points.first else { continue }
+                s.move(to: first)
+                for p in stroke.points.dropFirst() { s.addLine(to: p) }
+            }
         case .resistor:
             zigzag(s)
         case .potentiometer:

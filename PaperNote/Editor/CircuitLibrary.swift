@@ -1,7 +1,7 @@
 import UIKit
 
 /// 電路元件庫（像 Visio 的圖庫）：選電路工具時浮在頁面下面（橫的兩列），「⋯」可以改放左邊（直的兩欄）。
-/// 點一下元件就連續擺放；或直接把元件往頁面拖（下面的往上、左邊的往右）放開。可以收合成一個小把手。
+/// 點一下元件就擺放（「⋯」的「連續放置元件」決定放完要不要繼續放）；或直接把元件往頁面拖（下面的往上、左邊的往右）放開。可以收合成一個小把手。
 final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
     /// 點了某個元件（「選取」「接線」在第二列工具列）
     var onSelectMode: ((CircuitMode) -> Void)?
@@ -10,6 +10,8 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
     /// 自訂電路：拖到頁面上、加入、改名（長按）、刪除（長按）
     var onDropCustom: ((UUID, CGPoint) -> Void)?
     var onAddCustom: (() -> Void)?
+    /// 畫自訂元件（id：改元件庫裡已經有的）
+    var onDrawSymbol: ((UUID?) -> Void)?
     var onRenameCustom: ((UUID) -> Void)?
     var onDeleteCustom: ((UUID) -> Void)?
     var currentMode: CircuitMode = .select { didSet { refreshHighlight() } }
@@ -350,15 +352,22 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
         modeButtons.removeAll { if case .placeCustom = $0.0 { return true }; return false }
         let circuits = CustomCircuitStore.shared.circuits
         customBody.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        let left = circuits.map(customButton) + [addCustomButton()]
+        let left = circuits.map(customButton) + [drawSymbolButton(), addCustomButton()]
         var i = 0
         while i < left.count {
             let pair = Array(left[i..<min(i + 2, left.count)])
             customBody.addArrangedSubview(row(pair.count == 2 ? pair : pair + [UIView()]))
             i += 2
         }
-        fillBottomColumns(customColumns, circuits.map(customButton) + [addCustomButton()])
+        fillBottomColumns(customColumns, circuits.map(customButton) + [drawSymbolButton(), addCustomButton()])
         refreshHighlight()
+    }
+
+    private func drawSymbolButton() -> UIButton {
+        let b = tile(image: UIImage(systemName: "pencil.and.outline"), title: "畫元件")
+        b.accessibilityLabel = "畫自訂元件"
+        b.addAction(UIAction { [weak self] _ in self?.onDrawSymbol?(nil) }, for: .touchUpInside)
+        return b
     }
 
     private func addCustomButton() -> UIButton {
@@ -377,7 +386,8 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
         drag.custom = c.id
         drag.delegate = self
         b.addGestureRecognizer(drag)
-        b.menu = UIMenu(children: [
+        let edit = c.symbol == nil ? [] : [UIAction(title: "編輯符號", image: UIImage(systemName: "pencil.and.outline")) { [weak self] _ in self?.onDrawSymbol?(c.id) }]
+        b.menu = UIMenu(children: edit + [
             UIAction(title: "改名", image: UIImage(systemName: "pencil")) { [weak self] _ in self?.onRenameCustom?(c.id) },
             UIAction(title: "刪除", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in self?.onDeleteCustom?(c.id) },
         ])

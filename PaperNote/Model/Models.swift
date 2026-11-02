@@ -62,6 +62,8 @@ struct TextBoxData: Codable, Equatable {
     var fontSize: CGFloat = 18
     var colorHex: String = "#1A1A1AFF"
     var backgroundHex: String? = nil
+    /// 字體的 PostScript 名稱（見 TextFonts）；nil＝系統字體
+    var fontName: String? = nil
 }
 
 struct ImageData: Codable, Equatable {
@@ -122,6 +124,8 @@ struct InkStroke: Codable, Equatable, Identifiable {
     var points: [InkPoint]
     /// 虛線切出來的每一段都是同一個值：整筆擦除時一起拿掉；nil＝不是虛線
     var dashGroup: UUID?
+    /// 有質感的筆（鉛筆、蠟筆、水彩）；nil＝不透明的實線
+    var style: InkStyle?
 }
 
 struct Page: Codable, Equatable, Identifiable {

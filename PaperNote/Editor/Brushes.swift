@@ -34,27 +34,130 @@ enum InkStyle: String, Codable, CaseIterable, Identifiable {
     /// 筆工具列的「細、中、粗」
     var styleWidths: [CGFloat] {
         switch self {
-        case .pen, .monoline: return [1.5, 3, 6]
-        case .fountainPen: return [2, 4, 8]
-        case .pencil: return [2.4, 4, 8]
+        case .pen, .monoline: return [0.8, 2, 4]
+        case .fountainPen: return [1, 3, 6]
+        case .pencil: return [0.6, 1.2, 2.4]
         case .marker: return [10, 18, 30]
-        case .crayon: return [10, 16, 26]
-        case .watercolor: return [10, 20, 36]
+        case .crayon: return [3, 8, 16]
+        case .watercolor: return [4, 12, 24]
         }
     }
 
-    /// 可以調的粗細。下限是這種筆 PencilKit 真正畫得出來的最細值（再細會完全畫不出來）；
-    /// 上限不照 PencilKit 宣稱的範圍（螢光筆 18pt 用的就是宣稱上限 4pt 的墨水，照樣畫得出來）
+    /// 自製筆刷最細可以到多細
+    static let finestWidth: CGFloat = 0.3
+
+    /// 自製筆刷可以調的粗細（上限不照 PencilKit 宣稱的範圍：螢光筆 18pt 用的就是宣稱上限 4pt 的墨水，照樣畫得出來）
     var widthRange: ClosedRange<CGFloat> {
-        let lower = max(0.1, (inkType.validWidthRange.lowerBound * 10 - 0.01).rounded(.up) / 10)
         switch self {
-        case .pen, .monoline: return lower...20
-        case .fountainPen: return lower...26
-        case .pencil: return lower...16
+        case .pen, .monoline: return Self.finestWidth...20
+        case .fountainPen: return Self.finestWidth...26
+        case .pencil: return Self.finestWidth...16
         case .marker: return 4...40
-        case .crayon: return lower...40
-        case .watercolor: return lower...60
+        case .crayon: return Self.finestWidth...40
+        case .watercolor: return Self.finestWidth...60
         }
+    }
+
+    /// PencilKit 的筆可以調的粗細：下限是這種筆真正畫得出來的最細值（再細會完全畫不出來）
+    var pencilKitWidthRange: ClosedRange<CGFloat> {
+        let lower = max(0.1, (inkType.validWidthRange.lowerBound * 10 - 0.01).rounded(.up) / 10)
+        return max(lower, widthRange.lowerBound)...widthRange.upperBound
+    }
+
+    /// 自製筆刷的質感（鉛筆、蠟筆、水彩）；其他筆是不透明的實線，差別在線寬怎麼變（見 inkWidth）
+    var look: InkLook? {
+        switch self {
+        case .pencil: return InkLook(alpha: 0.55, grain: 0.55, gapRatio: 0.7)
+        case .crayon: return InkLook(alpha: 0.7, grain: 0.4, gapRatio: 1.4)
+        case .watercolor: return InkLook(alpha: 0.32, halo: 0.16)
+        default: return nil
+        }
+    }
+
+    /// 自製筆刷這一點的線寬。direction：筆尖移動的方向（弧度，剛下筆是 nil）；previous：上一點的線寬，線寬慢慢變才不會一節一節。
+    /// - 原子筆、鉛筆、蠟筆：固定粗細
+    /// - 鋼筆：斜的筆尖，往右下（/ 的垂直方向）粗、順著 / 寫細，不看筆壓，線尾不會變細
+    /// - 毛筆／沾水筆：筆壓決定粗細，差很多
+    /// - 水彩：筆壓影響一點
+    func inkWidth(base: CGFloat, force: CGFloat, direction: CGFloat?, previous: CGFloat?) -> CGFloat {
+        let target: CGFloat
+        switch self {
+        case .pen:
+            target = base * (direction.map { 0.55 + 0.6 * abs(sin($0 - .pi / 4 * 3)) } ?? 0.85)
+        case .fountainPen:
+            target = base * (0.3 + 1.4 * force)
+        case .watercolor:
+            target = base * (0.8 + 0.5 * force)
+        case .monoline, .pencil, .marker, .crayon:
+            return base
+        }
+        guard let previous else { return target }
+        return previous + (target - previous) * 0.35
+    }
+
+    /// 毛筆提筆：最後幾點慢慢收細
+    static func taperedEnd(_ points: [InkPoint]) -> [InkPoint] {
+        guard points.count > 3 else { return points }
+        let n = min(10, points.count / 3)
+        var out = points
+        for k in 0..<n {
+            let i = points.count - 1 - k
+            let f = 0.3 + 0.7 * CGFloat(k) / CGFloat(n)
+            out[i] = InkPoint(points[i].point, width: points[i].width * f)
+        }
+        return out
+    }
+
+    /// 預覽用的一筆：照這種筆真正寫出來的方式算線寬
+    func sampleStroke(colorHex: String, width: CGFloat, in size: CGSize) -> InkStroke {
+        var points: [InkPoint] = []
+        for i in 0...60 {
+            let t = CGFloat(i) / 60
+            let p = CGPoint(x: 12 + (size.width - 24) * t, y: size.height / 2 - sin(t * .pi * 2) * size.height * 0.28)
+            let last = points.last
+            let direction = last.map { atan2(p.y - $0.point.y, p.x - $0.point.x) }
+            points.append(InkPoint(p, width: inkWidth(base: width, force: 0.15 + 0.7 * sin(t * .pi), direction: direction, previous: last?.width)))
+        }
+        return InkStroke(colorHex: colorHex, points: points, style: look == nil ? nil : self)
+    }
+}
+
+/// 自製筆刷的質感：底色的透明度＋顆粒（一樣的顏色，斷斷續續疊上去）＋水彩的外暈
+struct InkLook: Equatable {
+    var alpha: CGFloat
+    /// 顆粒的透明度；0＝沒有顆粒
+    var grain: CGFloat = 0
+    /// 顆粒的間隔（線寬的幾倍）
+    var gapRatio: CGFloat = 1
+    /// 外暈的透明度；0＝沒有
+    var halo: CGFloat = 0
+
+    /// 外暈比線寬寬多少
+    static let haloSpread: CGFloat = 1.35
+    var spread: CGFloat { halo > 0 ? Self.haloSpread : 1 }
+    /// 放大很多時改用向量，只有一個透明度
+    var flatOpacity: CGFloat { min(1, alpha + grain * 0.4 + halo * 0.5) }
+}
+
+/// 可以加進調色盤的喜歡的顏色（接在固定的 12 色後面），存在這台裝置
+enum FavoriteColors {
+    private static let key = "favoriteColors"
+    static let limit = 36
+
+    static var all: [String] { UserDefaults.standard.stringArray(forKey: key) ?? [] }
+
+    /// 已經有了（或滿了）回傳 false
+    @discardableResult
+    static func add(_ hex: String, besides fixed: [String] = BrushSettingsView.swatches) -> Bool {
+        var list = all
+        guard !list.contains(hex), !fixed.contains(hex), list.count < limit else { return false }
+        list.append(hex)
+        UserDefaults.standard.set(list, forKey: key)
+        return true
+    }
+
+    static func remove(_ hex: String) {
+        UserDefaults.standard.set(all.filter { $0 != hex }, forKey: key)
     }
 }
 
@@ -77,7 +180,7 @@ struct BrushPreset: Codable, Identifiable, Equatable {
     var effectiveOpacity: CGFloat { style == .marker ? (opacity ?? Self.defaultMarkerOpacity) : 1 }
     var inkColor: UIColor { style == .marker ? color.withAlphaComponent(effectiveOpacity) : color }
     /// 交給 PencilKit 的筆。粗細不低於這種筆畫得出來的最細值（舊設定可能更細）；上限不限制
-    var tool: PKInkingTool { PKInkingTool(style.inkType, color: inkColor, width: max(width, style.widthRange.lowerBound)) }
+    var tool: PKInkingTool { PKInkingTool(style.inkType, color: inkColor, width: max(width, style.pencilKitWidthRange.lowerBound)) }
     var isDashed: Bool { dashed == true && style != .marker }
 
     /// 預設的虛線每一段長度與間隔，依粗細決定
@@ -235,8 +338,18 @@ struct BrushSettingsView: View {
     @State var preset: BrushPreset
     let onChange: (BrushPreset) -> Void
 
-    private let swatches = ["#1A1A1AFF", "#555555FF", "#1E5BD8FF", "#0F8A7EFF", "#2E7D32FF", "#D32F2FFF",
-                            "#E65100FF", "#8E24AAFF", "#FFE14DFF", "#8BE38BFF", "#FF9EC4FF", "#8FD3FFFF"]
+    static let swatches = ["#1A1A1AFF", "#555555FF", "#1E5BD8FF", "#0F8A7EFF", "#2E7D32FF", "#D32F2FFF",
+                           "#E65100FF", "#8E24AAFF", "#FFE14DFF", "#8BE38BFF", "#FF9EC4FF", "#8FD3FFFF"]
+    @State private var favorites = FavoriteColors.all
+
+    private func swatch(_ hex: String) -> some View {
+        Circle()
+            .fill(Color(uiColor: UIColor(hex: hex)))
+            .frame(width: 30, height: 30)
+            .overlay(Circle().stroke(Color.primary.opacity(preset.colorHex == hex ? 0.9 : 0.15),
+                                     lineWidth: preset.colorHex == hex ? 3 : 1))
+            .onTapGesture { preset.colorHex = hex }
+    }
 
     var body: some View {
         Form {
@@ -250,19 +363,26 @@ struct BrushSettingsView: View {
             }
             Section("顏色") {
                 LazyVGrid(columns: Array(repeating: GridItem(.fixed(34), spacing: 10), count: 6), spacing: 10) {
-                    ForEach(swatches, id: \.self) { hex in
-                        Circle()
-                            .fill(Color(uiColor: UIColor(hex: hex)))
-                            .frame(width: 30, height: 30)
-                            .overlay(Circle().stroke(Color.primary.opacity(preset.colorHex == hex ? 0.9 : 0.15),
-                                                     lineWidth: preset.colorHex == hex ? 3 : 1))
-                            .onTapGesture { preset.colorHex = hex }
+                    ForEach(Self.swatches, id: \.self) { swatch($0) }
+                    // 喜歡的顏色：長按可以拿掉
+                    ForEach(favorites, id: \.self) { hex in
+                        swatch(hex).contextMenu {
+                            Button("從色票移除", systemImage: "trash", role: .destructive) {
+                                FavoriteColors.remove(hex)
+                                favorites = FavoriteColors.all
+                            }
+                        }
                     }
                 }
                 ColorPicker("自訂顏色", selection: Binding(
                     get: { Color(uiColor: preset.color) },
                     set: { preset.colorHex = UIColor($0).hexString }
                 ))
+                Button("把這個顏色加進色票", systemImage: "plus.circle") {
+                    FavoriteColors.add(preset.colorHex)
+                    favorites = FavoriteColors.all
+                }
+                .disabled(favorites.contains(preset.colorHex) || Self.swatches.contains(preset.colorHex) || favorites.count >= FavoriteColors.limit)
             }
             if preset.style == .marker {
                 Section("不透明度：\(Int((preset.opacity ?? BrushPreset.defaultMarkerOpacity) * 100))%") {
@@ -300,6 +420,12 @@ private struct StrokePreview: View {
     let preset: BrushPreset
     var body: some View {
         Canvas { ctx, size in
+            // 筆：照自製筆刷真正畫出來的樣子，看得出每種筆的差別
+            if preset.style != .marker {
+                let stroke = preset.style.sampleStroke(colorHex: preset.colorHex, width: preset.width, in: size)
+                ctx.withCGContext { InkRenderer.draw([stroke], in: $0) }
+                return
+            }
             var path = Path()
             path.move(to: CGPoint(x: 12, y: size.height * 0.65))
             path.addCurve(to: CGPoint(x: size.width - 12, y: size.height * 0.35),

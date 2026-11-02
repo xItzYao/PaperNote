@@ -428,8 +428,8 @@ final class CircuitGroupTests: XCTestCase {
     func testEveryPartHasASymbolPinsOnTheGridAndAPlaceInTheLibrary() {
         let listed = CircuitLibraryView.sections.flatMap(\.1)
         XCTAssertEqual(listed.count, Set(listed).count, "不重複")
-        XCTAssertEqual(Set(listed), Set(CircuitPart.allCases), "每個元件都在元件庫裡")
-        for part in CircuitPart.allCases {
+        XCTAssertEqual(Set(listed), Set(CircuitPart.builtIn), "每個元件都在元件庫裡")
+        for part in CircuitPart.builtIn {
             var c = CircuitComponent(part: part, position: CGPoint(x: 200, y: 200))
             c.inputs = part.defaultSize
             let (stroke, fill) = CircuitRenderer.symbol(c)
@@ -447,7 +447,7 @@ final class CircuitGroupTests: XCTestCase {
             XCTAssertGreaterThan(CircuitRenderer.icon(part).size.width, 0)
         }
         var all = CircuitData()
-        all.components = CircuitPart.allCases.enumerated().map { CircuitComponent(part: $1, position: CGPoint(x: 100 * $0, y: 0)) }
+        all.components = CircuitPart.builtIn.enumerated().map { CircuitComponent(part: $1, position: CGPoint(x: 100 * $0, y: 0)) }
         XCTAssertTrue(XMLParser(data: Data(CircuitRenderer.svg(all).utf8)).parse(), "全部都能匯出")
     }
 

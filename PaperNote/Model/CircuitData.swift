@@ -18,11 +18,17 @@ enum CircuitPart: String, Codable, CaseIterable, Identifiable {
     case nmos4, pmos4, npn, pnp, njfet, pjfet, nigbt, pigbt
     case opAmp, fdOpAmp, ota
     case adc, dac, mixer, antenna
+    /// 使用者自己畫的元件（符號存在 CircuitComponent.symbol）
+    case customSymbol
 
     var id: String { rawValue }
 
+    /// 元件庫裡固定有的元件
+    static var builtIn: [CircuitPart] { allCases.filter { $0 != .customSymbol } }
+
     var title: String {
         switch self {
+        case .customSymbol: return "自訂元件"
         case .resistor: return "電阻"
         case .capacitor: return "電容"
         case .inductor: return "電感"
@@ -151,6 +157,37 @@ enum CircuitPart: String, Codable, CaseIterable, Identifiable {
     var hasOutputBubble: Bool { self == .nandGate || self == .norGate || self == .xnorGate || self == .notGate }
 }
 
+/// 自訂元件的符號：線條和接腳（元件座標：中心為原點，接腳在格點上）
+struct CircuitSymbol: Codable, Equatable {
+    struct Stroke: Codable, Equatable {
+        var points: [CGPoint]
+        /// 筆刷畫的（不是 Node 接起來的直線）
+        var freehand = false
+    }
+
+    var strokes: [Stroke] = []
+    var pins: [CGPoint] = []
+
+    /// 包住線條和接腳；太小的話放大一點，才點得到
+    var bounds: CGRect {
+        var r = CGRect.null
+        for p in strokes.flatMap(\.points) + pins { r = r.union(CGRect(origin: p, size: .zero)) }
+        guard !r.isNull else { return CGRect(x: -20, y: -20, width: 40, height: 40) }
+        return r.insetBy(dx: r.width < 20 ? (r.width - 20) / 2 : -2, dy: r.height < 20 ? (r.height - 20) / 2 : -2)
+    }
+
+    /// 中心移到原點（移動的量在格點上，接腳還是在格點上）
+    func centered() -> CircuitSymbol {
+        let b = bounds
+        let c = CircuitData.snap(CGPoint(x: b.midX, y: b.midY))
+        func moved(_ p: CGPoint) -> CGPoint { CGPoint(x: p.x - c.x, y: p.y - c.y) }
+        var out = self
+        out.pins = pins.map(moved)
+        out.strokes = strokes.map { Stroke(points: $0.points.map(moved), freehand: $0.freehand) }
+        return out
+    }
+}
+
 struct CircuitComponent: Codable, Equatable, Identifiable {
     var id = UUID()
     var part: CircuitPart
@@ -170,6 +207,8 @@ struct CircuitComponent: Codable, Equatable, Identifiable {
     var nameSize: CGFloat?
     /// 同一個群組的元件、導線一起選、一起動；nil＝沒有群組
     var groupID: UUID?
+    /// 自訂元件的符號（放到頁面上就跟著筆記走，之後改元件庫不會動到已經放好的）
+    var symbol: CircuitSymbol?
 
     var nameFont: CGFloat { nameSize ?? CircuitText.fontSize }
 
@@ -432,6 +471,8 @@ enum CircuitGeometry {
     static func localPins(_ c: CircuitComponent) -> [CGPoint] {
         if let b = blockLayout(c) { return blockPins(b) }
         switch c.part {
+        case .customSymbol:
+            return c.symbol?.pins ?? []
         case .resistor, .capacitor, .inductor, .voltageSource, .currentSource,
              .variableResistor, .fuse, .polarCapacitor, .variableCapacitor,
              .diode, .schottky, .zener, .tunnelDiode, .led, .photodiode, .varicap,
@@ -481,6 +522,8 @@ enum CircuitGeometry {
             return CGRect(x: -b.pinX, y: top, width: b.pinX * 2, height: bottom - top)
         }
         switch c.part {
+        case .customSymbol:
+            return c.symbol?.bounds ?? CGRect(x: -20, y: -20, width: 40, height: 40)
         case .resistor, .capacitor, .inductor, .battery, .switchOpen, .switchClosed, .zener, .diode, .schottky, .tunnelDiode, .varicap:
             return CGRect(x: -30, y: -14, width: 60, height: 28)
         case .voltageSource, .currentSource, .sineSource, .squareSource, .controlledVoltageSource, .controlledCurrentSource,

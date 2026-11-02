@@ -38,7 +38,12 @@
 - 元件可以旋轉、水平／垂直翻轉；導線可以拖曳頭尾、轉角、整段調整；一律對齊格點
 - 群組、解散群組；畫好的電路存成「自訂電路圖」，之後從元件庫拉出來就是一個群組
 - 元件名稱打 R_1、x^2 自動變成上下標
+- 用 Node、筆刷畫自訂元件，標出接腳後和內建元件一樣使用
 - 元件分類與符號外觀參考 [CircuiTikZ](https://ctan.org/pkg/circuitikz)（LPPL／GPL）；沒有使用它的程式碼，符號是用 Swift 重新畫的
+
+**內建字體**
+
+文字框內建的中文字體都是 [SIL Open Font License 1.1](https://openfontlicense.org/)，授權檔在 `PaperNote/Resources/Fonts`：[霞鶩文楷 TC](https://github.com/lxgw/LxgwWenkaiTC)、[芫荽](https://github.com/ButTaiwan/iansui)、[Noto Serif TC](https://github.com/notofonts/noto-cjk)（思源宋體）。其他字體是 iOS 內建的，App 沒有散布字型檔。
 
 **整理**
 - 資料夾管理：重新命名、複製、移動、刪除、多選、拖曳進資料夾

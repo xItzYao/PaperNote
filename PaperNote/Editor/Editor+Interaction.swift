@@ -843,6 +843,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
                 self?.beginTextEditing(ref, cell: nil)
             })
             items.append(UIMenu(title: "樣式", image: UIImage(systemName: "textformat.size"), children: [
+                UIAction(title: "字體…", image: UIImage(systemName: "textformat")) { [weak self] _ in self?.presentFontPicker(ref) },
                 UIAction(title: "字放大") { [weak self] _ in self?.modifyTextBox(ref) { $0.fontSize = min($0.fontSize + 2, 72) } },
                 UIAction(title: "字縮小") { [weak self] _ in self?.modifyTextBox(ref) { $0.fontSize = max($0.fontSize - 2, 8) } },
                 UIAction(title: "無底色") { [weak self] _ in self?.modifyTextBox(ref) { $0.backgroundHex = nil } },
@@ -896,6 +897,23 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             e.content = .table(t)
             e.frame.size = t.size
         }
+    }
+
+    func presentFontPicker(_ ref: ElementRef) {
+        guard case let (pi, ei)? = locate(ref), case let .text(t) = pages[pi].elements[ei].content else { return }
+        let picker = UIHostingController(rootView: TextFontPicker(selected: t.fontName, onPick: { [weak self] name in
+            self?.setTextBoxFont(ref, name: name)
+        }, onDone: { [weak self] in
+            self?.dismiss(animated: true)
+        }))
+        picker.modalPresentationStyle = .formSheet
+        present(picker, animated: true)
+    }
+
+    /// 換字體；新的文字框沿用
+    func setTextBoxFont(_ ref: ElementRef, name: String?) {
+        TextFonts.lastUsed = name
+        modifyTextBox(ref) { $0.fontName = name }
     }
 
     func modifyTextBox(_ ref: ElementRef, _ change: @escaping (inout TextBoxData) -> Void) {
@@ -987,6 +1005,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
 
     func insertTextBox(at p: CGPoint?, text: String = "") {
         var t = TextBoxData(text: text)
+        t.fontName = TextFonts.lastUsed
         let width: CGFloat = 260
         t.text = text
         let h = max(44, ElementRenderer.textHeight(t, width: width))
@@ -1075,6 +1094,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         var rect = docFrame(of: e, pageIndex: pi)
         var text = ""
         var fontSize: CGFloat = 16
+        var fontName: String?
         var color = UIColor(hex: TableData.defaultTextColor)
         switch e.content {
         case let .table(t):
@@ -1087,6 +1107,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         case let .text(t):
             text = t.text
             fontSize = t.fontSize
+            fontName = t.fontName
             color = UIColor(hex: t.colorHex)
             rect.size.height = max(rect.height, 80)
         case .image, .circuit:
@@ -1094,7 +1115,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         }
         let z = canvas.zoomScale
         let tv = EditorTextView(frame: pagesContainer.convert(rect, to: canvas))
-        tv.font = .systemFont(ofSize: fontSize * z)
+        tv.font = TextFonts.font(fontName, size: fontSize * z)
         tv.textColor = color
         tv.text = text
         tv.backgroundColor = UIColor.white.withAlphaComponent(0.97)

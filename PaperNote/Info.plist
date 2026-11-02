@@ -33,6 +33,12 @@
 	<false/>
 	<key>UIDesignRequiresCompatibility</key>
 	<true/>
+	<key>UIAppFonts</key>
+	<array>
+		<string>LXGWWenKaiTC-Regular.ttf</string>
+		<string>Iansui-Regular.ttf</string>
+		<string>NotoSerifTC-Regular.otf</string>
+	</array>
 	<key>UIUserInterfaceStyle</key>
 	<string>Light</string>
 	<key>UISupportedInterfaceOrientations~ipad</key>

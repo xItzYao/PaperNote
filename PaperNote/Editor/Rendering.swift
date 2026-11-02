@@ -271,7 +271,7 @@ enum ElementRenderer {
         let para = NSMutableParagraphStyle()
         para.lineBreakMode = .byWordWrapping
         return [
-            .font: UIFont.systemFont(ofSize: t.fontSize),
+            .font: TextFonts.font(t.fontName, size: t.fontSize),
             .foregroundColor: UIColor(hex: t.colorHex),
             .paragraphStyle: para,
         ]

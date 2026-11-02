@@ -50,6 +50,7 @@ extension NotebookViewController {
         circuitLibrary.onSelectMode = { [weak self] mode in self?.selectCircuitMode(mode) }
         circuitLibrary.onDropCustom = { [weak self] id, p in self?.dropCustomCircuit(id, at: p) }
         circuitLibrary.onAddCustom = { [weak self] in self?.addSelectionToCustomCircuits() }
+        circuitLibrary.onDrawSymbol = { [weak self] id in self?.presentSymbolEditor(editing: id) }
         circuitLibrary.onRenameCustom = { [weak self] id in self?.promptRenameCustomCircuit(id) }
         circuitLibrary.onDeleteCustom = { [weak self] id in self?.deleteCustomCircuit(id) }
 
@@ -655,7 +656,7 @@ extension NotebookViewController {
     func presentWidthEditor(slot: Int, from button: UIView) {
         let style = BrushStore.shared.current.style
         let wasUsing = currentWidthSlot() == slot
-        let editor = WidthSlotEditor(title: ["細", "中", "粗"][slot], range: style.widthRange,
+        let editor = WidthSlotEditor(title: ["細", "中", "粗"][slot], range: settings.customInk ? style.widthRange : style.pencilKitWidthRange,
                                      width: BrushStore.shared.styleWidths(style)[slot]) { [weak self] w in
             guard let self else { return }
             BrushStore.shared.setStyleWidth(w, slot: slot, style: style)
@@ -940,6 +941,9 @@ extension NotebookViewController {
                 s.customInk.toggle()
                 self?.applyTool()
                 self?.showToast(s.customInk ? "「筆」改用自製筆刷：照筆尖原始軌跡畫，不做圓滑" : "「筆」改回 PencilKit")
+            },
+            UIAction(title: "連續放置元件", image: UIImage(systemName: "square.on.square"), state: s.circuitContinuousPlace ? .on : .off) { _ in
+                s.circuitContinuousPlace.toggle()
             },
             UIAction(title: "電路元件庫放左邊", image: UIImage(systemName: "sidebar.left"), state: s.circuitLibraryOnLeft ? .on : .off) { [weak self] _ in
                 self?.setCircuitLibraryOnLeft(!s.circuitLibraryOnLeft)

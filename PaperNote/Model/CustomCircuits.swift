@@ -5,6 +5,20 @@ struct CustomCircuit: Codable, Equatable, Identifiable {
     var id = UUID()
     var name: String
     var data: CircuitData
+
+    /// 自己畫的元件（不是存起來的一段電路）
+    var symbol: CircuitSymbol? {
+        guard data.wires.isEmpty, data.components.count == 1, data.components[0].part == .customSymbol else { return nil }
+        return data.components[0].symbol
+    }
+
+    static func symbolData(_ symbol: CircuitSymbol) -> CircuitData {
+        var c = CircuitComponent(part: .customSymbol, position: .zero)
+        c.symbol = symbol
+        var d = CircuitData()
+        d.components = [c]
+        return d
+    }
 }
 
 extension Notification.Name {
@@ -39,6 +53,13 @@ final class CustomCircuitStore {
         circuits.append(c)
         persist()
         return c
+    }
+
+    func update(_ id: UUID, name: String, data: CircuitData) {
+        guard let i = circuits.firstIndex(where: { $0.id == id }) else { return }
+        circuits[i].name = name
+        circuits[i].data = data
+        persist()
     }
 
     func rename(_ id: UUID, to name: String) {
