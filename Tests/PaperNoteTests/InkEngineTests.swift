@@ -486,13 +486,19 @@ final class InkEngineFlowTests: XCTestCase {
     func testPenWidthDoesNotThinWithPressure() {
         var p = BrushStore.shared.current
         let style = p.style
+        func widths(_ forces: [CGFloat]) -> [CGFloat] {
+            editor.inkBegan(.init(point: docPoint(100, 200), force: forces[0]))
+            editor.inkMoved([.init(point: docPoint(120, 200), force: forces[1]), .init(point: docPoint(140, 200), force: forces[2])])
+            editor.inkEnded(cancelled: false)
+            return editor.pages[0].ink.last?.points.map(\.width) ?? []
+        }
+        p.style = .monoline
+        BrushStore.shared.update(p)
+        XCTAssertEqual(Set(widths([0.9, 0.5, 0.05])).count, 1, "原子筆照設定的粗細畫，放開前不會變細")
+        // 鋼筆的粗細看筆尖方向（同一個方向會收斂到同一個粗細），筆壓放掉不會讓線尾變細
         p.style = .pen
         BrushStore.shared.update(p)
-        editor.inkBegan(.init(point: docPoint(100, 200), force: 0.9))
-        editor.inkMoved([.init(point: docPoint(120, 200), force: 0.5), .init(point: docPoint(140, 200), force: 0.05)])
-        editor.inkEnded(cancelled: false)
-        let ws = editor.pages[0].ink[0].points.map(\.width)
-        XCTAssertEqual(Set(ws).count, 1, "筆照設定的粗細畫，放開前不會變細")
+        XCTAssertEqual(widths([0.9, 0.5, 0.05]), widths([0.5, 0.5, 0.5]), "鋼筆不看筆壓")
         p.style = style
         BrushStore.shared.update(p)
     }
