@@ -342,7 +342,7 @@ final class PenFontSymbolTests: XCTestCase {
         XCTAssertTrue(InkGeometry.dashed(s, dash: 10, gap: 5).allSatisfy { $0.style == .pencil })
         XCTAssertEqual(InkGeometry.offset(s, by: CGPoint(x: 1, y: 1)).style, .pencil)
         XCTAssertEqual(try JSONDecoder().decode(InkStroke.self, from: JSONEncoder().encode(s)).style, .pencil)
-        let old = #"{"id":"6F3B1A10-1111-4A11-8A11-111111111111","colorHex":"#000000FF","points":[]}"#
+        let old = ##"{"id":"6F3B1A10-1111-4A11-8A11-111111111111","colorHex":"#000000FF","points":[]}"##
         XCTAssertNil(try JSONDecoder().decode(InkStroke.self, from: Data(old.utf8)).style, "舊筆跡照舊")
         XCTAssertGreaterThan(InkGeometry.bounds(of: line(.watercolor)).height, InkGeometry.bounds(of: line(nil)).height, "外暈也算在範圍內，擦的時候才清得乾淨")
     }
@@ -445,7 +445,7 @@ final class PenFontSymbolTests: XCTestCase {
         XCTAssertEqual(new.fontName, "LXGWWenKaiTC-Regular", "新的文字框沿用")
 
         // 舊存檔沒有這個欄位
-        let old = #"{"text":"a","fontSize":18,"colorHex":"#000000FF"}"#
+        let old = ##"{"text":"a","fontSize":18,"colorHex":"#000000FF"}"##
         XCTAssertNil(try JSONDecoder().decode(TextBoxData.self, from: Data(old.utf8)).fontName)
     }
 
