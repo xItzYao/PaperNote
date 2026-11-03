@@ -128,6 +128,8 @@ extension NotebookViewController {
         // 右：復原、最愛、頁面、設定
         let undo = makeButton(symbol: "arrow.uturn.backward", title: nil, action: #selector(undoTapped))
         let redo = makeButton(symbol: "arrow.uturn.forward", title: nil, action: #selector(redoTapped))
+        undo.accessibilityLabel = "上一步"
+        redo.accessibilityLabel = "下一步"
         favoriteButton = makeButton(symbol: "star", title: nil, action: #selector(favoriteTapped))
         let favList = makeButton(symbol: "list.star", title: nil, action: nil)
         favList.addAction(UIAction { [weak self, weak favList] _ in

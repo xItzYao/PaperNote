@@ -212,6 +212,9 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     /// UI 測試讀得到的除錯資訊（手指按下時卡住的手勢、畫布捲到哪裡）
     var uiTestDump: UILabel?
     var uiTestOffset: UILabel?
+    /// UI 測試：PencilKit 筆跡的數量、最近的除錯紀錄
+    var uiTestStrokes: UILabel?
+    var uiTestLog: UILabel?
     /// PencilKit 開始書寫的時間（收尾後清掉）；下筆時還沒清掉就代表上一筆卡住了
     var pkUsingSince: CFTimeInterval?
     /// 筆身點兩下切到橡皮擦前的模式（再點兩下切回來）
@@ -372,6 +375,14 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             o.isAccessibilityElement = true
             view.addSubview(o)
             uiTestOffset = o
+            for (i, id) in ["pkStrokes", "debugTail"].enumerated() {
+                let l = UILabel(frame: CGRect(x: 0, y: 4 + 2 * CGFloat(i), width: 2, height: 2))
+                l.accessibilityIdentifier = id
+                l.accessibilityLabel = id == "pkStrokes" ? "0" : "-"
+                l.isAccessibilityElement = true
+                view.addSubview(l)
+                if i == 0 { uiTestStrokes = l } else { uiTestLog = l }
+            }
         }
         DebugLog.watchMainThread()
 
@@ -728,6 +739,13 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         canvas.drawing = d
         isApplyingDrawing = false
         scheduleSave()
+        updateUITestDump()
+    }
+
+    func updateUITestDump() {
+        guard let l = uiTestStrokes else { return }
+        l.accessibilityLabel = "\(canvas.drawing.strokes.count)"
+        uiTestLog?.accessibilityLabel = DebugLog.text.split(separator: "\n").suffix(25).joined(separator: " / ")
     }
 
     /// 改變頁面尺寸、增刪頁面時：先依舊版面拆分筆跡，再依新版面組回去
@@ -874,6 +892,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     // MARK: - PKCanvasViewDelegate
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
+        updateUITestDump()
         guard !isApplyingDrawing else { return }
         recordStrokeGesture(strokeGesture)
         holdToShape.drawingChanged()
