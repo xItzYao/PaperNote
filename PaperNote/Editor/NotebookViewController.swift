@@ -734,12 +734,20 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         }
     }
 
-    func setDrawing(_ d: PKDrawing) {
+    func setDrawing(_ d: PKDrawing, file: StaticString = #fileID, line: UInt = #line) {
+        uiTestTrace("set \(file):\(line)", d)
         isApplyingDrawing = true
         canvas.drawing = d
         isApplyingDrawing = false
         scheduleSave()
         updateUITestDump()
+    }
+
+    /// UI 測試：記下筆跡的變化（每一筆用建立時間的尾數當代號）
+    func uiTestTrace(_ what: String, _ d: PKDrawing) {
+        guard uiTestStrokes != nil else { return }
+        let ids = d.strokes.map { String(format: "%.2f", $0.path.creationDate.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 100)) }
+        DebugLog.add("\(what) n=\(d.strokes.count) [\(ids.joined(separator: ","))]")
     }
 
     func updateUITestDump() {
@@ -870,7 +878,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             undoTableDivider()
             return
         }
-        _ = history.undo(capture: currentEditState, apply: restoreEditState)
+        let done = history.undo(capture: currentEditState, apply: restoreEditState)
+        uiTestTrace("undo done=\(done)", canvas.drawing)
     }
 
     @objc func redoTapped() {
@@ -893,6 +902,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
         updateUITestDump()
+        uiTestTrace("pk changed applying=\(isApplyingDrawing)", canvas.drawing)
         guard !isApplyingDrawing else { return }
         recordStrokeGesture(strokeGesture)
         holdToShape.drawingChanged()

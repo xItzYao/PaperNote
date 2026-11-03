@@ -5,13 +5,13 @@ import XCTest
 final class HighlighterUndoUITests: XCTestCase {
     private var app: XCUIApplication!
 
-    private func launch(_ extra: [String] = []) {
+    private func launch(_ extra: [String] = [], tool: String = "螢光筆") {
         continueAfterFailure = false
         app = XCUIApplication()
         app.launchArguments = ["-uiTestNotebook", "-fingerDrawing", "<true/>"] + extra
         app.launch()
-        XCTAssertTrue(app.buttons["螢光筆"].waitForExistence(timeout: 20), "要打開測試用的筆記本")
-        app.buttons["螢光筆"].tap()
+        XCTAssertTrue(app.buttons[tool].waitForExistence(timeout: 20), "要打開測試用的筆記本")
+        app.buttons[tool].tap()
         XCTAssertTrue(waitForStrokes(0))
     }
 
@@ -31,8 +31,8 @@ final class HighlighterUndoUITests: XCTestCase {
         a.press(forDuration: 0.05, thenDragTo: b, withVelocity: .slow, thenHoldForDuration: hold)
     }
 
-    private func check(hold: TimeInterval, waitBeforeUndo: UInt32, _ extra: [String] = []) {
-        launch(extra)
+    private func check(hold: TimeInterval, waitBeforeUndo: UInt32, _ extra: [String] = [], tool: String = "螢光筆") {
+        launch(extra, tool: tool)
         draw(y: 0.4, hold: hold)
         XCTAssertTrue(waitForStrokes(1), "畫了一筆：\(strokes)｜\(log)")
         if waitBeforeUndo > 0 { sleep(waitBeforeUndo) }
@@ -47,6 +47,11 @@ final class HighlighterUndoUITests: XCTestCase {
 
     func testPlainStroke() {
         check(hold: 0, waitBeforeUndo: 1, ["-shapeSnap", "<false/>", "-smartHighlight", "<false/>"])
+    }
+
+    /// 對照：PencilKit 的筆（不關自製筆刷時），不會被拉直
+    func testPencilKitPen() {
+        check(hold: 0, waitBeforeUndo: 1, ["-customInk", "<false/>", "-shapeSnap", "<false/>"], tool: "筆")
     }
 
     /// 預設設定（停住變直線、對齊 PDF 文字都開著）
