@@ -62,19 +62,10 @@ enum PDFMarkupImport {
                 current.append(p[0])
             case .addQuadCurveToPoint:
                 guard let a = current.last else { current = [p[1]]; break }
-                for k in 1...8 {
-                    let t = CGFloat(k) / 8, u = 1 - t
-                    current.append(CGPoint(x: u * u * a.x + 2 * u * t * p[0].x + t * t * p[1].x,
-                                           y: u * u * a.y + 2 * u * t * p[0].y + t * t * p[1].y))
-                }
+                for k in 1...8 { current.append(quad(a, p[0], p[1], CGFloat(k) / 8)) }
             case .addCurveToPoint:
                 guard let a = current.last else { current = [p[2]]; break }
-                for k in 1...8 {
-                    let t = CGFloat(k) / 8, u = 1 - t
-                    let x = u * u * u * a.x + 3 * u * u * t * p[0].x + 3 * u * t * t * p[1].x + t * t * t * p[2].x
-                    let y = u * u * u * a.y + 3 * u * u * t * p[0].y + 3 * u * t * t * p[1].y + t * t * t * p[2].y
-                    current.append(CGPoint(x: x, y: y))
-                }
+                for k in 1...8 { current.append(cubic(a, p[0], p[1], p[2], CGFloat(k) / 8)) }
             case .closeSubpath:
                 if let f = current.first { current.append(f) }
             @unknown default:
@@ -83,5 +74,19 @@ enum PDFMarkupImport {
         }
         finish()
         return out
+    }
+
+    private static func mix(_ a: CGPoint, _ b: CGPoint, _ t: CGFloat) -> CGPoint {
+        CGPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t)
+    }
+
+    /// 二次曲線上的點（de Casteljau）
+    private static func quad(_ a: CGPoint, _ c: CGPoint, _ b: CGPoint, _ t: CGFloat) -> CGPoint {
+        mix(mix(a, c, t), mix(c, b, t), t)
+    }
+
+    /// 三次曲線上的點
+    private static func cubic(_ a: CGPoint, _ c1: CGPoint, _ c2: CGPoint, _ b: CGPoint, _ t: CGFloat) -> CGPoint {
+        quad(mix(a, c1, t), mix(c1, c2, t), mix(c2, b, t), t)
     }
 }
