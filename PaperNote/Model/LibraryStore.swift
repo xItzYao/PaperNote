@@ -385,7 +385,11 @@ final class LibraryStore: ObservableObject {
             guard let pdf = PDFDocument(url: dest) else { throw LibraryError.unreadablePDF }
             if pdf.isLocked { throw LibraryError.lockedPDF }
             guard pdf.pageCount > 0 else { throw LibraryError.unreadablePDF }
-            let pages = (0..<pdf.pageCount).map { Page(background: .pdf(file: fileName, index: $0)) }
+            // 別的 App 加的註解：手寫的變成可以編輯的筆跡，其他的畫進頁面
+            let markup = PDFMarkupImport.extractInk(from: pdf)
+            if markup.changed { try PDFMarkupImport.write(pdf, to: dest) }
+            var pages = (0..<pdf.pageCount).map { Page(background: .pdf(file: fileName, index: $0)) }
+            for (i, ink) in markup.ink { pages[i].ink = ink }
             try NotebookSession.writeDocument(NotebookDocument(pages: pages), to: dir)
             meta.pageCount = pages.count
         } catch {
