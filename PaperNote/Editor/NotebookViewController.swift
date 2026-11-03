@@ -856,7 +856,17 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     /// 回到記下的狀態
     private func restoreEditState(_ s: EditHistory.State) {
         if let d = s.drawing {
-            setDrawing(d)
+            // 實驗（暫時）：比較三種還原方式
+            switch UserDefaults.standard.string(forKey: "uiTestRestoreMode") {
+            case "edit":
+                var e = canvas.drawing
+                e.strokes = d.strokes
+                setDrawing(e)
+            case "fresh":
+                setDrawing(PKDrawing(strokes: d.strokes))
+            default:
+                setDrawing(d)
+            }
             clearLassoSelection()
         }
         for (id, snap) in s.pages {
@@ -901,8 +911,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     // MARK: - PKCanvasViewDelegate
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
-        updateUITestDump()
         uiTestTrace("pk changed applying=\(isApplyingDrawing)", canvas.drawing)
+        updateUITestDump()
         guard !isApplyingDrawing else { return }
         recordStrokeGesture(strokeGesture)
         holdToShape.drawingChanged()

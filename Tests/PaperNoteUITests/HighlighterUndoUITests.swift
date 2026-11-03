@@ -54,6 +54,23 @@ final class HighlighterUndoUITests: XCTestCase {
         check(hold: 0, waitBeforeUndo: 1, ["-customInk", "<false/>", "-shapeSnap", "<false/>"], tool: "筆")
     }
 
+    // 實驗（暫時）：上一步用不同方式把筆跡設回去
+    func testPenRestoreEdit() {
+        check(hold: 0, waitBeforeUndo: 1, ["-customInk", "<false/>", "-shapeSnap", "<false/>", "-uiTestRestoreMode", "edit"], tool: "筆")
+    }
+
+    func testPenRestoreFresh() {
+        check(hold: 0, waitBeforeUndo: 1, ["-customInk", "<false/>", "-shapeSnap", "<false/>", "-uiTestRestoreMode", "fresh"], tool: "筆")
+    }
+
+    func testHighlighterRestoreEdit() {
+        check(hold: 0, waitBeforeUndo: 1, ["-uiTestRestoreMode", "edit"])
+    }
+
+    func testHighlighterRestoreFresh() {
+        check(hold: 0, waitBeforeUndo: 1, ["-uiTestRestoreMode", "fresh"])
+    }
+
     /// 預設設定（停住變直線、對齊 PDF 文字都開著）
     func testDefaultSettings() {
         check(hold: 0, waitBeforeUndo: 1)
