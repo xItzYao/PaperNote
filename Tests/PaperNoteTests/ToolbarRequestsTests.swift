@@ -53,11 +53,21 @@ final class ToolbarRequestsTests: XCTestCase {
         editor.subBarStack.arrangedSubviews.compactMap { $0 as? UIButton }.first { $0.accessibilityLabel == "新增常用筆刷" }
     }
 
+    private func wait(until done: () -> Bool) {
+        let deadline = Date().addingTimeInterval(3)
+        while !done(), Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+    }
+
+    /// 小視窗出現的動畫跑完（動畫中 UIKit 不收關掉的要求）
+    private func waitForPopover() {
+        wait { editor.presentedViewController.map { !$0.isBeingPresented } ?? false }
+    }
+
     /// 按「新增」：多一支筆刷（打開它的設定）
     private func addPreset() throws {
         try XCTUnwrap(addButton, "要有新增").sendActions(for: .touchUpInside)
         added.append(BrushStore.shared.currentID)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        waitForPopover()
     }
 
     func testAddSitsRightAfterTheBrushes() throws {
@@ -72,11 +82,12 @@ final class ToolbarRequestsTests: XCTestCase {
     func testManyBrushesStillFit() throws {
         editor.setTool(.pen)
         let before = BrushStore.shared.presets.count
-        for _ in 0..<12 {
+        // 加到一排一定放不下
+        for _ in 0..<30 {
             try addPreset()
             editor.dismissToolPopover()
         }
-        XCTAssertEqual(BrushStore.shared.presets.count, before + 12, "筆刷沒有數量上限")
+        XCTAssertEqual(BrushStore.shared.presets.count, before + 30, "筆刷沒有數量上限")
         editor.view.layoutIfNeeded()
         let row = editor.subBarStack.frame
         XCTAssertGreaterThanOrEqual(row.minX, 0, "第二列沒有超出畫面：\(row)")
@@ -99,7 +110,7 @@ final class ToolbarRequestsTests: XCTestCase {
         added.removeAll { $0 == id }
         XCTAssertFalse(BrushStore.shared.presets.contains { $0.id == id }, "刪掉了")
         XCTAssertNil(editor.presetButtons[id], "工具列也拿掉了")
-        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        wait { editor.presentedViewController == nil }
         XCTAssertNil(editor.presentedViewController, "設定關掉了")
     }
 
@@ -108,11 +119,11 @@ final class ToolbarRequestsTests: XCTestCase {
         editor.setTool(.pen)
         let b = try XCTUnwrap(editor.presetButtons[BrushStore.shared.currentID])
         editor.presentBrushSettings(BrushStore.shared.current, from: b)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        waitForPopover()
         XCTAssertNotNil(editor.presentedViewController)
         let r = try XCTUnwrap(editor.canvas.gestureRecognizers?.compactMap { $0 as? TouchDownRecognizer }.first, "畫布上有碰一下就關掉的手勢")
         r.touchesBegan([FakeTouch(type: .direct, location: CGPoint(x: 300, y: 500))], with: UIEvent())
-        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        wait { editor.presentedViewController == nil }
         XCTAssertNil(editor.presentedViewController, "碰到頁面就關掉")
     }
 

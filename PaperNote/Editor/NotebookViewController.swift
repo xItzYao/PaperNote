@@ -664,10 +664,11 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             if pageViews[page.id] == nil {
                 let v = PageContainerView(pageID: page.id)
                 v.frame = pageFrames[i]
-                v.configure(page: page, session: session, contentScale: elementContentScale)
-                pagesContainer.insertSubview(v, belowSubview: overlay)
+                // 筆跡先放好、有大小，configure 才會在背景準備筆跡
                 inkContainer.addSubview(v.inkView)
                 v.inkView.frame = v.frame
+                v.configure(page: page, session: session, contentScale: elementContentScale)
+                pagesContainer.insertSubview(v, belowSubview: overlay)
                 pageViews[page.id] = v
             }
             i += 1
@@ -682,8 +683,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     func refreshPage(_ i: Int) {
         guard let page = pages[safe: i], let v = pageViews[page.id] else { return }
         v.frame = pageFrames[i]
-        v.configure(page: page, session: session, contentScale: elementContentScale)
         v.inkView.frame = v.frame
+        v.configure(page: page, session: session, contentScale: elementContentScale)
         updateSelectionChrome()
     }
 
