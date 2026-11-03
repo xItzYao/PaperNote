@@ -734,10 +734,15 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         }
     }
 
+    /// 畫布換成 d 的筆跡。一律從畫布現在的筆跡改過去，不直接換上 d 這一份：
+    /// PencilKit 留著它自己最後寫進去的那一版，下一筆收尾時和畫布的筆跡合併；
+    /// 換上的是比較舊的一版（上一步、下一步記下的），合併就會把之後才拿掉的筆跡帶回來
     func setDrawing(_ d: PKDrawing, file: StaticString = #fileID, line: UInt = #line) {
         uiTestTrace("set \(file):\(line)", d)
+        var next = canvas.drawing
+        next.strokes = d.strokes
         isApplyingDrawing = true
-        canvas.drawing = d
+        canvas.drawing = next
         isApplyingDrawing = false
         scheduleSave()
         updateUITestDump()
@@ -856,17 +861,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     /// 回到記下的狀態
     private func restoreEditState(_ s: EditHistory.State) {
         if let d = s.drawing {
-            // 實驗（暫時）：比較三種還原方式
-            switch UserDefaults.standard.string(forKey: "uiTestRestoreMode") {
-            case "edit":
-                var e = canvas.drawing
-                e.strokes = d.strokes
-                setDrawing(e)
-            case "fresh":
-                setDrawing(PKDrawing(strokes: d.strokes))
-            default:
-                setDrawing(d)
-            }
+            setDrawing(d)
             clearLassoSelection()
         }
         for (id, snap) in s.pages {

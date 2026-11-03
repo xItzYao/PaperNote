@@ -54,21 +54,23 @@ final class HighlighterUndoUITests: XCTestCase {
         check(hold: 0, waitBeforeUndo: 1, ["-customInk", "<false/>", "-shapeSnap", "<false/>"], tool: "筆")
     }
 
-    // 實驗（暫時）：上一步用不同方式把筆跡設回去
-    func testPenRestoreEdit() {
-        check(hold: 0, waitBeforeUndo: 1, ["-customInk", "<false/>", "-shapeSnap", "<false/>", "-uiTestRestoreMode", "edit"], tool: "筆")
-    }
+    /// 上一步、下一步、再上一步，接著畫：下一步換回來的那一版也不會讓筆跡跑回來
+    func testRedoThenUndo() {
+        launch()
+        draw(y: 0.4)
+        XCTAssertTrue(waitForStrokes(1), "畫了一筆：\(strokes)｜\(log)")
+        sleep(1)
+        app.buttons["上一步"].tap()
+        XCTAssertTrue(waitForStrokes(0), "上一步：\(strokes)｜\(log)")
+        app.buttons["下一步"].tap()
+        XCTAssertTrue(waitForStrokes(1), "下一步：\(strokes)｜\(log)")
+        app.buttons["上一步"].tap()
+        XCTAssertTrue(waitForStrokes(0), "再上一步：\(strokes)｜\(log)")
 
-    func testPenRestoreFresh() {
-        check(hold: 0, waitBeforeUndo: 1, ["-customInk", "<false/>", "-shapeSnap", "<false/>", "-uiTestRestoreMode", "fresh"], tool: "筆")
-    }
-
-    func testHighlighterRestoreEdit() {
-        check(hold: 0, waitBeforeUndo: 1, ["-uiTestRestoreMode", "edit"])
-    }
-
-    func testHighlighterRestoreFresh() {
-        check(hold: 0, waitBeforeUndo: 1, ["-uiTestRestoreMode", "fresh"])
+        draw(y: 0.55)
+        XCTAssertTrue(waitForStrokes(1), "只有新的這一筆：\(strokes)｜\(log)")
+        sleep(3)
+        XCTAssertEqual(strokes, "1", "過一下也不會跑回來｜\(log)")
     }
 
     /// 預設設定（停住變直線、對齊 PDF 文字都開著）
