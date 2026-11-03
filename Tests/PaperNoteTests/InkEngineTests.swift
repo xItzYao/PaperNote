@@ -390,7 +390,7 @@ final class InkEngineFlowTests: XCTestCase {
     func testThinStrokeKeepsItsLookAfterLift() {
         let saved = BrushStore.shared.current
         var p = saved
-        p.style = .pen
+        p.style = .monoline
         p.width = 0.4
         BrushStore.shared.update(p)
         defer { BrushStore.shared.update(saved) }
@@ -495,10 +495,6 @@ final class InkEngineFlowTests: XCTestCase {
         p.style = .monoline
         BrushStore.shared.update(p)
         XCTAssertEqual(Set(widths([0.9, 0.5, 0.05])).count, 1, "原子筆照設定的粗細畫，放開前不會變細")
-        // 鋼筆的粗細看筆尖方向（同一個方向會收斂到同一個粗細），筆壓放掉不會讓線尾變細
-        p.style = .pen
-        BrushStore.shared.update(p)
-        XCTAssertEqual(widths([0.9, 0.5, 0.05]), widths([0.5, 0.5, 0.5]), "鋼筆不看筆壓")
         p.style = style
         BrushStore.shared.update(p)
     }
@@ -586,7 +582,7 @@ final class InkEngineFlowTests: XCTestCase {
     func testDashedCustomPen() {
         let saved = BrushStore.shared.current
         var p = saved
-        p.style = .pen
+        p.style = .monoline
         p.width = 2
         p.dashed = true
         p.dashLength = 10

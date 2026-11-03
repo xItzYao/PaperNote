@@ -52,5 +52,12 @@ final class BrushSettingsMenuUITests: XCTestCase {
         XCTAssertEqual(app.state, .runningForeground, "不能閃退")
         let picker = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "筆型")).firstMatch
         XCTAssertTrue(picker.exists, "筆刷設定還開著")
+        // 改回鉛筆（筆刷存在 App 裡，之後的測試還要用「鉛筆」；工具列那支現在叫「水彩」，選單裡的才是「鉛筆」）
+        picker.tap()
+        let pencil = app.descendants(matching: .any)["鉛筆"].firstMatch
+        XCTAssertTrue(pencil.waitForExistence(timeout: 5))
+        pencil.tap()
+        sleep(1)
+        XCTAssertEqual(app.state, .runningForeground)
     }
 }

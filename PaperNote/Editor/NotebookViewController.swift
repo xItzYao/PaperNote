@@ -212,9 +212,10 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     /// UI 測試讀得到的除錯資訊（手指按下時卡住的手勢、畫布捲到哪裡）
     var uiTestDump: UILabel?
     var uiTestOffset: UILabel?
-    /// UI 測試：PencilKit 筆跡的數量、最近的除錯紀錄
+    /// UI 測試：PencilKit 筆跡的數量、最近的除錯紀錄、最後一筆 PencilKit 筆跡的墨水
     var uiTestStrokes: UILabel?
     var uiTestLog: UILabel?
+    var uiTestInk: UILabel?
     /// PencilKit 開始書寫的時間（收尾後清掉）；下筆時還沒清掉就代表上一筆卡住了
     var pkUsingSince: CFTimeInterval?
     /// 筆身點兩下切到橡皮擦前的模式（再點兩下切回來）
@@ -375,13 +376,17 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             o.isAccessibilityElement = true
             view.addSubview(o)
             uiTestOffset = o
-            for (i, id) in ["pkStrokes", "debugTail"].enumerated() {
+            for (i, id) in ["pkStrokes", "debugTail", "pkInk"].enumerated() {
                 let l = UILabel(frame: CGRect(x: 0, y: 4 + 2 * CGFloat(i), width: 2, height: 2))
                 l.accessibilityIdentifier = id
                 l.accessibilityLabel = id == "pkStrokes" ? "0" : "-"
                 l.isAccessibilityElement = true
                 view.addSubview(l)
-                if i == 0 { uiTestStrokes = l } else { uiTestLog = l }
+                switch i {
+                case 0: uiTestStrokes = l
+                case 1: uiTestLog = l
+                default: uiTestInk = l
+                }
             }
         }
         DebugLog.watchMainThread()
@@ -582,11 +587,15 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     func updateZoomLayout() {
         let z = canvas.zoomScale
-        pagesContainer.transform = .identity
-        pagesContainer.bounds = CGRect(origin: .zero, size: docSize)
-        pagesContainer.transform = CGAffineTransform(scaleX: z, y: z)
-        pagesContainer.center = CGPoint(x: docSize.width * z / 2, y: docSize.height * z / 2)
-        overlay.frame = CGRect(origin: .zero, size: docSize)
+        // 頁面的位置、縮放不做動畫：鍵盤跳出來時系統在鍵盤的動畫裡通知，
+        // 這裡先把縮放歸零再設回去，跟著動畫的話頁面會縮小再放大（閃一下）
+        UIView.performWithoutAnimation {
+            pagesContainer.transform = .identity
+            pagesContainer.bounds = CGRect(origin: .zero, size: docSize)
+            pagesContainer.transform = CGAffineTransform(scaleX: z, y: z)
+            pagesContainer.center = CGPoint(x: docSize.width * z / 2, y: docSize.height * z / 2)
+            overlay.frame = CGRect(origin: .zero, size: docSize)
+        }
         overlay.lineScale = 1 / z
         let size = CGSize(width: docSize.width * z, height: docSize.height * z)
         if canvas.contentSize != size { canvas.contentSize = size }
@@ -758,6 +767,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     func updateUITestDump() {
         guard let l = uiTestStrokes else { return }
         l.accessibilityLabel = "\(canvas.drawing.strokes.count)"
+        uiTestInk?.accessibilityLabel = canvas.drawing.strokes.last?.ink.inkType.rawValue ?? "-"
         uiTestLog?.accessibilityLabel = DebugLog.text.split(separator: "\n").suffix(25).joined(separator: " / ")
     }
 
@@ -976,6 +986,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             setDrawing(drawing)
         }
         holdToShape.recordSample(of: stroke, presetID: BrushStore.shared.current.id)
+        if tool == .pen { DebugLog.add(Self.pencilKitStrokeSummary(stroke)) }
         // 虛線：筆放開後把這一筆切成一段一段
         let preset = BrushStore.shared.current
         if tool == .pen, preset.isDashed {
@@ -998,6 +1009,19 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             drawing.strokes[drawing.strokes.count - 1] = straight
             setDrawing(drawing)
         }
+    }
+
+    /// 除錯紀錄：PencilKit 這一筆的取樣（墨水、點數、平均間隔，和平均挑的 8 個點的粗細、筆壓、傾斜、方位、透明度）。
+    /// 自製引擎照著 PencilKit 調的時候用：Pencil 的筆壓、傾斜怎麼變成粗細，只有真的用 Pencil 寫才知道
+    static func pencilKitStrokeSummary(_ s: PKStroke) -> String {
+        let pts = Array(s.path)
+        guard let last = pts.last else { return "pk stroke empty" }
+        let dt = pts.count > 1 ? last.timeOffset / Double(pts.count - 1) * 1000 : 0
+        let picks = (0..<8).map { pts[min(pts.count - 1, $0 * pts.count / 8)] } + [last]
+        let detail = picks.map {
+            String(format: "%.2f/%.2f/%.2f/%.2f/%.2f/%.2f", $0.size.width, $0.size.height, $0.force, $0.altitude, $0.azimuth, $0.opacity)
+        }.joined(separator: " ")
+        return "pk stroke ink=\(s.ink.inkType.rawValue) n=\(pts.count) dt=\(String(format: "%.1f", dt))ms w/h/force/alt/az/op: \(detail)"
     }
 
     /// 筆跡超出它所在的那一頁（存檔時歸到的頁）時，加上遮罩只顯示頁面裡的部分；沒超出回傳 nil

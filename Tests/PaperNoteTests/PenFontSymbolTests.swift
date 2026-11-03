@@ -1,5 +1,7 @@
 import XCTest
 import CoreText
+import SwiftUI
+import PencilKit
 @testable import PaperNote
 
 /// 回報的需求：
@@ -309,32 +311,6 @@ final class PenFontSymbolTests: XCTestCase {
         XCTAssertGreaterThan(counts.values.max() ?? 0, water.count / 3, "大部分是同一個深淺")
     }
 
-    func testWidthBehavesDifferentlyPerInk() {
-        let base: CGFloat = 4
-        for style: InkStyle in [.monoline, .pencil, .crayon] {
-            XCTAssertEqual(style.inkWidth(base: base, force: 1, direction: 0.3, previous: nil), base, "\(style) 固定粗細")
-        }
-        let thin = InkStyle.fountainPen.inkWidth(base: base, force: 0.05, direction: nil, previous: nil)
-        let thick = InkStyle.fountainPen.inkWidth(base: base, force: 1, direction: nil, previous: nil)
-        XCTAssertGreaterThan(thick / thin, 3, "毛筆看筆壓，差很多")
-        let along = InkStyle.pen.inkWidth(base: base, force: 0.5, direction: -.pi / 4, previous: nil)
-        let across = InkStyle.pen.inkWidth(base: base, force: 0.5, direction: .pi / 4, previous: nil)
-        XCTAssertGreaterThan(across / along, 1.5, "鋼筆看方向")
-        XCTAssertEqual(InkStyle.pen.inkWidth(base: base, force: 0, direction: 0.5, previous: nil),
-                       InkStyle.pen.inkWidth(base: base, force: 1, direction: 0.5, previous: nil), "鋼筆不看筆壓，線尾不會變細")
-        let eased = InkStyle.fountainPen.inkWidth(base: base, force: 1, direction: nil, previous: thin)
-        XCTAssertLessThan(eased, thick, "線寬慢慢變")
-        XCTAssertGreaterThan(eased, thin)
-    }
-
-    func testBrushTipTapersWhenLifted() {
-        let points = (0..<30).map { InkPoint(CGPoint(x: CGFloat($0), y: 0), width: 6) }
-        let tapered = InkStyle.taperedEnd(points)
-        XCTAssertEqual(tapered[0].width, 6)
-        XCTAssertLessThan(tapered[29].width, 2.5)
-        XCTAssertEqual(tapered.map(\.point), points.map(\.point), "只改粗細")
-    }
-
     func testStyleSurvivesEraserDashesAndSaving() throws {
         let s = line(.pencil)
         let pieces = try XCTUnwrap(InkGeometry.cut(s, at: CGPoint(x: 100, y: 40), radius: 10))
@@ -347,41 +323,66 @@ final class PenFontSymbolTests: XCTestCase {
         XCTAssertGreaterThan(InkGeometry.bounds(of: line(.watercolor)).height, InkGeometry.bounds(of: line(nil)).height, "外暈也算在範圍內，擦的時候才清得乾淨")
     }
 
-    func testCustomInkWritesWithTheChosenStyle() throws {
+    /// 回報的問題：原子筆以外的自製筆刷寫起來很怪，不像 PencilKit。
+    /// 這些筆交給 PencilKit 畫（寫的時候、放開後都是 PencilKit 自己畫的），自製筆刷只畫原子筆
+    func testOnlyMonolineUsesCustomInk() throws {
         let store = BrushStore.shared
         let old = store.current
-        defer { store.update(old) }
+        defer {
+            store.update(old)
+            editor.applyTool()
+        }
+        XCTAssertTrue(editor.settings.customInk, "預設開著自製筆刷")
+        for style in InkStyle.allCases where style != .marker {
+            var p = old
+            p.style = style
+            p.dashed = false
+            store.update(p)
+            editor.setTool(.select)
+            editor.setTool(.pen)
+            let custom = style == .monoline
+            XCTAssertEqual(editor.customInkActive, custom, "\(style.title)")
+            XCTAssertEqual(editor.inkRecognizer.isEnabled, custom, "\(style.title)：自製筆刷的手勢")
+            XCTAssertTrue(editor.canvas.drawingGestureRecognizer.isEnabled, "\(style.title)：PencilKit 可以寫")
+            let tool = try XCTUnwrap(editor.canvas.tool as? PKInkingTool, "\(style.title)")
+            XCTAssertEqual(tool.inkType, style.inkType, "\(style.title)：PencilKit 用同一種墨水")
+            XCTAssertEqual(style.usableWidthRange, custom ? style.widthRange : style.pencilKitWidthRange, "\(style.title)：可以調的粗細")
+        }
+    }
+
+    /// 在筆刷設定裡把原子筆改成鉛筆（或改回來）：馬上換成 PencilKit 畫（或換回自製筆刷）
+    func testChangingTheStyleSwitchesTheEngine() throws {
+        let store = BrushStore.shared
+        let old = store.current
+        defer {
+            store.update(old)
+            editor.applyTool()
+        }
         var p = old
-        p.style = .pencil
-        p.width = 0.6
+        p.style = .monoline
         store.update(p)
         editor.setTool(.pen)
-        let o = page(100, 500)
-        editor.inkBegan(.init(point: o, force: 0.5))
-        editor.inkMoved((1...20).map { .init(point: CGPoint(x: o.x + CGFloat($0) * 5, y: o.y), force: 0.5) })
-        editor.inkEnded(cancelled: false)
-        let s = try XCTUnwrap(editor.pages[0].ink.last)
-        XCTAssertEqual(s.style, .pencil)
-        XCTAssertEqual(s.points[5].width, 0.6, accuracy: 0.001, "比 PencilKit 的 2.4pt 細")
+        XCTAssertTrue(editor.customInkActive)
+        editor.presentBrushSettings(store.current, from: editor.view)
+        let host = try XCTUnwrap(editor.presentedViewController as? UIHostingController<BrushSettingsView>)
+        p.style = .pencil
+        host.rootView.onChange(p)
+        XCTAssertFalse(editor.customInkActive, "改成鉛筆：PencilKit 畫")
+        XCTAssertFalse(editor.inkRecognizer.isEnabled)
+        XCTAssertEqual((editor.canvas.tool as? PKInkingTool)?.inkType, .pencil)
+        p.style = .monoline
+        host.rootView.onChange(p)
+        XCTAssertTrue(editor.inkRecognizer.isEnabled, "改回原子筆：自製筆刷")
+        editor.dismissToolPopover()
     }
 
     func testPensCanGoMuchThinner() {
-        for style in InkStyle.allCases where style != .marker {
-            XCTAssertLessThanOrEqual(style.widthRange.lowerBound, 0.3, "\(style)")
-            XCTAssertLessThanOrEqual(style.styleWidths[0], style == .watercolor ? 4 : (style == .crayon ? 3 : 1), "\(style) 的「細」真的細")
+        // 自製筆刷（原子筆）可以很細；PencilKit 畫的筆最細是 PencilKit 畫得出來的最細值
+        XCTAssertLessThanOrEqual(InkStyle.monoline.widthRange.lowerBound, 0.3)
+        XCTAssertLessThan(InkStyle.monoline.styleWidths[0], 1)
+        for style in InkStyle.allCases where !style.usesCustomInk {
+            XCTAssertGreaterThanOrEqual(style.pencilKitWidthRange.lowerBound, style.inkType.validWidthRange.lowerBound - 0.001, "\(style)：PencilKit 畫不出來的就不讓它調")
         }
-        XCTAssertLessThan(InkStyle.pencil.styleWidths[0], 1)
-        // PencilKit 畫不出來的就不讓它調
-        XCTAssertGreaterThanOrEqual(InkStyle.pencil.pencilKitWidthRange.lowerBound, InkStyle.pencil.inkType.validWidthRange.lowerBound - 0.001)
-    }
-
-    func testSampleStrokeShowsTheDifference() {
-        let size = CGSize(width: 200, height: 44)
-        func widths(_ s: InkStyle) -> Set<Float> { Set(s.sampleStroke(colorHex: "#000000FF", width: 4, in: size).points.map(\.w)) }
-        XCTAssertEqual(widths(.monoline).count, 1)
-        XCTAssertGreaterThan(widths(.fountainPen).count, 5)
-        XCTAssertGreaterThan(widths(.pen).count, 5)
-        XCTAssertEqual(InkStyle.pencil.sampleStroke(colorHex: "#000000FF", width: 4, in: size).style, .pencil)
     }
 
     // MARK: 色票

@@ -333,11 +333,7 @@ extension NotebookViewController {
         }
         canvas.drawingPolicy = settings.fingerDrawing ? .anyInput : .pencilOnly
         canvas.contentInset.bottom = bottomInset
-        // 只有開啟「用手指書寫」時，手指才用來截圖、選字、畫表格線、圈選；否則單指捲動
-        let fingerUsedByTool = settings.fingerDrawing && (tool.drawsWithPan || customInkActive)
-        canvas.panGestureRecognizer.minimumNumberOfTouches = fingerUsedByTool ? 2 : 1
-        updateGestureAvailability()
-        configurePencilKitGestures()
+        applyInkEngine()
 
         for (t, b) in toolButtons {
             var c = b.configuration ?? .plain()
@@ -351,6 +347,15 @@ extension NotebookViewController {
             }
         }
         rebuildSubBar()
+    }
+
+    /// 筆用自製筆刷還是 PencilKit 畫（看工具和目前的筆型）：換筆、改筆型後也要重新設定
+    func applyInkEngine() {
+        // 只有開啟「用手指書寫」時，手指才用來截圖、選字、畫表格線、圈選；否則單指捲動
+        let fingerUsedByTool = settings.fingerDrawing && (tool.drawsWithPan || customInkActive)
+        canvas.panGestureRecognizer.minimumNumberOfTouches = fingerUsedByTool ? 2 : 1
+        updateGestureAvailability()
+        configurePencilKitGestures()
     }
 
     func rebuildSubBar() {
@@ -593,6 +598,7 @@ extension NotebookViewController {
         }
         BrushStore.shared.select(id)
         setCanvasTool(BrushStore.shared.current.tool)
+        applyInkEngine()
         refreshPresetButtons()
     }
 
@@ -658,7 +664,7 @@ extension NotebookViewController {
     func presentWidthEditor(slot: Int, from button: UIView) {
         let style = BrushStore.shared.current.style
         let wasUsing = currentWidthSlot() == slot
-        let editor = WidthSlotEditor(title: ["細", "中", "粗"][slot], range: settings.customInk ? style.widthRange : style.pencilKitWidthRange,
+        let editor = WidthSlotEditor(title: ["細", "中", "粗"][slot], range: style.usableWidthRange,
                                      width: BrushStore.shared.styleWidths(style)[slot]) { [weak self] w in
             guard let self else { return }
             BrushStore.shared.setStyleWidth(w, slot: slot, style: style)
@@ -802,6 +808,7 @@ extension NotebookViewController {
                 guard let self, let source, let p = BrushStore.shared.presets.first(where: { $0.id == id }) else { return }
                 BrushStore.shared.select(id)
                 self.setCanvasTool(p.tool)
+                self.applyInkEngine()
                 self.refreshPresetButtons()
                 self.presentBrushSettings(p, from: source)
             },
@@ -819,7 +826,11 @@ extension NotebookViewController {
     func presentBrushSettings(_ preset: BrushPreset, from source: UIView) {
         let view = BrushSettingsView(preset: preset) { [weak self] p in
             BrushStore.shared.update(p)
-            if BrushStore.shared.currentID == p.id { self?.setCanvasTool(BrushStore.shared.current.tool) }
+            if BrushStore.shared.currentID == p.id {
+                self?.setCanvasTool(BrushStore.shared.current.tool)
+                // 改了筆型：可能從自製筆刷換成 PencilKit（或相反）
+                self?.applyInkEngine()
+            }
             self?.refreshPresetButtons()
         }
         presentToolPopover(UIHostingController(rootView: view), from: source, size: CGSize(width: 340, height: 460))
@@ -939,10 +950,10 @@ extension NotebookViewController {
                 s.shapeSnap.toggle()
                 self?.updateGestureAvailability()
             },
-            UIAction(title: "自製筆刷（不圓滑）", image: UIImage(systemName: "scribble"), state: s.customInk ? .on : .off) { [weak self] _ in
+            UIAction(title: "原子筆用自製筆刷（不圓滑）", image: UIImage(systemName: "scribble"), state: s.customInk ? .on : .off) { [weak self] _ in
                 s.customInk.toggle()
                 self?.applyTool()
-                self?.showToast(s.customInk ? "「筆」改用自製筆刷：照筆尖原始軌跡畫，不做圓滑" : "「筆」改回 PencilKit")
+                self?.showToast(s.customInk ? "原子筆改用自製筆刷：照筆尖原始軌跡畫，不做圓滑（其他筆照樣是 PencilKit）" : "原子筆改回 PencilKit")
             },
             UIAction(title: "連續放置元件", image: UIImage(systemName: "square.on.square"), state: s.circuitContinuousPlace ? .on : .off) { _ in
                 s.circuitContinuousPlace.toggle()

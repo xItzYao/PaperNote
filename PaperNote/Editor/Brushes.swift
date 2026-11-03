@@ -31,16 +31,25 @@ enum InkStyle: String, Codable, CaseIterable, Identifiable {
         }
     }
 
-    /// 筆工具列的「細、中、粗」
+    /// 筆工具列的「細、中、粗」（PencilKit 畫的筆不會比它畫得出來的最細值更細，見 pencilKitWidthRange）
     var styleWidths: [CGFloat] {
         switch self {
-        case .pen, .monoline: return [0.8, 2, 4]
-        case .fountainPen: return [1, 3, 6]
-        case .pencil: return [0.6, 1.2, 2.4]
+        case .monoline: return [0.8, 2, 4]
+        case .pen: return [1, 2.5, 5]
+        case .fountainPen: return [1.5, 4, 8]
+        case .pencil: return [2.4, 4, 8]
         case .marker: return [10, 18, 30]
-        case .crayon: return [3, 8, 16]
-        case .watercolor: return [4, 12, 24]
+        case .crayon: return [6, 12, 24]
+        case .watercolor: return [6, 16, 30]
         }
+    }
+
+    /// 自製筆刷只畫原子筆。其他筆要和 PencilKit 一模一樣（寫的時候、放開後都是），交給 PencilKit 畫
+    var usesCustomInk: Bool { self == .monoline }
+
+    /// 這種筆實際可以調的粗細（自製筆刷可以更細）
+    var usableWidthRange: ClosedRange<CGFloat> {
+        usesCustomInk && EditorSettings.shared.customInk ? widthRange : pencilKitWidthRange
     }
 
     /// 自製筆刷最細可以到多細
@@ -64,7 +73,7 @@ enum InkStyle: String, Codable, CaseIterable, Identifiable {
         return max(lower, widthRange.lowerBound)...widthRange.upperBound
     }
 
-    /// 自製筆刷的質感（鉛筆、蠟筆、水彩）；其他筆是不透明的實線，差別在線寬怎麼變（見 inkWidth）
+    /// 之前自製筆刷畫的鉛筆、蠟筆、水彩的質感。現在這些筆交給 PencilKit 畫，已經存下來的筆跡照這個畫
     var look: InkLook? {
         switch self {
         case .pencil: return InkLook(alpha: 0.55, grain: 0.55, gapRatio: 0.7)
@@ -74,51 +83,12 @@ enum InkStyle: String, Codable, CaseIterable, Identifiable {
         }
     }
 
-    /// 自製筆刷這一點的線寬。direction：筆尖移動的方向（弧度，剛下筆是 nil）；previous：上一點的線寬，線寬慢慢變才不會一節一節。
-    /// - 原子筆、鉛筆、蠟筆：固定粗細
-    /// - 鋼筆：斜的筆尖，往右下（/ 的垂直方向）粗、順著 / 寫細，不看筆壓，線尾不會變細
-    /// - 毛筆／沾水筆：筆壓決定粗細，差很多
-    /// - 水彩：筆壓影響一點
-    func inkWidth(base: CGFloat, force: CGFloat, direction: CGFloat?, previous: CGFloat?) -> CGFloat {
-        let target: CGFloat
-        switch self {
-        case .pen:
-            target = base * (direction.map { 0.55 + 0.6 * abs(sin($0 - .pi / 4 * 3)) } ?? 0.85)
-        case .fountainPen:
-            target = base * (0.3 + 1.4 * force)
-        case .watercolor:
-            target = base * (0.8 + 0.5 * force)
-        case .monoline, .pencil, .marker, .crayon:
-            return base
-        }
-        guard let previous else { return target }
-        return previous + (target - previous) * 0.35
-    }
-
-    /// 毛筆提筆：最後幾點慢慢收細
-    static func taperedEnd(_ points: [InkPoint]) -> [InkPoint] {
-        guard points.count > 3 else { return points }
-        let n = min(10, points.count / 3)
-        var out = points
-        for k in 0..<n {
-            let i = points.count - 1 - k
-            let f = 0.3 + 0.7 * CGFloat(k) / CGFloat(n)
-            out[i] = InkPoint(points[i].point, width: points[i].width * f)
-        }
-        return out
-    }
-
-    /// 預覽用的一筆：照這種筆真正寫出來的方式算線寬
-    func sampleStroke(colorHex: String, width: CGFloat, in size: CGSize) -> InkStroke {
-        var points: [InkPoint] = []
-        for i in 0...60 {
+    /// 預覽用的一筆的形狀
+    static func samplePath(in size: CGSize) -> [CGPoint] {
+        (0...60).map { i in
             let t = CGFloat(i) / 60
-            let p = CGPoint(x: 12 + (size.width - 24) * t, y: size.height / 2 - sin(t * .pi * 2) * size.height * 0.28)
-            let last = points.last
-            let direction = last.map { atan2(p.y - $0.point.y, p.x - $0.point.x) }
-            points.append(InkPoint(p, width: inkWidth(base: width, force: 0.15 + 0.7 * sin(t * .pi), direction: direction, previous: last?.width)))
+            return CGPoint(x: 12 + (size.width - 24) * t, y: size.height / 2 - sin(t * .pi * 2) * size.height * 0.28)
         }
-        return InkStroke(colorHex: colorHex, points: points, style: look == nil ? nil : self)
     }
 }
 
@@ -420,10 +390,18 @@ private struct StrokePreview: View {
     let preset: BrushPreset
     var body: some View {
         Canvas { ctx, size in
-            // 筆：照自製筆刷真正畫出來的樣子，看得出每種筆的差別
+            // 筆：和真正寫出來的一樣（原子筆用自製筆刷畫，其他筆是 PencilKit 畫）
             if preset.style != .marker {
-                let stroke = preset.style.sampleStroke(colorHex: preset.colorHex, width: preset.width, in: size)
-                ctx.withCGContext { InkRenderer.draw([stroke], in: $0) }
+                let path = InkStyle.samplePath(in: size)
+                if preset.style.usesCustomInk && EditorSettings.shared.customInk {
+                    let stroke = InkStroke(colorHex: preset.colorHex, points: path.map { InkPoint($0, width: preset.width) })
+                    ctx.withCGContext { InkRenderer.draw([stroke], in: $0) }
+                } else {
+                    let tool = preset.tool
+                    let stroke = ShapeRecognizer.makeStroke(points: path, ink: tool.ink, width: tool.width, sample: nil)
+                    let rect = CGRect(origin: .zero, size: size)
+                    ctx.draw(Image(uiImage: PKDrawing(strokes: [stroke]).image(from: rect, scale: ctx.environment.displayScale)), in: rect)
+                }
                 return
             }
             var path = Path()

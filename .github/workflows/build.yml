@@ -67,6 +67,15 @@ jobs:
           name: test-log
           path: test.log
 
+      # PencilKitInkStudy 畫出來的 PencilKit 筆跡（自製引擎照著調）
+      - name: Upload PencilKit ink study
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ink-study
+          path: ~/ink-study
+          if-no-files-found: ignore
+
   build:
     runs-on: macos-15
     timeout-minutes: 40

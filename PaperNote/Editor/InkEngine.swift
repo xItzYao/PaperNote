@@ -892,8 +892,8 @@ struct InkDraft {
 }
 
 extension NotebookViewController {
-    /// 「筆」工具目前用自製筆刷
-    var customInkActive: Bool { tool == .pen && settings.customInk }
+    /// 「筆」工具目前用自製筆刷（只有原子筆，見 InkStyle.usesCustomInk）
+    var customInkActive: Bool { tool == .pen && settings.customInk && BrushStore.shared.current.style.usesCustomInk }
 
     func setupInkCapture() {
         inkRecognizer.coordinateView = pagesContainer
@@ -913,14 +913,6 @@ extension NotebookViewController {
         ])
     }
 
-    /// 這一點的線寬（每種筆不一樣，見 InkStyle.inkWidth）
-    private func inkWidth(_ draft: InkDraft, force: CGFloat, at p: CGPoint, after previous: InkPoint?) -> CGFloat {
-        let direction = previous.flatMap { q -> CGFloat? in
-            hypot(p.x - q.point.x, p.y - q.point.y) > 0.2 ? atan2(p.y - q.point.y, p.x - q.point.x) : nil
-        }
-        return draft.style.inkWidth(base: draft.baseWidth, force: force, direction: direction, previous: previous?.width)
-    }
-
     private func screen(_ p: CGPoint) -> CGPoint { pagesContainer.convert(p, to: liveInkView) }
 
     func inkBegan(_ s: InkCaptureRecognizer.Sample) {
@@ -929,7 +921,7 @@ extension NotebookViewController {
         let preset = BrushStore.shared.current
         var d = InkDraft(points: [], colorHex: preset.colorHex, baseWidth: max(preset.width, 0.1),
                          style: preset.style, dashPreset: preset.isDashed ? preset : nil)
-        let w = inkWidth(d, force: s.force, at: s.point, after: nil)
+        let w = d.baseWidth
         d.points = [InkPoint(s.point, width: w)]
         if let u = s.updateIndex { d.pendingUpdates[u] = 0 }
         inkDraft = d
@@ -995,7 +987,7 @@ extension NotebookViewController {
         for s in new {
             // 跟上一點完全重疊的不記（不是圓滑，只是去掉重複點）
             if let last = d.points.last, s.updateIndex == nil, hypot(last.point.x - s.point.x, last.point.y - s.point.y) < 0.05 { continue }
-            let w = inkWidth(d, force: s.force, at: s.point, after: d.points.last)
+            let w = d.baseWidth
             if let u = s.updateIndex { d.pendingUpdates[u] = d.points.count }
             d.points.append(InkPoint(s.point, width: w))
             added.append((screen(s.point), w * z))
@@ -1009,7 +1001,7 @@ extension NotebookViewController {
     /// Pencil 補上了準確的位置／筆壓：換掉之前的估計值
     func inkUpdated(_ s: InkCaptureRecognizer.Sample) {
         guard var d = inkDraft, d.shape == nil, let u = s.updateIndex, let i = d.pendingUpdates[u], d.points.indices.contains(i) else { return }
-        let w = inkWidth(d, force: s.force, at: s.point, after: i > 0 ? d.points[i - 1] : nil)
+        let w = d.baseWidth
         d.points[i] = InkPoint(s.point, width: w)
         inkDraft = d
         liveInkView.replace(i, with: (screen(s.point), w * canvas.zoomScale))
@@ -1024,8 +1016,6 @@ extension NotebookViewController {
         if let s = d.shape, !s.points.isEmpty {
             let w = shapeWidth(d)
             d.points = s.points.map { InkPoint($0, width: w) }
-        } else if d.style == .fountainPen {
-            d.points = InkStyle.taperedEnd(d.points)
         }
         guard let first = d.points.first else { liveInkView.clear(); return }
         // 整筆放在起點所在的那一頁（頁面內容座標）

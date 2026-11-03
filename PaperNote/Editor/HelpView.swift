@@ -10,7 +10,7 @@ struct HelpView: View {
     }
 
     private let tools: [Item] = [
-        Item(symbol: "pencil.tip", title: "筆", detail: "第二列切換常用筆刷、粗細、虛線；每種筆寫起來不一樣（鋼筆有斜筆尖、毛筆看筆壓、鉛筆和蠟筆有顆粒、水彩透明）。管理常用筆刷裡可以把喜歡的顏色加進色票。筆尖停住約 0.5 秒會變直線或修正成圖形。"),
+        Item(symbol: "pencil.tip", title: "筆", detail: "第二列切換常用筆刷、粗細、虛線；原子筆用自製筆刷（照筆尖原始軌跡、不做圓滑），鋼筆、毛筆、鉛筆、蠟筆、水彩和 PencilKit 一樣。管理常用筆刷裡可以把喜歡的顏色加進色票。筆尖停住約 0.5 秒會變直線或修正成圖形。"),
         Item(symbol: "highlighter", title: "螢光筆", detail: "畫在 PDF 文字上會自動對齊文字。"),
         Item(symbol: "eraser", title: "橡皮擦", detail: "Pencil 筆身點兩下切換橡皮擦。表格、圖片不會被擦掉。"),
         Item(symbol: "lasso", title: "套索", detail: "圈起來可以移動、改顏色、拷貝、刪除。表格要整個圈到才會選到；圖片、電路圖圈到一部分就算，不想被圈到就點鎖頭鎖起來。"),

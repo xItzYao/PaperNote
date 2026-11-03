@@ -180,7 +180,7 @@ struct FolderView: View {
     @State private var showBatchMove = false
     @Environment(\.dismiss) private var dismissFolder
     @Environment(\.horizontalSizeClass) private var hSize
-    @AppStorage("library.viewMode") private var viewMode = "grid"
+    @AppStorage("library.viewMode") private var viewMode = "list"
     @AppStorage("library.sort") private var sortMode = "modified"
 
     private let columns = [GridItem(.adaptive(minimum: 160, maximum: 220), spacing: 28)]
@@ -835,9 +835,11 @@ struct NotebookCell: View {
     var body: some View {
         VStack(spacing: 8) {
             ZStack(alignment: .topTrailing) {
-                cover
+                // 格子的大小由外框決定，封面填滿後裁掉多的：橫向的封面圖比較寬，直接放的話會把格子撐寬、蓋到隔壁
+                Color.clear
                     .frame(height: 210)
                     .frame(maxWidth: .infinity)
+                    .overlay { cover }
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .shadow(color: .black.opacity(0.18), radius: 4, y: 2)
                 if !meta.favorites.isEmpty {
