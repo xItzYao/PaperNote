@@ -307,6 +307,8 @@ final class BrushStore {
 struct BrushSettingsView: View {
     @State var preset: BrushPreset
     let onChange: (BrushPreset) -> Void
+    /// 刪除這支筆刷；nil＝不能刪（這一類只剩這一支）
+    var onDelete: (() -> Void)? = nil
 
     static let swatches = ["#1A1A1AFF", "#555555FF", "#1E5BD8FF", "#0F8A7EFF", "#2E7D32FF", "#D32F2FFF",
                            "#E65100FF", "#8E24AAFF", "#FFE14DFF", "#8BE38BFF", "#FF9EC4FF", "#8FD3FFFF"]
@@ -373,6 +375,11 @@ struct BrushSettingsView: View {
                 Section("預覽") {
                     StrokePreview(preset: preset)
                         .frame(height: 44)
+                }
+            }
+            if let onDelete {
+                Section {
+                    Button("刪除這支筆刷", systemImage: "trash", role: .destructive, action: onDelete)
                 }
             }
         }

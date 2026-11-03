@@ -99,7 +99,7 @@ final class EditorSettings {
     }
     /// Apple Pencil 筆身點兩下時，在筆尖旁顯示調色盤小圖示
     var paletteOnDoubleTap: Bool {
-        get { bool("paletteOnDoubleTap", true) }
+        get { bool("paletteOnDoubleTap", false) }
         set { d.set(newValue, forKey: "paletteOnDoubleTap") }
     }
     /// 手掌防誤觸："right"（右手寫字）、"left"（左手寫字）、"off"
@@ -112,6 +112,12 @@ final class EditorSettings {
         set { d.set(newValue, forKey: "captureFreeform") }
     }
     /// 「筆」用自製筆刷（照原始取樣點畫，不圓滑；見 InkEngine.swift）。預設打開，可以在「⋯」改回 PencilKit
+    /// Pencil Pro 按壓："palette"＝叫出調色盤；其他是工具列的工具（squeezeKey）
+    var squeezeAction: String {
+        get { d.string(forKey: "squeezeAction") ?? "palette" }
+        set { d.set(newValue, forKey: "squeezeAction") }
+    }
+    static func squeezeKey(_ t: EditorTool) -> String { String(describing: t) }
     var customInk: Bool {
         get { bool("customInk", true) }
         set { d.set(newValue, forKey: "customInk") }
@@ -148,6 +154,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     /// 這一次用 PencilKit 下筆（寫字、擦除）
     var strokeGesture: StrokeGesture?
     let pagesContainer = UIView()
+    /// 自製筆刷的筆跡：放在 PencilKit 筆跡（螢光筆）上面，螢光筆不會蓋住字。和 pagesContainer 一起縮放
+    let inkContainer = UIView()
     let overlay = OverlayView()
     let pinOverlay = PinOverlayView()
     let topBar = UIView()
@@ -158,6 +166,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var pageJumpField: UITextField?
     var toolButtons: [EditorTool: UIButton] = [:]
     var presetButtons: [UUID: UIButton] = [:]
+    weak var presetStrip: UIScrollView?
     /// 筆工具列的「細、中、粗」三個粗細按鈕與虛線開關
     var penWidthButtons: [UIButton] = []
     weak var penDashButton: UIButton?
@@ -179,6 +188,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var tool: EditorTool = .pen
     /// 切到橡皮擦之前的工具（Pencil 點兩下、擦完自動切回時用）
     var toolBeforeEraser: EditorTool = .pen
+    /// Pencil Pro 按壓切到某個工具之前的工具（再按一次切回來）
+    var toolBeforeSqueeze: EditorTool = .pen
     /// 自動切到選 PDF 文字之前的工具（選字不在工具列上，用完切回去）
     var toolBeforeTemporary: EditorTool?
 
@@ -421,6 +432,11 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         overlay.frame = .zero
         pagesContainer.addSubview(overlay)
         canvas.insertSubview(pagesContainer, at: 0)
+        inkContainer.backgroundColor = .clear
+        inkContainer.isUserInteractionEnabled = false
+        canvas.addSubview(inkContainer)
+        // 工具列的小視窗讓畫布的觸控穿過去（開著也能直接寫），所以碰一下頁面就關掉它
+        canvas.addGestureRecognizer(TouchDownRecognizer { [weak self] in self?.dismissToolPopover() })
 
         editMenu = UIEditMenuInteraction(delegate: self)
         canvas.addInteraction(editMenu)
@@ -594,8 +610,14 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             pagesContainer.bounds = CGRect(origin: .zero, size: docSize)
             pagesContainer.transform = CGAffineTransform(scaleX: z, y: z)
             pagesContainer.center = CGPoint(x: docSize.width * z / 2, y: docSize.height * z / 2)
+            inkContainer.transform = .identity
+            inkContainer.bounds = pagesContainer.bounds
+            inkContainer.transform = pagesContainer.transform
+            inkContainer.center = pagesContainer.center
             overlay.frame = CGRect(origin: .zero, size: docSize)
         }
+        // PencilKit 之後才加的 view 也要在筆跡底下
+        if canvas.subviews.last !== inkContainer { canvas.bringSubviewToFront(inkContainer) }
         overlay.lineScale = 1 / z
         let size = CGSize(width: docSize.width * z, height: docSize.height * z)
         if canvas.contentSize != size { canvas.contentSize = size }
@@ -644,12 +666,15 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
                 v.frame = pageFrames[i]
                 v.configure(page: page, session: session, contentScale: elementContentScale)
                 pagesContainer.insertSubview(v, belowSubview: overlay)
+                inkContainer.addSubview(v.inkView)
+                v.inkView.frame = v.frame
                 pageViews[page.id] = v
             }
             i += 1
         }
         for (id, v) in pageViews where !keep.contains(id) {
             v.removeFromSuperview()
+            v.inkView.removeFromSuperview()
             pageViews[id] = nil
         }
     }
@@ -658,6 +683,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         guard let page = pages[safe: i], let v = pageViews[page.id] else { return }
         v.frame = pageFrames[i]
         v.configure(page: page, session: session, contentScale: elementContentScale)
+        v.inkView.frame = v.frame
         updateSelectionChrome()
     }
 
@@ -788,7 +814,10 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         canvas.drawing = assembleDrawing()
         isApplyingDrawing = false
         history.removeAll()
-        for v in pageViews.values { v.removeFromSuperview() }
+        for v in pageViews.values {
+            v.removeFromSuperview()
+            v.inkView.removeFromSuperview()
+        }
         pageViews = [:]
         updateZoomLimits(resetZoom: false)
         canvas.zoomScale = min(max(canvas.zoomScale, canvas.minimumZoomScale), canvas.maximumZoomScale)
@@ -1009,6 +1038,23 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             drawing.strokes[drawing.strokes.count - 1] = straight
             setDrawing(drawing)
         }
+        if tool == .highlighter { keepHighlightsBelowInk() }
+    }
+
+    /// 螢光筆的筆跡排在其他 PencilKit 筆跡前面（畫在底下），字才不會被螢光筆蓋住
+    func keepHighlightsBelowInk() {
+        guard let sorted = Self.highlightsBelowInk(canvas.drawing.strokes) else { return }
+        var d = canvas.drawing
+        d.strokes = sorted
+        setDrawing(d)
+    }
+
+    /// 螢光筆排到最前面、其他順序不變；本來就排好了回傳 nil
+    static func highlightsBelowInk(_ strokes: [PKStroke]) -> [PKStroke]? {
+        let isHighlight = { (s: PKStroke) in s.ink.inkType == .marker }
+        guard let firstInk = strokes.firstIndex(where: { !isHighlight($0) }),
+              strokes[firstInk...].contains(where: isHighlight) else { return nil }
+        return strokes.filter(isHighlight) + strokes.filter { !isHighlight($0) }
     }
 
     /// 除錯紀錄：PencilKit 這一筆的取樣（墨水、點數、平均間隔，和平均挑的 8 個點的粗細、筆壓、傾斜、方位、透明度）。

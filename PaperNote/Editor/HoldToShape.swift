@@ -243,7 +243,10 @@ final class HoldToShapeController {
             d.strokes = HoldToShape.replacingHandStroke(in: d.strokes, countBefore: p.countBefore, with: lines)
             let w = line.path.first?.size.width ?? -1
             DebugLog.add("replace lines=\(lines.count) newStrokes=\(d.strokes.count) width=\(String(format: "%.2f", w)) ink=\(line.ink.inkType.rawValue)")
-            editor.setDrawingAddingStrokes(d, added: lines.count) { [weak self] in self?.clearPreview() }
+            editor.setDrawingAddingStrokes(d, added: lines.count) { [weak self, weak editor] in
+                self?.clearPreview()
+                editor?.keepHighlightsBelowInk()
+            }
         } else {
             clearPreview()
         }

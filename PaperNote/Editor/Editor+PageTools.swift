@@ -324,14 +324,28 @@ extension NotebookViewController: UIPencilInteractionDelegate {
         handlePencilDoubleTap(at: tap.hoverPose?.location)
     }
 
-    /// Apple Pencil Pro 擠壓 → 在筆尖位置叫出圓形筆盤
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
         guard squeeze.phase == .ended else { return }
+        handlePencilSqueeze(at: squeeze.hoverPose?.location)
+    }
+
+    /// Apple Pencil Pro 按壓：預設在筆尖位置叫出圓形筆盤；「⋯」可以改成切到工具列的某個工具（再按一次切回來）
+    func handlePencilSqueeze(at hover: CGPoint?) {
         if paletteOverlay != nil {
             dismissPalette()
             return
         }
-        showPaletteLauncher(at: squeeze.hoverPose?.location, open: true)
+        guard let target = Self.toolbarTools.first(where: { EditorSettings.squeezeKey($0.0) == settings.squeezeAction })?.0 else {
+            showPaletteLauncher(at: hover, open: true)
+            return
+        }
+        guard !previewMode else { return }
+        if tool == target {
+            setTool(toolBeforeSqueeze == target ? .pen : toolBeforeSqueeze)
+        } else {
+            toolBeforeSqueeze = tool
+            setTool(target)
+        }
     }
 
     /// Apple Pencil 筆身點兩下：切換橡皮擦，同時在筆尖旁出現調色盤小圖示（點了才打開）

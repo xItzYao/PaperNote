@@ -98,20 +98,9 @@ extension NotebookViewController {
         left.alignment = .center
 
         // 中：工具
-        let tools: [(EditorTool, String, String)] = [
-            (.pen, "pencil.tip", "筆"),
-            (.highlighter, "highlighter", "螢光筆"),
-            (.eraser, "eraser", "橡皮擦"),
-            (.lasso, "lasso", "套索"),
-            (.capture, "camera.viewfinder", "截圖"),
-            (.select, "hand.point.up.left", "選取"),
-            (.image, "photo", "圖片"),
-            (.pageResize, "arrow.up.left.and.arrow.down.right", "擴展"),
-            (.circuit, "bolt", "電路"),
-        ]
         let center = UIStackView()
         center.spacing = 4
-        for (t, symbol, label) in tools {
+        for (t, symbol, label) in Self.toolbarTools {
             let b = makeButton(symbol: symbol, title: nil, action: nil)
             b.accessibilityLabel = label
             b.addAction(UIAction { [weak self] _ in self?.setTool(t) }, for: .touchUpInside)
@@ -202,6 +191,19 @@ extension NotebookViewController {
             subBarStack.trailingAnchor.constraint(lessThanOrEqualTo: pageLabel.leadingAnchor, constant: -12),
         ])
     }
+
+    /// 工具列中間的工具（Pencil Pro 按壓也從這裡選）
+    static let toolbarTools: [(EditorTool, String, String)] = [
+        (.pen, "pencil.tip", "筆"),
+        (.highlighter, "highlighter", "螢光筆"),
+        (.eraser, "eraser", "橡皮擦"),
+        (.lasso, "lasso", "套索"),
+        (.capture, "camera.viewfinder", "截圖"),
+        (.select, "hand.point.up.left", "選取"),
+        (.image, "photo", "圖片"),
+        (.pageResize, "arrow.up.left.and.arrow.down.right", "擴展"),
+        (.circuit, "bolt", "電路"),
+    ]
 
     static var pageLabelWidth: CGFloat {
         let font = UIFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
@@ -347,6 +349,7 @@ extension NotebookViewController {
             }
         }
         rebuildSubBar()
+        scrollCurrentPresetIntoView()
     }
 
     /// 筆用自製筆刷還是 PencilKit 畫（看工具和目前的筆型）：換筆、改筆型後也要重新設定
@@ -366,17 +369,17 @@ extension NotebookViewController {
         penWidthButtons = []
         switch tool {
         case .pen, .highlighter:
-            for p in BrushStore.shared.presets {
-                let b = UIButton(type: .custom)
-                b.setImage(presetImage(p, selected: p.id == BrushStore.shared.currentID), for: .normal)
-                b.widthAnchor.constraint(equalToConstant: 36).isActive = true
-                b.heightAnchor.constraint(equalToConstant: 36).isActive = true
-                b.accessibilityLabel = p.style.title
-                b.addAction(UIAction { [weak self] _ in self?.selectPreset(p.id) }, for: .touchUpInside)
-                b.menu = presetMenu(p.id, source: b)
-                presetButtons[p.id] = b
-                subBarStack.addArrangedSubview(b)
-            }
+            subBarStack.addArrangedSubview(makePresetStrip())
+            // 新增緊接在常用筆刷的右邊
+            let add = makeButton(symbol: "plus", title: nil, action: nil)
+            add.accessibilityLabel = "新增常用筆刷"
+            add.addAction(UIAction { [weak self] _ in
+                guard let self else { return }
+                let p = BrushStore.shared.add(basedOn: BrushStore.shared.current)
+                self.applyTool()
+                if let b = self.presetButtons[p.id] { self.presentBrushSettings(p, from: b) }
+            }, for: .touchUpInside)
+            subBarStack.addArrangedSubview(add)
             if tool == .pen {
                 subBarStack.addArrangedSubview(toolbarSeparator())
                 for v in penStyleControls() { subBarStack.addArrangedSubview(v) }
@@ -392,14 +395,6 @@ extension NotebookViewController {
                 subBarStack.addArrangedSubview(toolbarSeparator())
                 for v in penStyleControls(dash: false) { subBarStack.addArrangedSubview(v) }
             }
-            let add = makeButton(symbol: "plus", title: nil, action: nil)
-            add.accessibilityLabel = "新增常用筆刷"
-            add.addAction(UIAction { [weak self] _ in
-                guard let self else { return }
-                let p = BrushStore.shared.add(basedOn: BrushStore.shared.current)
-                self.applyTool()
-                if let b = self.presetButtons[p.id] { self.presentBrushSettings(p, from: b) }
-            }, for: .touchUpInside)
             let edit = makeButton(symbol: "slider.horizontal.3", title: nil, action: nil)
             edit.accessibilityLabel = "調整筆刷"
             edit.addAction(UIAction { [weak self, weak edit] _ in
@@ -409,7 +404,6 @@ extension NotebookViewController {
             let ruler = makeButton(symbol: "ruler", title: nil, action: nil)
             ruler.accessibilityLabel = "尺規"
             ruler.addAction(UIAction { [weak self] _ in self?.canvas.isRulerActive.toggle() }, for: .touchUpInside)
-            subBarStack.addArrangedSubview(add)
             subBarStack.addArrangedSubview(edit)
             subBarStack.addArrangedSubview(ruler)
 
@@ -600,6 +594,49 @@ extension NotebookViewController {
         setCanvasTool(BrushStore.shared.current.tool)
         applyInkEngine()
         refreshPresetButtons()
+    }
+
+    /// 常用筆刷（沒有數量上限）：放不下的時候左右捲動，不會把第二列撐出畫面
+    func makePresetStrip() -> UIScrollView {
+        let stack = UIStackView()
+        stack.spacing = 8
+        stack.alignment = .center
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        for p in BrushStore.shared.presets {
+            let b = UIButton(type: .custom)
+            b.setImage(presetImage(p, selected: p.id == BrushStore.shared.currentID), for: .normal)
+            b.widthAnchor.constraint(equalToConstant: 36).isActive = true
+            b.heightAnchor.constraint(equalToConstant: 36).isActive = true
+            b.accessibilityLabel = p.style.title
+            b.addAction(UIAction { [weak self] _ in self?.selectPreset(p.id) }, for: .touchUpInside)
+            b.menu = presetMenu(p.id, source: b)
+            presetButtons[p.id] = b
+            stack.addArrangedSubview(b)
+        }
+        let strip = UIScrollView()
+        strip.showsHorizontalScrollIndicator = false
+        strip.addSubview(stack)
+        // 放得下就和筆刷一樣寬；比置中還優先（放不下時第二列先往旁邊移，再不夠才捲動）
+        let fit = strip.widthAnchor.constraint(equalTo: stack.widthAnchor)
+        fit.priority = UILayoutPriority(UILayoutPriority.defaultHigh.rawValue + 1)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: strip.contentLayoutGuide.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: strip.contentLayoutGuide.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: strip.contentLayoutGuide.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: strip.contentLayoutGuide.bottomAnchor),
+            stack.heightAnchor.constraint(equalTo: strip.frameLayoutGuide.heightAnchor),
+            strip.heightAnchor.constraint(equalToConstant: 36),
+            fit,
+        ])
+        presetStrip = strip
+        return strip
+    }
+
+    /// 目前的筆刷捲到看得到的地方（剛新增的在最後面）
+    func scrollCurrentPresetIntoView() {
+        guard let strip = presetStrip, let b = presetButtons[BrushStore.shared.currentID] else { return }
+        subBar.layoutIfNeeded()
+        strip.scrollRectToVisible(b.convert(b.bounds, to: strip).insetBy(dx: -8, dy: 0), animated: false)
     }
 
     func refreshPresetButtons() {
@@ -824,7 +861,7 @@ extension NotebookViewController {
     }
 
     func presentBrushSettings(_ preset: BrushPreset, from source: UIView) {
-        let view = BrushSettingsView(preset: preset) { [weak self] p in
+        var view = BrushSettingsView(preset: preset) { [weak self] p in
             BrushStore.shared.update(p)
             if BrushStore.shared.currentID == p.id {
                 self?.setCanvasTool(BrushStore.shared.current.tool)
@@ -832,6 +869,14 @@ extension NotebookViewController {
                 self?.applyInkEngine()
             }
             self?.refreshPresetButtons()
+        }
+        // 每一類至少留一支
+        if BrushStore.shared.presets(preset.category).count > 1 {
+            view.onDelete = { [weak self] in
+                self?.dismissToolPopover()
+                BrushStore.shared.remove(preset.id)
+                self?.applyTool()
+            }
         }
         presentToolPopover(UIHostingController(rootView: view), from: source, size: CGSize(width: 340, height: 460))
     }
@@ -926,6 +971,19 @@ extension NotebookViewController {
         return items
     }
 
+    /// Pencil Pro 按壓：調色盤，或工具列的某個工具
+    func squeezeMenuItems() -> [UIMenuElement] {
+        let s = settings
+        let palette = UIAction(title: "調色盤", image: UIImage(systemName: "paintpalette"),
+                               state: s.squeezeAction == "palette" ? .on : .off) { _ in s.squeezeAction = "palette" }
+        let tools: [UIMenuElement] = Self.toolbarTools.map { item in
+            let key = EditorSettings.squeezeKey(item.0)
+            return UIAction(title: item.2, image: UIImage(systemName: item.1),
+                            state: s.squeezeAction == key ? .on : .off) { _ in s.squeezeAction = key }
+        }
+        return [palette] + tools
+    }
+
     /// 常用筆刷列靠左或靠右
     func makeSettingsMenuItems() -> [UIMenuElement] {
         let s = settings
@@ -933,6 +991,7 @@ extension NotebookViewController {
             UIAction(title: "Pencil 點兩下時顯示調色盤圖示", image: UIImage(systemName: "paintpalette"), state: s.paletteOnDoubleTap ? .on : .off) { _ in
                 s.paletteOnDoubleTap.toggle()
             },
+            UIMenu(title: "Pencil Pro 按壓", image: UIImage(systemName: "hand.pinch"), children: squeezeMenuItems()),
             UIMenu(title: "手掌防誤觸", image: UIImage(systemName: "hand.raised"), children: [
                 UIAction(title: "右手寫字", state: s.palmRejection == "right" ? .on : .off) { _ in s.palmRejection = "right" },
                 UIAction(title: "左手寫字", state: s.palmRejection == "left" ? .on : .off) { _ in s.palmRejection = "left" },
@@ -1207,5 +1266,23 @@ private struct DashPreview: View {
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.white))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.3)))
         .environment(\.colorScheme, .light)
+    }
+}
+
+/// 手指或筆一碰到就通知一次，然後放棄（不擋其他手勢、不延遲觸控）
+final class TouchDownRecognizer: UIGestureRecognizer {
+    private let onTouch: () -> Void
+
+    init(_ onTouch: @escaping () -> Void) {
+        self.onTouch = onTouch
+        super.init(target: nil, action: nil)
+        cancelsTouchesInView = false
+        delaysTouchesBegan = false
+        delaysTouchesEnded = false
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        onTouch()
+        state = .failed
     }
 }

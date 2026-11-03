@@ -124,12 +124,13 @@ enum PageRenderer {
         ctx.saveGState()
         ctx.translateBy(x: page.insets.left, y: page.insets.top)
         drawElements(page.elements, image: image, in: ctx)
-        InkRenderer.draw(page.ink, in: ctx)
         if let drawing, !drawing.strokes.isEmpty {
             let rect = CGRect(x: -page.insets.left, y: -page.insets.top, width: snap.fullSize.width, height: snap.fullSize.height)
             let img = inkImage(drawing, rect: rect, scale: inkScale)
             img.draw(in: rect)
         }
+        // 自製筆刷在 PencilKit 筆跡（螢光筆）上面，和畫面上一樣
+        InkRenderer.draw(page.ink, in: ctx)
         ctx.restoreGState()
     }
 

@@ -1257,10 +1257,16 @@ extension NotebookViewController {
                 ctx.saveGState()
                 ctx.translateBy(x: f.minX, y: f.minY)
                 PageRenderer.drawPageWithoutInk(pages[i], session: session, in: ctx)
-                PageRenderer.drawCustomInk(pages[i], in: ctx)
                 ctx.restoreGState()
             }
             ink.draw(in: rect)
+            // 自製筆刷在 PencilKit 筆跡（螢光筆）上面，和畫面上一樣
+            for (i, f) in pageFrames.enumerated() where f.intersects(rect) {
+                ctx.saveGState()
+                ctx.translateBy(x: f.minX, y: f.minY)
+                PageRenderer.drawCustomInk(pages[i], in: ctx)
+                ctx.restoreGState()
+            }
         }
     }
 }
