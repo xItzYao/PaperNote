@@ -6,7 +6,7 @@ import PencilKit
 
 /// 回報的需求：
 /// - 電路圖「連續放置元件」：沒勾的話放完回到選取
-/// - 自訂元件：Node、筆刷畫符號
+/// - 自訂元件：線條、筆刷畫符號，或貼上 AI 產生的 JSON
 /// - 每種筆寫起來一樣、只有粗細不同；筆芯要能更細（鉛筆最細只到 2.4pt）
 /// - 喜歡的顏色加進固定的 12 色
 /// - 文字框有更多字體可以選（沒有版權問題的）
@@ -96,35 +96,52 @@ final class PenFontSymbolTests: XCTestCase {
                       pins: [CGPoint(x: -30, y: 0), CGPoint(x: 30, y: -20)])
     }
 
-    func testNodeToolDrawsStraightLinesOnTheGrid() {
+    func testLineToolSnapsBothEndsToTheGrid() {
         var d = CircuitSymbolDraft()
-        d.tapNode(at: CGPoint(x: 1, y: 2))
-        d.tapNode(at: CGPoint(x: 42, y: -1))
-        d.tapNode(at: CGPoint(x: 41, y: 38))
-        XCTAssertEqual(d.symbol.strokes.first?.points, [.zero, CGPoint(x: 40, y: 0), CGPoint(x: 40, y: 40)], "對齊格點、連成線")
-        XCTAssertNotNil(d.openLine)
+        d.beginLine(at: CGPoint(x: 1, y: 2))
+        d.moveLine(to: CGPoint(x: 23, y: -1))
+        XCTAssertEqual(d.symbol.strokes.first?.points, [.zero, CGPoint(x: 20, y: 0)], "拖的時候終點就吸到格點")
+        d.endLine(at: CGPoint(x: 42, y: -1))
+        XCTAssertEqual(d.symbol.strokes.first?.points, [.zero, CGPoint(x: 40, y: 0)], "兩端都在格點上")
+        XCTAssertNil(d.drawingLine)
 
-        d.tapNode(at: CGPoint(x: 40, y: 40))
-        XCTAssertNil(d.openLine, "點最後一個節點：結束")
-        d.tapNode(at: CGPoint(x: 100, y: 100))
-        XCTAssertEqual(d.symbol.strokes.count, 2, "再點是新的一條")
-        d.finishLine()
-        XCTAssertEqual(d.symbol.strokes.count, 1, "只有一個節點不算一條線")
+        // 從端點接著畫：連在一起
+        d.beginLine(at: CGPoint(x: 38, y: 3))
+        d.endLine(at: CGPoint(x: 41, y: 38))
+        XCTAssertEqual(d.symbol.strokes[1].points, [CGPoint(x: 40, y: 0), CGPoint(x: 40, y: 40)])
+        XCTAssertFalse(d.symbol.strokes[1].freehand)
 
-        // 封閉
-        var box = CircuitSymbolDraft()
-        for p in [CGPoint.zero, CGPoint(x: 40, y: 0), CGPoint(x: 40, y: 40), .zero] { box.tapNode(at: p) }
-        XCTAssertNil(box.openLine)
-        XCTAssertEqual(box.symbol.strokes[0].points.first, box.symbol.strokes[0].points.last)
-        // 封閉的線：頭尾一起動
-        let hit = box.nodeHit(at: CGPoint(x: 1, y: 1), tolerance: 5)
-        XCTAssertEqual(hit?.stroke, 0)
-        box.beginMovingNode()
-        box.moveNode(stroke: 0, point: hit?.point ?? 0, to: CGPoint(x: -18, y: -21))
-        XCTAssertEqual(box.symbol.strokes[0].points.first, CGPoint(x: -20, y: -20))
-        XCTAssertEqual(box.symbol.strokes[0].points.last, CGPoint(x: -20, y: -20))
-        box.undo()
-        XCTAssertEqual(box.symbol.strokes[0].points.first, .zero, "可以復原")
+        // 兩端吸到同一個格點：不算一條線，也不算一步
+        d.beginLine(at: CGPoint(x: 100, y: 100))
+        d.endLine(at: CGPoint(x: 102, y: 98))
+        XCTAssertEqual(d.symbol.strokes.count, 2)
+        d.undo()
+        XCTAssertEqual(d.symbol.strokes.count, 1, "復原的是上一條線")
+    }
+
+    func testHoldingTheBrushMakesAPerfectShape() {
+        // 停住：歪歪的線變直線，之後終點跟著筆尖（接近水平就拉正）
+        var d = CircuitSymbolDraft()
+        d.beginBrush(at: .zero)
+        for i in 1...25 { d.continueBrush(to: CGPoint(x: CGFloat(i) * 2, y: CGFloat(i % 3) * 0.6)) }
+        XCTAssertEqual(d.holdBrush(scale: 3), .line)
+        XCTAssertEqual(d.symbol.strokes[0].points, [.zero, CGPoint(x: 50, y: 0)], "變成直線")
+        d.moveHeldLine(to: CGPoint(x: 80, y: 40))
+        XCTAssertEqual(d.symbol.strokes[0].points, [.zero, CGPoint(x: 80, y: 40)], "終點跟著筆尖")
+        d.endBrush()
+        XCTAssertEqual(d.symbol.strokes[0].points.count, 2)
+
+        // 封閉的圖形：修成圓
+        var c = CircuitSymbolDraft()
+        let circle = (0...40).map { i -> CGPoint in
+            let t = CGFloat(i) / 40 * 2 * .pi
+            return CGPoint(x: 20 * cos(t) + (i % 2 == 0 ? 0.8 : -0.8), y: 20 * sin(t))
+        }
+        c.beginBrush(at: circle[0])
+        for p in circle.dropFirst() { c.continueBrush(to: p) }
+        XCTAssertEqual(c.holdBrush(scale: 3), .closed)
+        let r = c.symbol.strokes[0].points.map { hypot($0.x, $0.y) }
+        XCTAssertLessThan((r.max() ?? 0) - (r.min() ?? 0), 2, "修成正圓：\(r)")
     }
 
     func testBrushKeepsTheShapeWithFewerPoints() {
@@ -153,9 +170,8 @@ final class PenFontSymbolTests: XCTestCase {
         d.togglePin(at: CGPoint(x: 19, y: 22))
         XCTAssertTrue(d.symbol.pins.isEmpty, "再點拿掉")
         d.togglePin(at: CGPoint(x: 20, y: 20))
-        d.tapNode(at: CGPoint(x: -40, y: 0))
-        d.tapNode(at: CGPoint(x: 40, y: 0))
-        d.finishLine()
+        d.beginLine(at: CGPoint(x: -40, y: 0))
+        d.endLine(at: CGPoint(x: 40, y: 0))
         XCTAssertFalse(d.erase(at: CGPoint(x: 0, y: 15), tolerance: 5))
         XCTAssertTrue(d.erase(at: CGPoint(x: 0, y: 2), tolerance: 5), "線上任何地方都擦得到")
         XCTAssertTrue(d.symbol.strokes.isEmpty)
@@ -166,8 +182,8 @@ final class PenFontSymbolTests: XCTestCase {
     func testFinishedSymbolIsCenteredWithPinsOnTheGrid() throws {
         var d = CircuitSymbolDraft()
         XCTAssertNil(d.finished(), "什麼都沒畫")
-        d.tapNode(at: CGPoint(x: 100, y: 100))
-        d.tapNode(at: CGPoint(x: 170, y: 100))
+        d.beginLine(at: CGPoint(x: 100, y: 100))
+        d.endLine(at: CGPoint(x: 170, y: 100))
         XCTAssertNil(d.finished(), "沒有接腳不能完成：導線接不上去")
         d.togglePin(at: CGPoint(x: 100, y: 100))
         d.togglePin(at: CGPoint(x: 170, y: 100))
@@ -185,8 +201,10 @@ final class PenFontSymbolTests: XCTestCase {
         let vc = CircuitSymbolEditorViewController(name: "", symbol: nil) { _, s in saved = s }
         window.rootViewController = vc
         vc.loadViewIfNeeded()
-        vc.handleTap(at: .zero)
-        vc.handleTap(at: CGPoint(x: 40, y: 0))
+        XCTAssertEqual(vc.tool, .line, "一開始是線條")
+        vc.handlePan(.began, at: .zero)
+        vc.handlePan(.changed, at: CGPoint(x: 20, y: 1))
+        vc.handlePan(.ended, at: CGPoint(x: 40, y: 0))
         vc.finish()
         RunLoop.main.run(until: Date().addingTimeInterval(0.2))
         XCTAssertNil(saved)
@@ -208,6 +226,93 @@ final class PenFontSymbolTests: XCTestCase {
         vc.finish()
         XCTAssertEqual(saved?.strokes.count, 2)
         XCTAssertEqual(saved?.pins.count, 2)
+    }
+
+    /// 筆身點兩下、Pencil Pro 按壓：畫元件裡切換它自己的橡皮擦，筆記本的工具不跟著切
+    func testPencilTogglesTheSymbolEditorsEraser() throws {
+        let vc = CircuitSymbolEditorViewController(name: "", symbol: nil) { _, _ in }
+        vc.loadViewIfNeeded()
+        XCTAssertTrue(vc.view.interactions.contains { $0 is UIPencilInteraction }, "畫元件自己接 Pencil 的點兩下、按壓")
+        vc.setTool(.brush)
+        vc.toggleEraser()
+        XCTAssertEqual(vc.tool, .eraser)
+        vc.toggleEraser()
+        XCTAssertEqual(vc.tool, .brush, "再切回原本的工具")
+
+        editor.setTool(.circuit)
+        XCTAssertFalse(editor.pencilActionsGoElsewhere)
+        editor.presentSymbolEditor()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.6))
+        XCTAssertTrue(editor.pencilActionsGoElsewhere, "畫元件開著：筆記本不處理 Pencil 點兩下、按壓")
+        editor.dismiss(animated: false)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+    }
+
+    // MARK: JSON（AI 產生的自訂元件）
+
+    /// 說明裡的範例要能直接貼上
+    func testTheAIPromptExampleImports() throws {
+        let prompt = CircuitSymbolJSON.aiPrompt
+        let start = try XCTUnwrap(prompt.range(of: "```json\n", options: .backwards))
+        let end = try XCTUnwrap(prompt.range(of: "```", range: start.upperBound..<prompt.endIndex))
+        let file = try CircuitSymbolJSON.parse(String(prompt[start.upperBound..<end.lowerBound]))
+        XCTAssertEqual(file.name, "電阻")
+        XCTAssertEqual(file.symbol.pins, [CGPoint(x: -30, y: 0), CGPoint(x: 30, y: 0)])
+        XCTAssertEqual(file.symbol.strokes.first?.points.first, CGPoint(x: -30, y: 0), "引線接到接腳")
+        // AI 回覆前後有說明文字也讀得到
+        let reply = "好的，以下是結果：\n```json\n" + CircuitSymbolJSON.export(file.symbol, name: "R") + "\n```\n有需要再調整 {大小}。"
+        XCTAssertEqual(try CircuitSymbolJSON.parse(reply).symbol, file.symbol)
+    }
+
+    func testSymbolJSONRoundTripsAndChecksInput() throws {
+        let file = try CircuitSymbolJSON.parse(CircuitSymbolJSON.export(symbol, name: "方塊"))
+        XCTAssertEqual(file.symbol, symbol, "拷貝出去再貼回來一樣")
+        XCTAssertEqual(file.name, "方塊")
+
+        let loose = try CircuitSymbolJSON.parse(#"{"strokes":[{"points":[[-30,0],[30,0]]}],"circles":[{"center":[0,0],"radius":15}],"pins":[[-31,2],[29,-1],[-30,0]]}"#)
+        XCTAssertEqual(loose.symbol.pins, [CGPoint(x: -30, y: 0), CGPoint(x: 30, y: 0)], "接腳吸到格點、重複的拿掉")
+        XCTAssertEqual(loose.symbol.strokes.count, 2, "圓變成一條線")
+        let r = loose.symbol.strokes[1].points.map { hypot($0.x, $0.y) }
+        XCTAssertEqual(r.min() ?? 0, 15, accuracy: 0.01)
+        XCTAssertEqual(r.max() ?? 0, 15, accuracy: 0.01)
+
+        XCTAssertThrowsError(try CircuitSymbolJSON.parse(#"{"strokes":[{"points":[[0,0],[10,0]]}]}"#)) {
+            XCTAssertEqual($0 as? CircuitSymbolJSON.ParseError, .noPins)
+        }
+        XCTAssertThrowsError(try CircuitSymbolJSON.parse(#"{"pins":[[0,0]]}"#)) {
+            XCTAssertEqual($0 as? CircuitSymbolJSON.ParseError, .noLines)
+        }
+        XCTAssertThrowsError(try CircuitSymbolJSON.parse(#"{"strokes":[{"points":[[0,0,1],[10,0]]}],"pins":[[0,0]]}"#)) {
+            XCTAssertEqual($0 as? CircuitSymbolJSON.ParseError, .badPoint)
+        }
+        XCTAssertThrowsError(try CircuitSymbolJSON.parse(#"{"strokes":[{"points":[[0,0],[1000,0]]}],"pins":[[0,0]]}"#)) {
+            XCTAssertEqual($0 as? CircuitSymbolJSON.ParseError, .tooBig)
+        }
+        XCTAssertThrowsError(try CircuitSymbolJSON.parse("畫不出來"))
+    }
+
+    func testPastingJSONIntoTheEditor() throws {
+        var saved: (String, CircuitSymbol)?
+        let vc = CircuitSymbolEditorViewController(name: "", symbol: nil) { saved = ($0, $1) }
+        window.rootViewController = vc
+        vc.loadViewIfNeeded()
+        vc.importJSON(CircuitSymbolJSON.export(symbol, name: "貼上的"))
+        XCTAssertEqual(vc.draft.symbol, symbol)
+        XCTAssertEqual(vc.nameField.text, "貼上的", "名稱還沒打就用 JSON 裡的")
+        vc.undoTapped()
+        XCTAssertTrue(vc.draft.symbol.strokes.isEmpty, "貼上可以復原")
+        vc.importJSON(CircuitSymbolJSON.export(symbol, name: "貼上的"))
+        vc.finish()
+        XCTAssertEqual(saved?.0, "貼上的")
+        XCTAssertEqual(saved?.1.pins.count, 2)
+
+        let other = CircuitSymbolEditorViewController(name: "", symbol: nil) { _, _ in }
+        window.rootViewController = other
+        other.loadViewIfNeeded()
+        other.importJSON("{}")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertNotNil(other.presentedViewController as? UIAlertController, "讀不了就說原因")
+        other.presentedViewController?.dismiss(animated: false)
     }
 
     func testCustomSymbolWorksLikeAPart() throws {

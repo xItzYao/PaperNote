@@ -321,11 +321,18 @@ extension NotebookViewController {
 
 extension NotebookViewController: UIPencilInteractionDelegate {
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveTap tap: UIPencilInteraction.Tap) {
+        guard !pencilActionsGoElsewhere else { return }
         handlePencilDoubleTap(at: tap.hoverPose?.location)
     }
 
+    /// 蓋住筆記本的視窗（畫元件、全部頁面…）開著：Pencil 點兩下、按壓交給它，筆記本的工具不跟著切
+    var pencilActionsGoElsewhere: Bool {
+        guard let p = presentedViewController else { return false }
+        return p.modalPresentationStyle != .popover
+    }
+
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
-        guard squeeze.phase == .ended else { return }
+        guard squeeze.phase == .ended, !pencilActionsGoElsewhere else { return }
         handlePencilSqueeze(at: squeeze.hoverPose?.location)
     }
 

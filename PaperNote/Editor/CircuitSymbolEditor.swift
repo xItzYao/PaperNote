@@ -1,11 +1,11 @@
 import UIKit
 
 enum CircuitSymbolTool: Int, CaseIterable {
-    case node, brush, pin, eraser
+    case line, brush, pin, eraser
 
     var title: String {
         switch self {
-        case .node: return "Node"
+        case .line: return "線條"
         case .brush: return "筆刷"
         case .pin: return "接腳"
         case .eraser: return "橡皮擦"
@@ -14,10 +14,10 @@ enum CircuitSymbolTool: Int, CaseIterable {
 
     var hint: String {
         switch self {
-        case .node: return "一下一下點出節點，自動連成直線（對齊格點）；點最後一個節點結束，點第一個節點封閉。拖節點可以移動。"
-        case .brush: return "用 Pencil 或手指直接畫。"
+        case .line: return "拖一條直線：兩端自動吸到最近的格點。從線的端點接著畫就連在一起。"
+        case .brush: return "用 Pencil 或手指直接畫；畫完停住一下會變成直線，或修成圓、三角形、四邊形。"
         case .pin: return "點格點加上接腳（導線接的地方），再點一下拿掉。至少要有一個。"
-        case .eraser: return "點或劃過線條、接腳就整條擦掉。"
+        case .eraser: return "點或劃過線條、接腳就整條擦掉。Pencil 筆身點兩下、Pencil Pro 按壓可以切換橡皮擦。"
         }
     }
 }
@@ -25,8 +25,8 @@ enum CircuitSymbolTool: Int, CaseIterable {
 /// 畫到一半的自訂元件（座標同元件座標，不碰畫面，可以單獨測試）
 struct CircuitSymbolDraft {
     private(set) var symbol: CircuitSymbol
-    /// 還在接的 node 線
-    private(set) var openLine: Int?
+    /// 正在拖的直線
+    private(set) var drawingLine: Int?
     private var history: [CircuitSymbol] = []
 
     init(_ symbol: CircuitSymbol = CircuitSymbol()) {
@@ -42,63 +42,46 @@ struct CircuitSymbolDraft {
     mutating func undo() {
         guard let last = history.popLast() else { return }
         symbol = last
-        openLine = nil
+        drawingLine = nil
     }
 
-    // MARK: Node
-
-    mutating func tapNode(at p: CGPoint) {
-        let q = CircuitData.snap(p)
-        guard let i = openLine else {
-            remember()
-            symbol.strokes.append(.init(points: [q]))
-            openLine = symbol.strokes.count - 1
-            return
-        }
-        let points = symbol.strokes[i].points
-        if q == points.last {
-            finishLine()
-            return
-        }
+    /// 整個換掉（貼上 JSON），可以復原
+    mutating func replace(with s: CircuitSymbol) {
         remember()
-        symbol.strokes[i].points.append(q)
-        // 回到第一個節點：封閉
-        if q == points.first, points.count >= 2 { openLine = nil }
+        symbol = s
+        drawingLine = nil
     }
 
-    /// 結束正在接的線；只有一個節點的不算一條線
-    mutating func finishLine() {
-        guard let i = openLine else { return }
-        openLine = nil
-        if symbol.strokes[i].points.count < 2 { symbol.strokes.remove(at: i) }
-    }
+    // MARK: 線條
 
-    func nodeHit(at p: CGPoint, tolerance: CGFloat) -> (stroke: Int, point: Int)? {
-        for (i, s) in symbol.strokes.enumerated() where !s.freehand {
-            if let k = s.points.firstIndex(where: { hypot($0.x - p.x, $0.y - p.y) <= tolerance }) { return (i, k) }
-        }
-        return nil
-    }
-
-    mutating func beginMovingNode() {
+    /// 開始拖直線：起點吸到最近的格點
+    mutating func beginLine(at p: CGPoint) {
         remember()
+        let q = CircuitData.snap(p)
+        symbol.strokes.append(.init(points: [q, q]))
+        drawingLine = symbol.strokes.count - 1
     }
 
-    /// 封閉的線：頭尾是同一個節點，一起動
-    mutating func moveNode(stroke i: Int, point k: Int, to p: CGPoint) {
-        let q = CircuitData.snap(p)
-        let points = symbol.strokes[i].points
-        symbol.strokes[i].points[k] = q
-        if points.count > 2, points.first == points.last {
-            if k == 0 { symbol.strokes[i].points[points.count - 1] = q }
-            if k == points.count - 1 { symbol.strokes[i].points[0] = q }
+    /// 終點跟著筆尖，吸到最近的格點
+    mutating func moveLine(to p: CGPoint) {
+        guard let i = drawingLine else { return }
+        symbol.strokes[i].points[1] = CircuitData.snap(p)
+    }
+
+    /// 放開：兩端在同一個格點就不算一條線
+    mutating func endLine(at p: CGPoint) {
+        moveLine(to: p)
+        guard let i = drawingLine else { return }
+        drawingLine = nil
+        if symbol.strokes[i].points[0] == symbol.strokes[i].points[1] {
+            symbol.strokes.remove(at: i)
+            _ = history.popLast()
         }
     }
 
     // MARK: 筆刷
 
     mutating func beginBrush(at p: CGPoint) {
-        finishLine()
         remember()
         symbol.strokes.append(.init(points: [p], freehand: true))
     }
@@ -118,6 +101,31 @@ struct CircuitSymbolDraft {
         } else {
             symbol.strokes[last].points = points
         }
+    }
+
+    /// 筆刷停住時修成的圖形
+    enum HeldShape { case line, closed }
+
+    /// 筆刷畫到一半停住（和頁面上的筆一樣）：封閉的修成圓、三角形、四邊形，不然變直線（之後終點跟著筆尖）。
+    /// scale：一單位在畫面上多大，照畫面上的大小辨識
+    mutating func holdBrush(scale: CGFloat) -> HeldShape? {
+        guard let last = symbol.strokes.indices.last, symbol.strokes[last].freehand else { return nil }
+        let points = symbol.strokes[last].points
+        guard let first = points.first, let end = points.last, first != end else { return nil }
+        let onScreen = points.map { CGPoint(x: $0.x * scale, y: $0.y * scale) }
+        if let shape = ShapeRecognizer.closedShapePoints(onScreen) {
+            symbol.strokes[last].points = shape.map { CGPoint(x: $0.x / scale, y: $0.y / scale) }
+            return .closed
+        }
+        symbol.strokes[last].points = [first, ShapeRecognizer.snappedLineEnd(from: first, to: end)]
+        return .line
+    }
+
+    /// 停住變成的直線：終點跟著筆尖（接近水平、垂直時拉正）
+    mutating func moveHeldLine(to p: CGPoint) {
+        guard let last = symbol.strokes.indices.last, symbol.strokes[last].freehand,
+              let first = symbol.strokes[last].points.first else { return }
+        symbol.strokes[last].points = [first, ShapeRecognizer.snappedLineEnd(from: first, to: p)]
     }
 
     static func simplified(_ points: [CGPoint], tolerance: CGFloat) -> [CGPoint] {
@@ -146,7 +154,6 @@ struct CircuitSymbolDraft {
     // MARK: 接腳、橡皮擦
 
     mutating func togglePin(at p: CGPoint) {
-        finishLine()
         remember()
         let q = CircuitData.snap(p)
         if let i = symbol.pins.firstIndex(of: q) {
@@ -159,7 +166,6 @@ struct CircuitSymbolDraft {
     /// 擦到了回傳 true
     @discardableResult
     mutating func erase(at p: CGPoint, tolerance: CGFloat) -> Bool {
-        finishLine()
         if let i = symbol.pins.firstIndex(where: { hypot($0.x - p.x, $0.y - p.y) <= tolerance }) {
             remember()
             symbol.pins.remove(at: i)
@@ -174,19 +180,17 @@ struct CircuitSymbolDraft {
     }
 
     /// 畫好的元件：中心移到格點上的原點。沒有線條或接腳回傳 nil
-    mutating func finished() -> CircuitSymbol? {
-        finishLine()
+    func finished() -> CircuitSymbol? {
         guard !symbol.strokes.isEmpty, !symbol.pins.isEmpty else { return nil }
         return symbol.centered()
     }
 }
 
-/// 畫布：格點、線條、節點、接腳
+/// 畫布：格點、線條、接腳
 final class CircuitSymbolCanvas: UIView {
     /// 一格（元件座標 10）在畫面上多大
     var scale: CGFloat { max(min(bounds.width, bounds.height) / 200, 1) }
     var draft: () -> CircuitSymbolDraft = { CircuitSymbolDraft() }
-    var showsNodes = true
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -227,15 +231,6 @@ final class CircuitSymbolCanvas: UIView {
             for p in s.points.dropFirst() { ctx.addLine(to: viewPoint(p)) }
             ctx.strokePath()
         }
-        if showsNodes {
-            ctx.setFillColor(UIColor.systemBlue.cgColor)
-            for s in symbol.strokes where !s.freehand {
-                for p in s.points {
-                    let v = viewPoint(p)
-                    ctx.fill(CGRect(x: v.x - 4, y: v.y - 4, width: 8, height: 8))
-                }
-            }
-        }
         ctx.setStrokeColor(UIColor.systemRed.cgColor)
         ctx.setLineWidth(2)
         for p in symbol.pins {
@@ -245,16 +240,20 @@ final class CircuitSymbolCanvas: UIView {
     }
 }
 
-/// 自訂元件編輯器：用 Node 和筆刷畫符號，再標出接腳
+/// 自訂元件編輯器：用線條和筆刷畫符號，再標出接腳；也可以貼上 JSON（例如請 AI 照手繪的元件產生）
 final class CircuitSymbolEditorViewController: UIViewController {
     private(set) var draft: CircuitSymbolDraft
-    private(set) var tool: CircuitSymbolTool = .node
+    private(set) var tool: CircuitSymbolTool = .line
     let canvas = CircuitSymbolCanvas()
     let nameField = UITextField()
     private let toolPicker = UISegmentedControl(items: CircuitSymbolTool.allCases.map(\.title))
-    private let hint = UILabel()
+    let hint = UILabel()
     private let onDone: (String, CircuitSymbol) -> Void
-    private var movingNode: (stroke: Int, point: Int)?
+    /// Pencil 切到橡皮擦之前的工具
+    private var toolBeforeEraser: CircuitSymbolTool = .line
+    private var holdTimer: Timer?
+    private var holdAnchor: CGPoint = .zero
+    private var heldShape: CircuitSymbolDraft.HeldShape?
 
     init(name: String, symbol: CircuitSymbol?, onDone: @escaping (String, CircuitSymbol) -> Void) {
         draft = CircuitSymbolDraft(symbol ?? CircuitSymbol())
@@ -282,6 +281,7 @@ final class CircuitSymbolEditorViewController: UIViewController {
         navigationItem.rightBarButtonItems = [
             UIBarButtonItem(systemItem: .done, primaryAction: UIAction { [weak self] _ in self?.finish() }),
             UIBarButtonItem(title: "復原", primaryAction: UIAction { [weak self] _ in self?.undoTapped() }),
+            UIBarButtonItem(title: "JSON", menu: jsonMenu()),
         ]
 
         toolPicker.selectedSegmentIndex = tool.rawValue
@@ -302,6 +302,10 @@ final class CircuitSymbolEditorViewController: UIViewController {
         let pan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
         pan.maximumNumberOfTouches = 1
         canvas.addGestureRecognizer(pan)
+        // 筆身點兩下、Pencil Pro 按壓：切換這裡的橡皮擦（筆記本那邊不會跟著切）
+        let pencil = UIPencilInteraction()
+        pencil.delegate = self
+        view.addInteraction(pencil)
 
         let stack = UIStackView(arrangedSubviews: [toolPicker, hint, canvas])
         stack.axis = .vertical
@@ -317,11 +321,20 @@ final class CircuitSymbolEditorViewController: UIViewController {
     }
 
     func setTool(_ t: CircuitSymbolTool) {
-        draft.finishLine()
         tool = t
         toolPicker.selectedSegmentIndex = t.rawValue
         hint.text = t.hint
         canvas.setNeedsDisplay()
+    }
+
+    /// 橡皮擦和原本的工具之間切換
+    func toggleEraser() {
+        if tool == .eraser {
+            setTool(toolBeforeEraser == .eraser ? .line : toolBeforeEraser)
+        } else {
+            toolBeforeEraser = tool
+            setTool(.eraser)
+        }
     }
 
     func undoTapped() {
@@ -334,10 +347,9 @@ final class CircuitSymbolEditorViewController: UIViewController {
     /// 點一下（元件座標）
     func handleTap(at p: CGPoint) {
         switch tool {
-        case .node: draft.tapNode(at: p)
         case .pin: draft.togglePin(at: p)
         case .eraser: draft.erase(at: p, tolerance: tolerance)
-        case .brush: break
+        case .line, .brush: break
         }
         canvas.setNeedsDisplay()
     }
@@ -345,27 +357,58 @@ final class CircuitSymbolEditorViewController: UIViewController {
     /// 拖曳（元件座標）
     func handlePan(_ state: UIGestureRecognizer.State, at p: CGPoint) {
         switch tool {
+        case .line:
+            switch state {
+            case .began: draft.beginLine(at: p)
+            case .changed: draft.moveLine(to: p)
+            case .ended, .cancelled, .failed: draft.endLine(at: p)
+            default: break
+            }
         case .brush:
             switch state {
-            case .began: draft.beginBrush(at: p)
-            case .changed: draft.continueBrush(to: p)
+            case .began:
+                heldShape = nil
+                draft.beginBrush(at: p)
+                restartHoldTimer(at: p)
+            case .changed:
+                if heldShape == .line {
+                    draft.moveHeldLine(to: p)
+                } else if heldShape == nil {
+                    draft.continueBrush(to: p)
+                    // 還在動：重新等停住（抖一點點不算動）
+                    if hypot(p.x - holdAnchor.x, p.y - holdAnchor.y) * canvas.scale > 3 { restartHoldTimer(at: p) }
+                }
             case .ended, .cancelled, .failed:
-                draft.continueBrush(to: p)
+                holdTimer?.invalidate()
+                if heldShape == .line {
+                    draft.moveHeldLine(to: p)
+                } else if heldShape == nil {
+                    draft.continueBrush(to: p)
+                }
+                heldShape = nil
                 draft.endBrush()
             default: break
             }
-        case .node:
-            if state == .began {
-                movingNode = draft.nodeHit(at: p, tolerance: tolerance)
-                if movingNode != nil { draft.beginMovingNode() }
-            }
-            if let m = movingNode { draft.moveNode(stroke: m.stroke, point: m.point, to: p) }
-            if state != .began, state != .changed { movingNode = nil }
         case .eraser:
             draft.erase(at: p, tolerance: tolerance)
         case .pin:
             break
         }
+        canvas.setNeedsDisplay()
+    }
+
+    /// 和頁面上的筆一樣：「⋯」的「畫線停住變直線／圖形」關掉就不修
+    private func restartHoldTimer(at p: CGPoint) {
+        holdAnchor = p
+        holdTimer?.invalidate()
+        guard EditorSettings.shared.shapeSnap else { return }
+        holdTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak self] _ in self?.brushHeld() }
+    }
+
+    /// 筆刷停住了（計時器叫的）
+    func brushHeld() {
+        guard tool == .brush, heldShape == nil, let s = draft.holdBrush(scale: canvas.scale) else { return }
+        heldShape = s
         canvas.setNeedsDisplay()
     }
 
@@ -382,15 +425,62 @@ final class CircuitSymbolEditorViewController: UIViewController {
         handlePan(g.state, at: canvas.symbolPoint(v))
     }
 
+    // MARK: JSON
+
+    private func jsonMenu() -> UIMenu {
+        UIMenu(children: [
+            UIAction(title: "貼上 JSON", image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in
+                self?.importJSON(UIPasteboard.general.string ?? "")
+            },
+            UIAction(title: "拷貝 JSON", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
+                guard let self else { return }
+                UIPasteboard.general.string = CircuitSymbolJSON.export(self.draft.symbol, name: self.nameField.text ?? "")
+                self.hint.text = "已拷貝這個元件的 JSON。"
+            },
+            UIAction(title: "拷貝給 AI 的說明", image: UIImage(systemName: "sparkles")) { [weak self] _ in
+                UIPasteboard.general.string = CircuitSymbolJSON.aiPrompt
+                self?.hint.text = "已拷貝給 AI 的說明：貼到 AI 聊天裡、附上手繪元件的照片，把回覆的 JSON 拷貝起來，再按「JSON」→「貼上 JSON」。"
+            },
+        ])
+    }
+
+    /// 貼上的 JSON 換掉現在畫的（可以復原）；還沒打名稱就用 JSON 裡的
+    func importJSON(_ text: String) {
+        do {
+            let file = try CircuitSymbolJSON.parse(text)
+            draft.replace(with: file.symbol)
+            if let name = file.name, !name.isEmpty, (nameField.text ?? "").isEmpty { nameField.text = name }
+            hint.text = "已貼上 JSON；可以再用線條、筆刷修改。"
+            canvas.setNeedsDisplay()
+        } catch {
+            alert(title: "沒辦法讀這段 JSON", message: error.localizedDescription)
+        }
+    }
+
+    private func alert(title: String, message: String?) {
+        let a = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        a.addAction(UIAlertAction(title: "好", style: .default))
+        present(a, animated: true)
+    }
+
     func finish() {
         guard let symbol = draft.finished() else {
-            let missing = draft.symbol.strokes.isEmpty ? "還沒有畫符號" : "還沒有接腳，導線接不上去：用「接腳」工具在格點上點一下"
-            let a = UIAlertController(title: missing, message: nil, preferredStyle: .alert)
-            a.addAction(UIAlertAction(title: "好", style: .default))
-            present(a, animated: true)
+            alert(title: draft.symbol.strokes.isEmpty ? "還沒有畫符號" : "還沒有接腳，導線接不上去：用「接腳」工具在格點上點一下", message: nil)
             return
         }
         onDone(nameField.text ?? "", symbol)
         dismiss(animated: true)
+    }
+}
+
+extension CircuitSymbolEditorViewController: UIPencilInteractionDelegate {
+    func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveTap tap: UIPencilInteraction.Tap) {
+        guard UIPencilInteraction.preferredTapAction != .ignore else { return }
+        toggleEraser()
+    }
+
+    func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
+        guard squeeze.phase == .ended else { return }
+        toggleEraser()
     }
 }
