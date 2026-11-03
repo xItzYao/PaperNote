@@ -16,10 +16,10 @@ final class BrushSettingsMenuUITests: XCTestCase {
     private func openStyleMenu() {
         let pencil = app.buttons["鉛筆"]
         XCTAssertTrue(pencil.waitForExistence(timeout: 20), "要打開測試用的筆記本")
-        pencil.tap()
-        sleep(1)
+        // 已經是目前的筆：點一下就打開設定；不是的話第一下選它、第二下打開
         pencil.tap()
         let picker = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "筆型")).firstMatch
+        if !picker.waitForExistence(timeout: 2) { pencil.tap() }
         XCTAssertTrue(picker.waitForExistence(timeout: 5), "再點一下打開筆刷設定")
         picker.tap()
         XCTAssertTrue(app.descendants(matching: .any)["水彩"].waitForExistence(timeout: 5), "筆型選單要打開")
