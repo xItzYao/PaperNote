@@ -10,9 +10,10 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
+# Intel 的 Mac：GitHub 的 Apple 晶片（arm64）Mac 常常不夠用，工作排了 15 分鐘還等不到機器就被取消
 jobs:
   pdfkit-check:
-    runs-on: macos-15
+    runs-on: macos-15-intel
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -28,7 +29,7 @@ jobs:
   # 單元測試和 UI 測試分成兩個工作同時跑
   simulator-tests:
     name: simulator-tests (${{ matrix.bundle }})
-    runs-on: macos-15
+    runs-on: macos-15-intel
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -104,7 +105,7 @@ jobs:
           if-no-files-found: ignore
 
   build:
-    runs-on: macos-15
+    runs-on: macos-15-intel
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
