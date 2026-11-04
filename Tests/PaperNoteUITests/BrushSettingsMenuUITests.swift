@@ -35,8 +35,9 @@ final class BrushSettingsMenuUITests: XCTestCase {
         a.press(forDuration: 0.05, thenDragTo: b, withVelocity: .slow, thenHoldForDuration: 0)
     }
 
-    /// 筆型選單開著，直接在畫布上寫：選單收起，App 不能閃退
-    func testWritingWithTheStyleMenuOpen() {
+    /// 設定一樣的情況在同一次啟動裡依序做，省下重開 App 的時間
+    func testTheStyleMenu() {
+        // 筆型選單開著，直接在畫布上寫：選單收起，App 不能閃退
         openStyleMenu()
         draw(y: 0.6)
         sleep(2)
@@ -45,26 +46,22 @@ final class BrushSettingsMenuUITests: XCTestCase {
         draw(y: 0.75)
         sleep(1)
         XCTAssertEqual(app.state, .runningForeground, "之後照常寫")
-    }
 
-    /// 回報的版本每支筆都用自製筆刷：選單開著時用自製筆刷寫
-    func testWritingWithCustomInkAndTheStyleMenuOpen() {
+        // 回報的版本每支筆都用自製筆刷：選單開著時用自製筆刷寫
         openStyleMenu("原子筆")
         draw(y: 0.6)
         sleep(2)
-        XCTAssertEqual(app.state, .runningForeground, "不能閃退")
-        XCTAssertTrue(app.buttons["原子筆"].firstMatch.exists, "還在筆記本裡")
+        XCTAssertEqual(app.state, .runningForeground, "自製筆刷：不能閃退")
+        XCTAssertTrue(app.buttons["原子筆"].firstMatch.exists, "自製筆刷：還在筆記本裡")
         draw(y: 0.75)
         sleep(1)
-        XCTAssertEqual(app.state, .runningForeground, "之後照常寫")
-    }
+        XCTAssertEqual(app.state, .runningForeground, "自製筆刷：之後照常寫")
 
-    /// 選一個筆型：選單收起，工具列的筆型跟著換
-    func testPickingAStyle() {
+        // 選一個筆型：選單收起，工具列的筆型跟著換
         openStyleMenu()
         app.descendants(matching: .any)["水彩"].firstMatch.tap()
         sleep(2)
-        XCTAssertEqual(app.state, .runningForeground, "不能閃退")
+        XCTAssertEqual(app.state, .runningForeground, "選筆型：不能閃退")
         let picker = app.buttons["筆型"].firstMatch
         XCTAssertEqual(picker.value as? String, "水彩", "工具列的筆型換成水彩")
         // 改回鉛筆（筆刷存在 App 裡，之後的測試還要用「鉛筆」；工具列那支現在叫「水彩」，選單裡的才是「鉛筆」）

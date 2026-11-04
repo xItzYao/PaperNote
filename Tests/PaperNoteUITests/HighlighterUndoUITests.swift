@@ -31,60 +31,65 @@ final class HighlighterUndoUITests: XCTestCase {
         a.press(forDuration: 0.05, thenDragTo: b, withVelocity: .slow, thenHoldForDuration: hold)
     }
 
-    private func check(hold: TimeInterval, waitBeforeUndo: UInt32, _ extra: [String] = [], tool: String = "螢光筆") {
-        launch(extra, tool: tool)
+    /// 畫一筆、上一步、再畫一筆：只剩新的那一筆
+    private func check(_ name: String, hold: TimeInterval, waitBeforeUndo: UInt32) {
         draw(y: 0.4, hold: hold)
-        XCTAssertTrue(waitForStrokes(1), "畫了一筆：\(strokes)｜\(log)")
+        XCTAssertTrue(waitForStrokes(1), "\(name)：畫了一筆：\(strokes)｜\(log)")
         if waitBeforeUndo > 0 { sleep(waitBeforeUndo) }
         app.buttons["上一步"].tap()
-        XCTAssertTrue(waitForStrokes(0), "上一步拿掉：\(strokes)｜\(log)")
+        XCTAssertTrue(waitForStrokes(0), "\(name)：上一步拿掉：\(strokes)｜\(log)")
 
         draw(y: 0.55, hold: hold)
-        XCTAssertTrue(waitForStrokes(1), "只有新的這一筆：\(strokes)｜\(log)")
+        XCTAssertTrue(waitForStrokes(1), "\(name)：只有新的這一筆：\(strokes)｜\(log)")
         sleep(3)
-        XCTAssertEqual(strokes, "1", "過一下也不會跑回來｜\(log)")
+        XCTAssertEqual(strokes, "1", "\(name)：過一下也不會跑回來｜\(log)")
+    }
+
+    /// 下一個情況從空白的頁面開始
+    private func clear(_ name: String) {
+        app.buttons["上一步"].tap()
+        XCTAssertTrue(waitForStrokes(0), "\(name)之後清掉：\(strokes)｜\(log)")
     }
 
     func testPlainStroke() {
-        check(hold: 0, waitBeforeUndo: 1, ["-shapeSnap", "<false/>", "-smartHighlight", "<false/>"])
+        launch(["-shapeSnap", "<false/>", "-smartHighlight", "<false/>"])
+        check("一般的一筆", hold: 0, waitBeforeUndo: 1)
     }
 
     /// 對照：PencilKit 的筆（不關自製筆刷時），不會被拉直
     func testPencilKitPen() {
-        check(hold: 0, waitBeforeUndo: 1, ["-customInk", "<false/>", "-shapeSnap", "<false/>"], tool: "筆")
+        launch(["-customInk", "<false/>", "-shapeSnap", "<false/>"], tool: "筆")
+        check("PencilKit 的筆", hold: 0, waitBeforeUndo: 1)
     }
 
-    /// 上一步、下一步、再上一步，接著畫：下一步換回來的那一版也不會讓筆跡跑回來
-    func testRedoThenUndo() {
+    /// 預設設定（停住變直線、對齊 PDF 文字都開著）。設定一樣的情況在同一次啟動裡依序做，省下重開 App 的時間
+    func testDefaultSettings() {
         launch()
+        check("預設設定", hold: 0, waitBeforeUndo: 1)
+        clear("預設設定")
+
+        // 停住變直線，等直線換好才按上一步
+        check("停住變直線", hold: 1, waitBeforeUndo: 3)
+        clear("停住變直線")
+
+        // 停住變直線，放開馬上按上一步
+        check("停住變直線、馬上上一步", hold: 1, waitBeforeUndo: 0)
+        clear("停住變直線、馬上上一步")
+
+        // 上一步、下一步、再上一步，接著畫：下一步換回來的那一版也不會讓筆跡跑回來
         draw(y: 0.4)
-        XCTAssertTrue(waitForStrokes(1), "畫了一筆：\(strokes)｜\(log)")
+        XCTAssertTrue(waitForStrokes(1), "下一步：畫了一筆：\(strokes)｜\(log)")
         sleep(1)
         app.buttons["上一步"].tap()
-        XCTAssertTrue(waitForStrokes(0), "上一步：\(strokes)｜\(log)")
+        XCTAssertTrue(waitForStrokes(0), "下一步：上一步：\(strokes)｜\(log)")
         app.buttons["下一步"].tap()
-        XCTAssertTrue(waitForStrokes(1), "下一步：\(strokes)｜\(log)")
+        XCTAssertTrue(waitForStrokes(1), "下一步：下一步：\(strokes)｜\(log)")
         app.buttons["上一步"].tap()
-        XCTAssertTrue(waitForStrokes(0), "再上一步：\(strokes)｜\(log)")
+        XCTAssertTrue(waitForStrokes(0), "下一步：再上一步：\(strokes)｜\(log)")
 
         draw(y: 0.55)
-        XCTAssertTrue(waitForStrokes(1), "只有新的這一筆：\(strokes)｜\(log)")
+        XCTAssertTrue(waitForStrokes(1), "下一步：只有新的這一筆：\(strokes)｜\(log)")
         sleep(3)
-        XCTAssertEqual(strokes, "1", "過一下也不會跑回來｜\(log)")
-    }
-
-    /// 預設設定（停住變直線、對齊 PDF 文字都開著）
-    func testDefaultSettings() {
-        check(hold: 0, waitBeforeUndo: 1)
-    }
-
-    /// 停住變直線，等直線換好才按上一步
-    func testHeldLine() {
-        check(hold: 1, waitBeforeUndo: 3)
-    }
-
-    /// 停住變直線，放開馬上按上一步
-    func testHeldLineUndoneRightAway() {
-        check(hold: 1, waitBeforeUndo: 0)
+        XCTAssertEqual(strokes, "1", "下一步：過一下也不會跑回來｜\(log)")
     }
 }

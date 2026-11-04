@@ -37,12 +37,10 @@ final class PencilKitPensUITests: XCTestCase {
         write(with: "毛筆／沾水筆", y: 0.5)
         XCTAssertTrue(waitForStrokes(2), "毛筆／沾水筆也是 PencilKit 畫的：\(label("pkStrokes"))｜\(label("debugTail"))")
         XCTAssertTrue(label("pkInk").lowercased().contains("fountain"), "PencilKit 的沾水筆墨水：\(label("pkInk"))")
-    }
 
-    /// 對照：原子筆照樣用自製筆刷（不是 PencilKit 的筆跡）
-    func testMonolineStaysOnCustomInk() {
+        // 對照：原子筆照樣用自製筆刷（不是 PencilKit 的筆跡）。同一次啟動裡接著寫，省下重開 App 的時間
         write(with: "原子筆", y: 0.65)
         sleep(2)
-        XCTAssertEqual(label("pkStrokes"), "0", "原子筆用自製筆刷畫：\(label("debugTail"))")
+        XCTAssertEqual(label("pkStrokes"), "2", "原子筆用自製筆刷畫，PencilKit 的筆跡還是兩筆：\(label("debugTail"))")
     }
 }

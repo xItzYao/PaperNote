@@ -5,6 +5,11 @@ on:
     branches: [main, ink-engine]
   workflow_dispatch:
 
+# 同一個分支又推了新的：舊的那次不用跑完（新的那次會跑一樣的測試）
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   pdfkit-check:
     runs-on: macos-15
@@ -20,9 +25,15 @@ jobs:
           swiftc -O PaperNote/Model/CircuitData.swift Tests/CircuitCheck/main.swift -o circuit_check
           ./circuit_check
 
+  # 單元測試和 UI 測試分成兩個工作同時跑
   simulator-tests:
+    name: simulator-tests (${{ matrix.bundle }})
     runs-on: macos-15
     timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        bundle: [PaperNoteTests, PaperNoteUITests]
     steps:
       - uses: actions/checkout@v4
 
@@ -56,6 +67,7 @@ jobs:
             -scheme PaperNote \
             -destination "id=$UDID" \
             -derivedDataPath build \
+            -only-testing:${{ matrix.bundle }} \
             CODE_SIGNING_ALLOWED=NO \
             2>&1 | tee test.log | grep -E "error:|Test Case .* (passed|failed)|XCTAssert|Executed|TEST (SUCCEEDED|FAILED)" || true
           grep -q "TEST SUCCEEDED" test.log
@@ -64,12 +76,12 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-log
+          name: test-log-${{ matrix.bundle }}
           path: test.log
 
       # PencilKitInkStudy 畫出來的 PencilKit 筆跡（自製引擎照著調）
       - name: Upload PencilKit ink study
-        if: always()
+        if: always() && matrix.bundle == 'PaperNoteTests'
         uses: actions/upload-artifact@v4
         with:
           name: ink-study
