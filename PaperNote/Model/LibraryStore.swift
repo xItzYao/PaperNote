@@ -1,5 +1,6 @@
 import Foundation
 import PDFKit
+import PencilKit
 import UIKit
 
 import UniformTypeIdentifiers
@@ -392,6 +393,11 @@ final class LibraryStore: ObservableObject {
             var pages = (0..<pdf.pageCount).map { Page(background: .pdf(file: fileName, index: $0)) }
             for (i, ink) in markup.ink { pages[i].ink = ink }
             try NotebookSession.writeDocument(NotebookDocument(pages: pages), to: dir)
+            for (i, drawing) in markup.drawings {
+                let url = NotebookSession.drawingURL(pages[i].id, in: dir)
+                try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try drawing.dataRepresentation().write(to: url)
+            }
             meta.pageCount = pages.count
         } catch {
             try? fm.removeItem(at: dir)
