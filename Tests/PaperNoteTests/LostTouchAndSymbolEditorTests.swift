@@ -307,13 +307,18 @@ final class SymbolTextTests: XCTestCase {
         vc.setTool(.text)
         XCTAssertTrue(vc.tapGesture.isEnabled)
         XCTAssertTrue(vc.panGesture.isEnabled, "文字用點一下新增、拖曳移動")
+        // 等畫面真的變了再往下（不靠固定的時間：模擬器卡住時輸入框還沒關完，下一個就跳不出來）
+        func waitUntil(_ done: () -> Bool) {
+            let deadline = Date().addingTimeInterval(5)
+            while !done(), Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        }
         vc.handleTap(at: CGPoint(x: 10, y: 10))
-        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+        waitUntil { vc.presentedViewController is UIAlertController }
         let alert = try XCTUnwrap(vc.presentedViewController as? UIAlertController, "點一下輸入字")
         XCTAssertEqual(alert.textFields?.count, 1)
         XCTAssertEqual(alert.actions.filter { $0.style == .default }.count, CircuitSymbolEditorViewController.textSizes.count, "選大小")
         alert.dismiss(animated: false)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        waitUntil { vc.presentedViewController == nil }
 
         vc.commitText("A", size: 16, editing: nil, at: CGPoint(x: 10, y: 10))
         XCTAssertEqual(vc.draft.symbol.texts.map(\.text), ["A"])
@@ -323,11 +328,11 @@ final class SymbolTextTests: XCTestCase {
         vc.handlePan(.ended, at: CGPoint(x: 40, y: 20))
         XCTAssertEqual(vc.draft.symbol.texts.first?.center, CGPoint(x: 40, y: 20), "拖曳移動")
         vc.handleTap(at: CGPoint(x: 40, y: 20))
-        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+        waitUntil { vc.presentedViewController is UIAlertController }
         let edit = try XCTUnwrap(vc.presentedViewController as? UIAlertController)
         XCTAssertEqual(edit.textFields?.first?.text, "A", "點已經有的字：修改")
         XCTAssertTrue(edit.actions.contains { $0.style == .destructive }, "可以刪除")
         edit.dismiss(animated: false)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        waitUntil { vc.presentedViewController == nil }
     }
 }
