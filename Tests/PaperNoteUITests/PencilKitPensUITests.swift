@@ -24,6 +24,11 @@ final class PencilKitPensUITests: XCTestCase {
         XCTAssertTrue(b.waitForExistence(timeout: 20), "要打開測試用的筆記本，工具列有「\(pen)」")
         b.tap()
         let w = app.windows.firstMatch
+        // 已經是目前的筆（筆刷存在 App 裡，前面的測試可能留下這支）：點一下會打開筆刷設定，點旁邊的頁面關掉它
+        if app.buttons["把這個顏色加進色票"].waitForExistence(timeout: 1.5) {
+            w.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.8)).tap()
+            XCTAssertTrue(app.buttons["把這個顏色加進色票"].waitForNonExistence(timeout: 5), "點旁邊關掉筆刷設定")
+        }
         w.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: y))
             .press(forDuration: 0.05, thenDragTo: w.coordinate(withNormalizedOffset: CGVector(dx: 0.45, dy: y + 0.06)),
                    withVelocity: .slow, thenHoldForDuration: 0)
