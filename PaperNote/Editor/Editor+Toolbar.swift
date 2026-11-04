@@ -774,8 +774,35 @@ extension NotebookViewController {
     /// 關掉小視窗。工具列重建時它依附的按鈕會被拿掉，不關的話可能卡在看不到的地方擋住所有觸控（這時不要動畫）。
     /// animated：點旁邊關掉時縮回去
     func dismissToolPopover(animated: Bool = false) {
+        toolPopoverCollapsed = false
         guard let p = presentedViewController, p.modalPresentationStyle == .popover, !p.isBeingDismissed else { return }
         p.dismiss(animated: animated)
+    }
+
+    /// 這次觸碰會寫字（或擦除）
+    func touchWillDraw(_ t: UITouch) -> Bool {
+        tool.isDrawing && !previewMode && (t.type == .pencil || settings.fingerDrawing)
+    }
+
+    /// 下筆時：小視窗馬上縮回去（和點旁邊一樣的感覺），筆放開才真的關掉。
+    /// 寫到一半關掉視窗，系統會打斷正在寫的這一筆
+    func collapseToolPopoverForWriting() {
+        guard !toolPopoverCollapsed, let p = presentedViewController, p.modalPresentationStyle == .popover, !p.isBeingDismissed,
+              let container = p.presentationController?.containerView else { return }
+        toolPopoverCollapsed = true
+        container.isUserInteractionEnabled = false
+        UIView.animate(withDuration: 0.2, delay: 0, options: [.beginFromCurrentState, .curveEaseIn]) {
+            for v in container.subviews {
+                v.alpha = 0
+                v.transform = CGAffineTransform(scaleX: 0.85, y: 0.85)
+            }
+        }
+    }
+
+    /// 筆放開了：縮回去的小視窗真的關掉
+    func finishCollapsedToolPopover() {
+        guard toolPopoverCollapsed else { return }
+        dismissToolPopover()
     }
 
     /// 依目前的筆更新「細、中、粗」與虛線按鈕
@@ -1272,9 +1299,9 @@ private struct DashPreview: View {
 
 /// 手指或筆一碰到就通知一次，然後放棄（不擋其他手勢、不延遲觸控）
 final class TouchDownRecognizer: UIGestureRecognizer {
-    private let onTouch: () -> Void
+    private let onTouch: (UITouch) -> Void
 
-    init(_ onTouch: @escaping () -> Void) {
+    init(_ onTouch: @escaping (UITouch) -> Void) {
         self.onTouch = onTouch
         super.init(target: nil, action: nil)
         cancelsTouchesInView = false
@@ -1283,7 +1310,7 @@ final class TouchDownRecognizer: UIGestureRecognizer {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
-        onTouch()
+        if let t = touches.first { onTouch(t) }
         state = .failed
     }
 }

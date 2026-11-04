@@ -127,6 +127,32 @@ final class ToolbarRequestsTests: XCTestCase {
         XCTAssertNil(editor.presentedViewController, "碰到頁面就關掉")
     }
 
+    /// 回報的問題：開著筆刷設定直接下筆，視窗過一下子才消失；要和點旁邊一樣馬上縮回去，
+    /// 而且不能打斷正在寫的這一筆（筆放開才真的關掉）
+    func testWritingCollapsesThePopoverRightAway() throws {
+        editor.setTool(.pen)
+        let b = try XCTUnwrap(editor.presetButtons[BrushStore.shared.currentID])
+        editor.presentBrushSettings(BrushStore.shared.current, from: b)
+        waitForPopover()
+        let popover = try XCTUnwrap(editor.presentedViewController)
+        let container = try XCTUnwrap(popover.presentationController?.containerView)
+        let r = try XCTUnwrap(editor.canvas.gestureRecognizers?.compactMap { $0 as? TouchDownRecognizer }.first)
+        r.touchesBegan([FakeTouch(type: .pencil, location: CGPoint(x: 300, y: 500))], with: UIEvent())
+        XCTAssertTrue(container.subviews.allSatisfy { $0.alpha == 0 }, "一下筆就縮回去")
+        XCTAssertFalse(container.isUserInteractionEnabled, "縮回去的視窗不擋筆")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertTrue(editor.presentedViewController === popover, "寫的時候先不真的關掉（會打斷這一筆）")
+
+        let tracker = try XCTUnwrap(editor.pencilPointTracker)
+        let t = FakeTouch(type: .pencil, location: CGPoint(x: 300, y: 500))
+        tracker.touchesBegan([t], with: UIEvent())
+        t.fakePhase = .ended
+        tracker.touchesEnded([t], with: UIEvent())
+        wait { editor.presentedViewController == nil }
+        XCTAssertNil(editor.presentedViewController, "筆放開就關掉")
+        XCTAssertFalse(editor.toolPopoverCollapsed)
+    }
+
     // MARK: 螢光筆不蓋住筆跡
 
     func testCustomInkIsAbovePencilKit() throws {

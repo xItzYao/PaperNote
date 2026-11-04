@@ -74,6 +74,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             }
         }
         pencilPointTracker.onEnded = { [weak self] in
+            self?.finishCollapsedToolPopover()
             self?.pencilDown = false
             self?.lastPencilTime = CACurrentMediaTime()
         }

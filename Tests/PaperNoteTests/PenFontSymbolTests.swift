@@ -119,16 +119,17 @@ final class PenFontSymbolTests: XCTestCase {
         XCTAssertEqual(d.symbol.strokes.count, 1, "復原的是上一條線")
     }
 
-    func testHoldingTheBrushMakesAPerfectShape() {
+    func testHoldingTheBrushMakesAPerfectShape() throws {
         // 停住：歪歪的線變直線，之後終點跟著筆尖（接近水平就拉正）
         var d = CircuitSymbolDraft()
         d.beginBrush(at: .zero)
         for i in 1...25 { d.continueBrush(to: CGPoint(x: CGFloat(i) * 2, y: CGFloat(i % 3) * 0.6)) }
-        XCTAssertEqual(d.holdBrush(scale: 3), .line)
+        let line = try XCTUnwrap(d.holdBrush(scale: 3))
+        XCTAssertEqual(line.kind, .line)
         XCTAssertEqual(d.symbol.strokes[0].points, [.zero, CGPoint(x: 50, y: 0)], "變成直線")
-        d.moveHeldLine(to: CGPoint(x: 80, y: 40))
+        _ = d.moveHeldShape(line, to: CGPoint(x: 80, y: 40), scale: 3)
         XCTAssertEqual(d.symbol.strokes[0].points, [.zero, CGPoint(x: 80, y: 40)], "終點跟著筆尖")
-        d.endBrush()
+        d.endBrush(held: true)
         XCTAssertEqual(d.symbol.strokes[0].points.count, 2)
 
         // 封閉的圖形：修成圓
@@ -139,9 +140,30 @@ final class PenFontSymbolTests: XCTestCase {
         }
         c.beginBrush(at: circle[0])
         for p in circle.dropFirst() { c.continueBrush(to: p) }
-        XCTAssertEqual(c.holdBrush(scale: 3), .closed)
-        let r = c.symbol.strokes[0].points.map { hypot($0.x, $0.y) }
-        XCTAssertLessThan((r.max() ?? 0) - (r.min() ?? 0), 2, "修成正圓：\(r)")
+        XCTAssertEqual(c.holdBrush(scale: 3)?.kind, .circle)
+        c.endBrush(held: true)
+        let pts = c.symbol.strokes[0].points
+        let r = pts.map { hypot($0.x, $0.y) }
+        XCTAssertLessThan((r.max() ?? 0) - (r.min() ?? 0), 0.5, "修成正圓（不是橢圓）：\(r)")
+        XCTAssertGreaterThan(pts.count, 40, "放開後還是圓，不會被簡化成多邊形")
+        // 每一段都很短：看起來是圓滑的圓
+        let longest = zip(pts, pts.dropFirst()).map { hypot($1.x - $0.x, $1.y - $0.y) }.max() ?? 0
+        XCTAssertLessThan(longest, 3)
+
+        // 停住畫成圓弧，不會被拉成直線
+        var a = CircuitSymbolDraft()
+        let arc = (0...30).map { i -> CGPoint in
+            let t = .pi * CGFloat(i) / 30
+            return CGPoint(x: -20 * cos(t), y: -20 * sin(t) + (i % 2 == 0 ? 0.4 : -0.4))
+        }
+        a.beginBrush(at: arc[0])
+        for p in arc.dropFirst() { a.continueBrush(to: p) }
+        XCTAssertEqual(a.holdBrush(scale: 3)?.kind, .arc, "半圓停住：圓弧")
+        a.endBrush(held: true)
+        let ap = a.symbol.strokes[0].points
+        XCTAssertGreaterThan(ap.count, 10, "圓弧不是直線")
+        let ar = ap.map { hypot($0.x, $0.y) }
+        XCTAssertLessThan((ar.max() ?? 0) - (ar.min() ?? 0), 1.5, "點都在同一個圓上：\(ar)")
     }
 
     func testBrushKeepsTheShapeWithFewerPoints() {

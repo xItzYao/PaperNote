@@ -16,7 +16,7 @@ enum CircuitSymbolTool: Int, CaseIterable {
     var hint: String {
         switch self {
         case .line: return "拖一條直線：兩端自動吸到最近的格點。從線的端點接著畫就連在一起。"
-        case .brush: return "用 Pencil 或手指直接畫；畫完停住一下會變成直線，或修成圓、三角形、四邊形。"
+        case .brush: return "用 Pencil 或手指直接畫；畫到一半停住會修成直線、圓弧、圓、橢圓、矩形或三角形，筆不放開繼續移動可以調整。"
         case .text: return "點一下加上文字（例如 +、−、A、VCC），點已經有的字修改、換大小或刪除；拖曳移動。上下標寫 R_1、V^2。"
         case .pin: return "點格點加上接腳（導線接的地方），再點一下拿掉。至少要有一個。"
         case .eraser: return "點或劃過線條、接腳擦掉：「整條」擦掉整條線，「局部」只擦掉碰到的那一段。Pencil 筆身點兩下、Pencil Pro 按壓可以切換橡皮擦。"
@@ -95,10 +95,11 @@ struct CircuitSymbolDraft {
         symbol.strokes[last].points.append(p)
     }
 
-    /// 抖動的取樣點拿掉（線條還是照手畫的走），存起來和畫起來都比較輕
-    mutating func endBrush() {
+    /// 抖動的取樣點拿掉（線條還是照手畫的走），存起來和畫起來都比較輕。
+    /// held：停住修成的圖形，已經是乾淨的線，不再簡化（圓簡化會變成多邊形）
+    mutating func endBrush(held: Bool = false) {
         guard let last = symbol.strokes.indices.last, symbol.strokes[last].freehand else { return }
-        let points = Self.simplified(symbol.strokes[last].points, tolerance: 0.3)
+        let points = held ? symbol.strokes[last].points : Self.simplified(symbol.strokes[last].points, tolerance: 0.3)
         if points.count < 2 {
             symbol.strokes.removeLast()
             _ = history.popLast()
@@ -107,29 +108,29 @@ struct CircuitSymbolDraft {
         }
     }
 
-    /// 筆刷停住時修成的圖形
-    enum HeldShape { case line, closed }
-
-    /// 筆刷畫到一半停住（和頁面上的筆一樣）：封閉的修成圓、三角形、四邊形，不然變直線（之後終點跟著筆尖）。
-    /// scale：一單位在畫面上多大，照畫面上的大小辨識
-    mutating func holdBrush(scale: CGFloat) -> HeldShape? {
+    /// 筆刷畫到一半停住：和頁面上的筆一樣認成直線、圓弧、圓、橢圓、矩形或三角形（InkShapes），
+    /// 筆不放開繼續移動可以調整（直線、圓弧的終點跟著筆尖；封閉圖形縮放）。
+    /// scale：一單位在畫面上多大，照畫面上的大小辨識；回傳的圖形用畫面上的大小（元件座標 × scale）
+    mutating func holdBrush(scale: CGFloat) -> InkShape? {
         guard let last = symbol.strokes.indices.last, symbol.strokes[last].freehand else { return nil }
-        let points = symbol.strokes[last].points
-        guard let first = points.first, let end = points.last, first != end else { return nil }
-        let onScreen = points.map { CGPoint(x: $0.x * scale, y: $0.y * scale) }
-        if let shape = ShapeRecognizer.closedShapePoints(onScreen) {
-            symbol.strokes[last].points = shape.map { CGPoint(x: $0.x / scale, y: $0.y / scale) }
-            return .closed
-        }
-        symbol.strokes[last].points = [first, ShapeRecognizer.snappedLineEnd(from: first, to: end)]
-        return .line
+        let onScreen = symbol.strokes[last].points.map { CGPoint(x: $0.x * scale, y: $0.y * scale) }
+        guard let shape = InkShapes.recognize(onScreen) else { return nil }
+        applyHeld(shape, scale: scale)
+        return shape
     }
 
-    /// 停住變成的直線：終點跟著筆尖（接近水平、垂直時拉正）
-    mutating func moveHeldLine(to p: CGPoint) {
-        guard let last = symbol.strokes.indices.last, symbol.strokes[last].freehand,
-              let first = symbol.strokes[last].points.first else { return }
-        symbol.strokes[last].points = [first, ShapeRecognizer.snappedLineEnd(from: first, to: p)]
+    /// 停住變成的圖形跟著筆尖（p 是元件座標）
+    mutating func moveHeldShape(_ shape: InkShape, to p: CGPoint, scale: CGFloat) -> InkShape {
+        let s = InkShapes.moved(shape, to: CGPoint(x: p.x * scale, y: p.y * scale))
+        applyHeld(s, scale: scale)
+        return s
+    }
+
+    /// 直線只留兩端；圓弧、圓這些留所有的點（不簡化，才不會變成多邊形）
+    private mutating func applyHeld(_ s: InkShape, scale: CGFloat) {
+        guard let last = symbol.strokes.indices.last else { return }
+        let pts = s.kind == .line ? [s.start, s.end] : s.points
+        symbol.strokes[last].points = pts.map { CGPoint(x: $0.x / scale, y: $0.y / scale) }
     }
 
     static func simplified(_ points: [CGPoint], tolerance: CGFloat) -> [CGPoint] {
@@ -291,6 +292,8 @@ final class CircuitSymbolCanvas: UIView {
     var draft: () -> CircuitSymbolDraft = { CircuitSymbolDraft() }
     let strokeLayer = CAShapeLayer()
     private let pinLayer = CAShapeLayer()
+    /// 橡皮擦擦到的範圍（擦的時候、Pencil 懸停時顯示）
+    let eraserLayer = CAShapeLayer()
     /// 文字：字改了才重畫（畫筆刷時不用每次重畫）
     private let labelsView = SymbolLabelsView()
     private(set) var drawnTexts: [CircuitSymbol.Label] = []
@@ -307,6 +310,12 @@ final class CircuitSymbolCanvas: UIView {
         pinLayer.lineWidth = 2
         layer.addSublayer(strokeLayer)
         layer.addSublayer(pinLayer)
+        eraserLayer.fillColor = UIColor.systemGray.withAlphaComponent(0.12).cgColor
+        eraserLayer.strokeColor = UIColor.systemGray.cgColor
+        eraserLayer.lineWidth = 1
+        eraserLayer.isHidden = true
+        eraserLayer.zPosition = 1
+        layer.addSublayer(eraserLayer)
         labelsView.isOpaque = false
         labelsView.backgroundColor = .clear
         labelsView.isUserInteractionEnabled = false
@@ -327,6 +336,19 @@ final class CircuitSymbolCanvas: UIView {
         pinLayer.frame = bounds
         labelsView.frame = bounds
         refresh()
+    }
+
+    /// 橡皮擦的圓圈（畫面座標）；nil 收起來
+    func showEraser(at v: CGPoint?, radius: CGFloat) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if let v {
+            eraserLayer.path = UIBezierPath(ovalIn: CGRect(x: v.x - radius, y: v.y - radius, width: radius * 2, height: radius * 2)).cgPath
+            eraserLayer.isHidden = false
+        } else {
+            eraserLayer.isHidden = true
+        }
+        CATransaction.commit()
     }
 
     private func drawTexts() {
@@ -458,7 +480,7 @@ final class CircuitSymbolEditorViewController: UIViewController {
     private var toolBeforeEraser: CircuitSymbolTool = .line
     private var holdTimer: Timer?
     private var holdAnchor: CGPoint = .zero
-    private var heldShape: CircuitSymbolDraft.HeldShape?
+    private var heldShape: InkShape?
     /// 文字工具正在拖的字
     private var movingText: Int?
     /// 文字的大小選項（元件座標，格點 10）
@@ -519,18 +541,24 @@ final class CircuitSymbolEditorViewController: UIViewController {
         panGesture = pan
         strokeTouch.onBegin = { [weak self] v in
             guard let self else { return }
+            self.showEraser(at: v)
             self.handlePan(.began, at: self.canvas.symbolPoint(v))
         }
         strokeTouch.onMove = { [weak self] vs in
             guard let self else { return }
+            self.showEraser(at: vs.last)
             for v in vs { self.apply(.changed, at: self.canvas.symbolPoint(v)) }
             self.canvas.refresh()
         }
         strokeTouch.onEnd = { [weak self] v in
             guard let self else { return }
+            self.showEraser(at: nil)
             self.handlePan(.ended, at: self.canvas.symbolPoint(v))
         }
         canvas.addGestureRecognizer(strokeTouch)
+        // Pencil 懸停：還沒碰到就看得到橡皮擦的範圍
+        let hover = UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:)))
+        canvas.addGestureRecognizer(hover)
         // 筆身點兩下、Pencil Pro 按壓：切換這裡的橡皮擦（筆記本那邊不會跟著切）
         let pencil = UIPencilInteraction()
         pencil.delegate = self
@@ -555,6 +583,7 @@ final class CircuitSymbolEditorViewController: UIViewController {
         toolPicker.selectedSegmentIndex = t.rawValue
         hint.text = t.hint
         eraseKind.isHidden = t != .eraser
+        if t != .eraser { canvas.showEraser(at: nil, radius: Self.eraserRadius) }
         // 筆刷、橡皮擦一碰到就開始；線條、接腳用點一下、拖曳（拖曳的起點會扣回剛碰到的位置）
         let immediate = t == .brush || t == .eraser
         strokeTouch.isEnabled = immediate
@@ -577,7 +606,21 @@ final class CircuitSymbolEditorViewController: UIViewController {
         canvas.refresh()
     }
 
-    private var tolerance: CGFloat { 12 / canvas.scale }
+    private var tolerance: CGFloat { Self.eraserRadius / canvas.scale }
+    /// 橡皮擦（和點選）的範圍：畫面上的半徑
+    static let eraserRadius: CGFloat = 12
+
+    /// 橡皮擦工具：在畫面座標 v 顯示擦到的範圍（nil 收起來）
+    private func showEraser(at v: CGPoint?) {
+        canvas.showEraser(at: tool == .eraser ? v : nil, radius: Self.eraserRadius)
+    }
+
+    @objc private func hovered(_ g: UIHoverGestureRecognizer) {
+        switch g.state {
+        case .began, .changed: showEraser(at: g.location(in: canvas))
+        default: showEraser(at: nil)
+        }
+    }
 
     /// 點一下（元件座標）
     func handleTap(at p: CGPoint) {
@@ -645,22 +688,22 @@ final class CircuitSymbolEditorViewController: UIViewController {
                 draft.beginBrush(at: p)
                 restartHoldTimer(at: p)
             case .changed:
-                if heldShape == .line {
-                    draft.moveHeldLine(to: p)
-                } else if heldShape == nil {
+                if let s = heldShape {
+                    heldShape = draft.moveHeldShape(s, to: p, scale: canvas.scale)
+                } else {
                     draft.continueBrush(to: p)
                     // 還在動：重新等停住（抖一點點不算動）
                     if hypot(p.x - holdAnchor.x, p.y - holdAnchor.y) * canvas.scale > 3 { restartHoldTimer(at: p) }
                 }
             case .ended, .cancelled, .failed:
                 holdTimer?.invalidate()
-                if heldShape == .line {
-                    draft.moveHeldLine(to: p)
-                } else if heldShape == nil {
+                if let s = heldShape {
+                    _ = draft.moveHeldShape(s, to: p, scale: canvas.scale)
+                } else {
                     draft.continueBrush(to: p)
                 }
+                draft.endBrush(held: heldShape != nil)
                 heldShape = nil
-                draft.endBrush()
             default: break
             }
         case .eraser:

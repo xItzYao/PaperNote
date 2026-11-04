@@ -159,6 +159,29 @@ final class SelectInkTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(editor.lassoSel).bounds.width, b.width * 2, accuracy: 0.1, "選取框跟著變大")
     }
 
+    /// 回報的問題：拉大筆跡時，要放開才清楚，拖的時候很糊（預覽圖被拉大）
+    func testScalingRedrawsThePreviewAtTheNewSize() throws {
+        tap(doc(150, 302))
+        let b = try XCTUnwrap(editor.lassoSel).bounds
+        let handle = try XCTUnwrap(editor.lassoScaleHandle(b))
+        let pan = TouchPan()
+        pan.point = handle
+        pan.fake = .began
+        editor.handleToolPan(pan)
+        let before = try XCTUnwrap(editor.overlay.lassoPreviewLayer.contents.map { $0 as! CGImage })
+        pan.moved = CGPoint(x: b.width * 2, y: b.height * 2)
+        pan.point = CGPoint(x: handle.x + pan.moved.x, y: handle.y + pan.moved.y)
+        pan.fake = .changed
+        editor.handleToolPan(pan)
+        let during = try XCTUnwrap(editor.overlay.lassoPreviewLayer.contents.map { $0 as! CGImage })
+        XCTAssertEqual(Double(during.width), Double(before.width) * 3, accuracy: Double(before.width) * 0.1,
+                       "放大三倍時預覽圖也是三倍大，不是把原本的圖拉大")
+        XCTAssertEqual(editor.overlay.lassoPreviewLayer.frame.width, b.width * 3, accuracy: 0.5)
+        pan.fake = .ended
+        editor.handleToolPan(pan)
+        XCTAssertTrue(editor.overlay.lassoPreviewLayer.isHidden)
+    }
+
     func testScalingAPencilKitStroke() throws {
         tap(doc(150, 503))
         let b = try XCTUnwrap(editor.lassoSel).bounds

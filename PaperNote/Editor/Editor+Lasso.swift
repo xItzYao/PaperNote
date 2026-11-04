@@ -260,6 +260,8 @@ extension NotebookViewController {
         isApplyingDrawing = false
         // 自製筆刷的筆跡也先藏起來，一起放進預覽圖
         let movingInk = inkStrokes(sel.ink)
+        lassoMoveInk = movingInk
+        lassoPreviewScale = 1
         setInkHidden(sel.ink)
         if let img = inkPreviewImage(lassoMoveStrokes, movingInk, rect: sel.bounds) {
             overlay.showLassoPreview(img, frame: sel.bounds)
@@ -297,6 +299,18 @@ extension NotebookViewController {
         let r = sel.bounds.applying(t)
         overlay.showLassoSelection(r, handle: lassoScaleHandle(r))
         overlay.moveLassoPreview(to: r)
+        // 縮放：照現在的大小重畫預覽（把原本的圖拉大會糊）；變化不到 2% 先用拉伸的
+        if lassoScaling, abs(t.a / lassoPreviewScale - 1) > 0.02 {
+            lassoPreviewScale = t.a
+            let pk = lassoMoveStrokes.map { s -> PKStroke in
+                var s = s
+                s.transform = s.transform.concatenating(t)
+                return s
+            }
+            if let img = inkPreviewImage(pk, lassoMoveInk.map { InkGeometry.applying($0, t) }, rect: r) {
+                overlay.showLassoPreview(img, frame: r)
+            }
+        }
         // 圈到物件時只能移動
         for (ref, frame) in lassoMoveElementFrames {
             guard case let (pi, ei)? = locate(ref) else { continue }
@@ -327,6 +341,7 @@ extension NotebookViewController {
         setDrawing(drawing)
         let movedInk = transformModel(sel, t)
         lassoMoveStrokes = []
+        lassoMoveInk = []
         lassoMoveOriginal = nil
         lassoMoveElementFrames = [:]
         lassoSel = LassoSelection(strokeIndices: Array(base..<(base + sel.strokeIndices.count)), elements: sel.elements,
@@ -342,6 +357,7 @@ extension NotebookViewController {
         }
         lassoMoveStart = nil
         lassoScaling = false
+        lassoMoveInk = []
         lassoMoveOriginal = nil
         lassoMoveStrokes = []
         lassoMoveElementFrames = [:]

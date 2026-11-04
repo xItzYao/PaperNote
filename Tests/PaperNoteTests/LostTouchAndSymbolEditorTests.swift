@@ -112,6 +112,31 @@ final class SymbolEditorStrokeTests: XCTestCase {
         XCTAssertTrue(vc.panGesture.isEnabled, "線條照舊用拖曳（兩端吸到格點）")
     }
 
+    /// 回報的問題：橡皮擦沒有小圓圈，看不出擦的範圍
+    func testTheEraserShowsItsCircle() {
+        let vc = editorVC()
+        vc.setTool(.eraser)
+        XCTAssertTrue(vc.canvas.eraserLayer.isHidden)
+        let t = FakeTouch(type: .pencil, location: view(vc, 50, 50))
+        vc.strokeTouch.touchesBegan([t], with: UIEvent())
+        XCTAssertFalse(vc.canvas.eraserLayer.isHidden, "擦的時候看得到範圍")
+        let box = vc.canvas.eraserLayer.path?.boundingBox ?? .zero
+        XCTAssertEqual(box.width, CircuitSymbolEditorViewController.eraserRadius * 2, accuracy: 0.01, "圓圈就是擦到的範圍")
+        XCTAssertEqual(box.midX, view(vc, 50, 50).x, accuracy: 0.01)
+        t.point = view(vc, 60, 50)
+        vc.strokeTouch.touchesMoved([t], with: UIEvent())
+        XCTAssertEqual(vc.canvas.eraserLayer.path?.boundingBox.midX ?? 0, view(vc, 60, 50).x, accuracy: 0.01, "跟著筆尖")
+        t.fakePhase = .ended
+        vc.strokeTouch.touchesEnded([t], with: UIEvent())
+        XCTAssertTrue(vc.canvas.eraserLayer.isHidden, "放開收起來")
+
+        vc.setTool(.brush)
+        let b = FakeTouch(type: .pencil, location: view(vc, 0, 0))
+        vc.strokeTouch.touchesBegan([b], with: UIEvent())
+        XCTAssertTrue(vc.canvas.eraserLayer.isHidden, "筆刷沒有圓圈")
+        vc.strokeTouch.touchesEnded([b], with: UIEvent())
+    }
+
     func testPartialEraseCutsOnlyThePartItTouches() {
         var d = CircuitSymbolDraft()
         d.beginLine(at: CGPoint(x: -40, y: 0))

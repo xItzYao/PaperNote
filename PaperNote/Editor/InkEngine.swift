@@ -924,7 +924,7 @@ extension NotebookViewController {
     private func screen(_ p: CGPoint) -> CGPoint { pagesContainer.convert(p, to: liveInkView) }
 
     func inkBegan(_ s: InkCaptureRecognizer.Sample) {
-        dismissToolPopover()
+        collapseToolPopoverForWriting()
         if let p = paletteOverlay, p.mode == .launcher { dismissPalette() }
         let preset = BrushStore.shared.current
         var d = InkDraft(points: [], colorHex: preset.colorHex, baseWidth: max(preset.width, 0.1),
@@ -1016,6 +1016,7 @@ extension NotebookViewController {
     }
 
     func inkEnded(cancelled: Bool) {
+        finishCollapsedToolPopover()
         inkHoldTimer?.invalidate()
         inkHoldTimer = nil
         guard var d = inkDraft else { return }

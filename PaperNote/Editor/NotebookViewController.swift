@@ -273,6 +273,11 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var lassoMoveStart: CGPoint?
     /// 拖的是右下角的縮放把手（不是移動）
     var lassoScaling = false
+    /// 拖曳中預覽的自製筆刷筆跡（文件座標）、預覽圖是照多大的倍數畫的
+    var lassoMoveInk: [InkStroke] = []
+    var lassoPreviewScale: CGFloat = 1
+    /// 下筆時縮回去的小視窗：筆放開才真的關掉（寫到一半關掉會打斷這一筆）
+    var toolPopoverCollapsed = false
     var lassoMoveOriginal: PKDrawing?
     var lassoMoveStrokes: [PKStroke] = []
     var lassoMoveElementFrames: [ElementRef: CGRect] = [:]
@@ -443,7 +448,11 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         inkContainer.isUserInteractionEnabled = false
         canvas.addSubview(inkContainer)
         // 工具列的小視窗讓畫布的觸控穿過去（開著也能直接寫），所以碰一下頁面就關掉它
-        canvas.addGestureRecognizer(TouchDownRecognizer { [weak self] in self?.dismissToolPopover(animated: true) })
+        canvas.addGestureRecognizer(TouchDownRecognizer { [weak self] t in
+            guard let self else { return }
+            // 下筆寫字：小視窗馬上縮回去；點旁邊：系統的關閉動畫
+            if self.touchWillDraw(t) { self.collapseToolPopoverForWriting() } else { self.dismissToolPopover(animated: true) }
+        })
 
         editMenu = UIEditMenuInteraction(delegate: self)
         canvas.addInteraction(editMenu)
@@ -967,8 +976,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         pkUsingSince = CACurrentMediaTime()
         holdToShape.pencilKitBegan()
         strokeGesture = StrokeGesture(before: canvas.drawing, mark: history.recordCount)
-        // 下筆就關掉工具列的小視窗（粗細、虛線、筆刷設定）
-        dismissToolPopover()
+        // 下筆就收起工具列的小視窗（粗細、虛線、筆刷設定），筆放開才真的關掉
+        collapseToolPopoverForWriting()
         // 開始寫字 → 收起還沒點的調色盤小圖示
         if let p = paletteOverlay, p.mode == .launcher { dismissPalette() }
         toolBeganAt = CACurrentMediaTime()
@@ -977,6 +986,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
         pkUsingSince = nil
+        finishCollapsedToolPopover()
         // 停住變直線的那一筆：交給 holdToShape 換成直線，不當成新筆跡處理
         if holdToShape.pencilKitEnded() { return }
         let gesture = strokeGesture
