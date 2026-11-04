@@ -36,8 +36,9 @@ final class CircuitEditingTests: XCTestCase {
         editor.setTool(.circuit)
         editor.selectCircuitMode(.select)
         editor.circuitTarget = ref
-        // 同一輪 run loop 記的動作會併成一步：讓插入電路圖自己是一步
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        // 同一輪 run loop 記的動作會併成一步：讓插入電路圖自己是一步。
+        // 直接結束這一步，不靠等一下：模擬器卡住時 run loop 等不到結束，擦除會併進插入，復原一次電路圖整個不見
+        editor.history.endGroup()
     }
 
     override func tearDown() {
