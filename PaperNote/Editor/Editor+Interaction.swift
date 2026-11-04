@@ -623,8 +623,8 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         let r = docFrame(of: e, pageIndex: pi)
         // 電路圖不能拉角落縮放（元件、導線照格點排），不顯示縮放把手
         let handle = e.isTable ? tableScaleHandlePoint(r) : CGPoint(x: r.maxX, y: r.maxY)
-        overlay.showSelection(r, locked: e.locked, handle: e.locked || e.isCircuit ? nil : handle,
-                              edges: e.isTextBox && !e.locked ? Self.edgeHandlePoints(r) : [])
+        let edges = e.locked ? [] : e.isTextBox ? Self.edgeHandlePoints(r) : e.isTable ? tableEdgeHandlePoints(r) : []
+        overlay.showSelection(r, locked: e.locked, handle: e.locked || e.isCircuit ? nil : handle, edges: edges)
     }
 
     /// 表格的縮放把手：右下角外面斜下方。角落本身是最後一條直線、橫線的圓點（在下方、右邊）和填滿點，
@@ -632,6 +632,13 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
     func tableScaleHandlePoint(_ r: CGRect) -> CGPoint {
         let off = 32 / canvas.zoomScale
         return CGPoint(x: r.maxX + off, y: r.maxY + off)
+    }
+
+    /// 表格的整體寬、高把手：右邊最上面（只改寬度）、下面最左邊（只改高度）。
+    /// 第一條線是外框，那裡沒有格線圓點，不會和圓點疊在一起
+    func tableEdgeHandlePoints(_ r: CGRect) -> [(BoxEdge, CGPoint)] {
+        let off = 32 / canvas.zoomScale
+        return [(.right, CGPoint(x: r.maxX + off, y: r.minY)), (.bottom, CGPoint(x: r.minX, y: r.maxY + off))]
     }
 
     /// 文字框的字級（工具列的放大縮小、右下角的等比例縮放）
@@ -649,8 +656,14 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         let r = docFrame(of: e, pageIndex: pi)
         let tol = 16 / canvas.zoomScale
         if case let .table(t) = e.content, t.size.width > 0, t.size.height > 0 {
-            // 縮放把手和其他控制點分開放，按在它附近就是縮放
-            if !e.locked, p.distance(to: tableScaleHandlePoint(r)) < tol * 1.5 { return (ref, .resize) }
+            // 縮放、整體寬高的把手和其他控制點分開放：按在附近（又比格線圓點近）就是它
+            if !e.locked {
+                let sizers = [(DragKind.resize, tableScaleHandlePoint(r))] + tableEdgeHandlePoints(r).map { (DragKind.edge($0.0), $0.1) }
+                if let s = sizers.min(by: { p.distance(to: $0.1) < p.distance(to: $1.1) }), p.distance(to: s.1) < tol * 1.5,
+                   p.distance(to: s.1) <= nearestTableGrip(to: p)?.distance ?? .greatestFiniteMagnitude {
+                    return (ref, s.0)
+                }
+            }
             // 上方、左邊的標頭：拖兩個標頭的分界＝調整欄寬（列高），拖標頭本身＝選好幾欄（列）
             if let line = tableHeaderBoundary(at: p) { return (ref, line) }
             // 表格外側的格線圓點
@@ -807,6 +820,14 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             guard case let (pi, _)? = locate(d.ref) else { break }
             let ins = pages[pi].insets
             let room = pageRoom(for: d.ref, from: o.origin)
+            if case var .table(t) = e.content {
+                // 表格：所有欄一起變寬（所有列一起變高），字不變
+                t.scale(to: CGSize(width: side == .right ? min(o.width + dx, room.width) : o.width,
+                                   height: side == .bottom ? min(o.height + dy, room.height) : o.height))
+                e.content = .table(t)
+                e.frame.size = t.size
+                break
+            }
             switch side {
             case .top:
                 let y = min(max(-ins.top, o.minY + dy), o.maxY - 28)

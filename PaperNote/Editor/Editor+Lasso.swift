@@ -458,6 +458,10 @@ extension NotebookViewController {
         ]
         // 圈到筆跡：可以直接改顏色
         if sel.hasInk { children.insert(lassoColorMenu(), at: 0) }
+        // 圈到一個物件（可以連上面的字一起）：換到選取工具編輯它
+        if lassoEditTarget != nil {
+            children.insert(UIAction(title: "編輯", image: UIImage(systemName: "pencil")) { [weak self] _ in self?.editLassoTarget() }, at: 0)
+        }
         // 圈到電路圖：可以直接回到電路工具編輯
         if let circuit = sel.elements.first(where: { ref in locate(ref).map { pages[$0.0].elements[$0.1].isCircuit } ?? false }) {
             children.insert(UIAction(title: "編輯電路圖", image: UIImage(systemName: "bolt")) { [weak self] _ in
@@ -466,6 +470,21 @@ extension NotebookViewController {
             }, at: 0)
         }
         presentMenu(UIMenu(children: children), atDocPoint: CGPoint(x: sel.bounds.midX, y: sel.bounds.minY), avoiding: sel.bounds)
+    }
+
+    /// 套索圈到的唯一一個物件（表格、文字框、圖片）；電路圖用「編輯電路圖」
+    var lassoEditTarget: ElementRef? {
+        guard let sel = lassoSel, sel.elements.count == 1, let ref = sel.elements.first,
+              case let (pi, ei)? = locate(ref), !pages[pi].elements[ei].isCircuit else { return nil }
+        return ref
+    }
+
+    /// 換到選取工具、選好套索圈到的那個物件（表格就進入表格編輯）
+    func editLassoTarget() {
+        guard let ref = lassoEditTarget else { return }
+        clearLassoSelection()
+        setTool(.select)
+        select(ref)
     }
 
     // MARK: 改顏色

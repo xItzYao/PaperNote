@@ -364,6 +364,47 @@ final class TableEditorUXTests: XCTestCase {
         XCTAssertEqual(undone.fontSize, before.fontSize)
     }
 
+    /// 回報的需求：表格除了右下角等比例縮放，右邊、下面也要能只調整整體寬度、高度
+    func testWidthAndHeightHandles() throws {
+        let r = try XCTUnwrap(editor.selectedTable()).docRect
+        let edges = editor.tableEdgeHandlePoints(r)
+        let right = try XCTUnwrap(edges.first { $0.0 == .right }).1, bottom = try XCTUnwrap(edges.first { $0.0 == .bottom }).1
+        XCTAssertGreaterThan(right.x, r.maxX, "寬度把手在右邊外面")
+        XCTAssertGreaterThan(bottom.y, r.maxY, "高度把手在下面外面")
+        for side in [BoxEdge.right, .bottom] {
+            XCTAssertFalse(try XCTUnwrap(editor.overlay.edgeHandles[side]).isHidden, "\(side) 的把手看得到")
+        }
+        for side in [BoxEdge.top, .left] {
+            XCTAssertTrue(try XCTUnwrap(editor.overlay.edgeHandles[side]).isHidden, "表格沒有 \(side) 的把手")
+        }
+        guard case .edge(.right)? = editor.dragTarget(at: right)?.1 else { return XCTFail("右邊的把手調寬度") }
+        guard case .edge(.bottom)? = editor.dragTarget(at: bottom)?.1 else { return XCTFail("下面的把手調高度") }
+        // 和格線圓點、縮放把手都分得開
+        let grips = try XCTUnwrap(editor.selectedTableHandles()).handles
+        guard case .rowLine(1)? = editor.dragTarget(at: try XCTUnwrap(grips.rowGrips.first).point)?.1 else { return XCTFail("第一條橫線的圓點還是調列高") }
+        guard case .colLine(1)? = editor.dragTarget(at: try XCTUnwrap(grips.colGrips.first).point)?.1 else { return XCTFail("第一條直線的圓點還是調欄寬") }
+        guard case .resize? = editor.dragTarget(at: editor.tableScaleHandlePoint(r))?.1 else { return XCTFail("右下角還是等比例縮放") }
+
+        func drag(_ from: CGPoint, by d: CGPoint) {
+            let g = FakePan(target: nil, action: nil)
+            for (i, p) in [from, CGPoint(x: from.x + d.x / 2, y: from.y + d.y / 2), CGPoint(x: from.x + d.x, y: from.y + d.y)].enumerated() {
+                g.fake = i == 0 ? .began : (i == 2 ? .ended : .changed)
+                editor.handleElementPan(g, p)
+            }
+        }
+        drag(right, by: CGPoint(x: -60, y: 25))
+        XCTAssertEqual(table.size.width, 240, accuracy: 0.5, "只改寬度")
+        XCTAssertEqual(table.size.height, 120, accuracy: 0.5, "高度不變")
+        XCTAssertEqual(table.colWidths, [80, 80, 80], "所有欄一起變窄")
+        XCTAssertEqual(table.fontSize, 16, "字不變")
+        let r2 = try XCTUnwrap(editor.selectedTable()).docRect
+        let bottom2 = try XCTUnwrap(editor.tableEdgeHandlePoints(r2).first { $0.0 == .bottom }).1
+        drag(bottom2, by: CGPoint(x: 30, y: -30))
+        XCTAssertEqual(table.size.width, 240, accuracy: 0.5, "寬度不變")
+        XCTAssertEqual(table.rowHeights, [30, 30, 30], "所有列一起變矮")
+        XCTAssertEqual(try XCTUnwrap(editor.selectedTable()).docRect.origin, r.origin, "左上角不動")
+    }
+
     // MARK: 工具列、長按
 
     private func ribbonButtons(_ views: [UIView]? = nil) -> [UIButton] {
@@ -699,27 +740,35 @@ final class TableEditorUXTests: XCTestCase {
         XCTAssertEqual(table.rows, 15)
     }
 
-    // MARK: 重新設計：＋ 只在選整欄整列時出現、拖標頭分界、再點一下打開選單
+    // MARK: 重新設計：＋ 在標頭外面、拖標頭分界、再點一下打開選單
 
-    /// 回報的問題：行列編號擋到 ＋。＋ 只在選了整欄（整列）時出現在兩側，不和標頭重疊
-    func testPlusOnlyBesideASelectedColumnAndNotOnTheHeaders() throws {
+    /// 回報的問題：行列編號擋到 ＋（＋ 放到標頭外面）。之後的需求：選一格就有 ＋，不用先選整欄整列
+    func testPlusBesideTheSelectionAndNotOnTheHeaders() throws {
+        let headers = try XCTUnwrap(editor.tableHeaderRects())
+        let r = 11 / editor.canvas.zoomScale
         let cell = CGPoint(x: origin.x + 150, y: origin.y + 60)
         editor.updateCellSelection(from: cell, to: cell)
-        let none = try XCTUnwrap(editor.selectedTableHandles()).handles
-        XCTAssertTrue(none.plusCols.isEmpty && none.plusRows.isEmpty, "只選一格：不顯示 ＋")
-        let headers = try XCTUnwrap(editor.tableHeaderRects())
-        editor.handleTap(FakeTap(headers.cols[1].center))
+        let one = try XCTUnwrap(editor.selectedTableHandles()).handles
+        XCTAssertEqual(one.plusCols.map(\.index), [1, 2], "只選 B2 一格：B 欄左右兩側各一個 ＋")
+        XCTAssertEqual(one.plusRows.map(\.index), [1, 2], "第 2 列上下兩側各一個 ＋")
+        for plus in one.plusCols + one.plusRows {
+            let circle = CGRect(x: plus.point.x - r, y: plus.point.y - r, width: 2 * r, height: 2 * r)
+            XCTAssertFalse((headers.cols + headers.rows).contains { $0.intersects(circle) }, "＋ 不能疊在標頭上")
+            XCTAssertFalse(try XCTUnwrap(editor.selectedTable()).docRect.intersects(circle), "＋ 不在表格裡")
+        }
+        editor.handleTap(FakeTap(one.plusRows[1].point))
+        XCTAssertEqual(table.rows, 4, "按下面的 ＋ 插入一列")
+
+        editor.handleTap(FakeTap(try XCTUnwrap(editor.tableHeaderRects()).cols[1].center))
         let h = try XCTUnwrap(editor.selectedTableHandles()).handles
         XCTAssertEqual(h.plusCols.map(\.index), [1, 2], "B 欄左右兩側各一個 ＋")
-        XCTAssertTrue(h.plusRows.isEmpty)
-        let r = 11 / editor.canvas.zoomScale
         for plus in h.plusCols {
             let circle = CGRect(x: plus.point.x - r, y: plus.point.y - r, width: 2 * r, height: 2 * r)
             XCTAssertFalse((headers.cols + headers.rows).contains { $0.intersects(circle) }, "＋ 不能疊在標頭上")
         }
         editor.handleTap(FakeTap(h.plusCols[1].point))
         XCTAssertEqual(table.cols, 4, "按右邊的 ＋ 插入一欄")
-        XCTAssertEqual(editor.tableCellSel, CellRange((0, 2), (2, 2)), "選起新的那一欄，可以接著再按")
+        XCTAssertEqual(editor.tableCellSel, CellRange((0, 2), (3, 2)), "選起新的那一欄（剛才多了一列），可以接著再按")
     }
 
     func testTappingASelectedHeaderAgainOpensTheRowColumnMenu() throws {
@@ -811,6 +860,21 @@ final class TableEditorUXTests: XCTestCase {
         editor.clearLassoSelection()
         lasso(CGRect(x: o.x + 250, y: o.y + 90, width: 120, height: 80))
         XCTAssertEqual(editor.lassoSel?.elements, [ref], "只圈到角落也算")
+        editor.clearLassoSelection()
+
+        // 圈到一個表格：選單有「編輯」，按下去換到選取工具編輯這個表格
+        lasso(CGRect(x: o.x + 110, y: o.y + 45, width: 80, height: 30))
+        XCTAssertEqual(editor.lassoEditTarget, ref)
+        editor.presentLassoMenu()
+        XCTAssertTrue(titles(try XCTUnwrap(editor.pendingMenu).children).contains("編輯"), "套索選單有「編輯」")
+        editor.editLassoTarget()
+        XCTAssertEqual(editor.tool, .select, "換到選取工具")
+        XCTAssertEqual(editor.selected, ref, "選好這個表格")
+        XCTAssertNil(editor.lassoSel)
+        editor.setTool(.lasso)
+        // 只圈到字：沒有「編輯」
+        lasso(CGRect(x: o.x + 400, y: o.y + 200, width: 80, height: 40))
+        XCTAssertNil(editor.lassoEditTarget, "沒圈到物件")
         editor.clearLassoSelection()
 
         editor.toggleLock(ref)
