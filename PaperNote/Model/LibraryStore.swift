@@ -369,12 +369,13 @@ final class LibraryStore: ObservableObject {
         return meta
     }
 
+    /// 匯入：同一個資料夾裡已經有同名的筆記本（使用者是看名稱分的），後面加 (1)、(2)…
     func importPDF(from url: URL, folder: UUID?) throws -> NotebookMeta {
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
 
-        var meta = NotebookMeta(title: url.deletingPathExtension().lastPathComponent, folderId: folder,
-                                coverHex: Palette.covers.randomElement()!)
+        var meta = NotebookMeta(title: availableName(url.deletingPathExtension().lastPathComponent, forFolder: false, in: folder),
+                                folderId: folder, coverHex: Palette.covers.randomElement()!)
         let dir = notebookURL(meta.id)
         let files = dir.appendingPathComponent("files", isDirectory: true)
         try fm.createDirectory(at: files, withIntermediateDirectories: true)
@@ -413,7 +414,7 @@ final class LibraryStore: ObservableObject {
         else { throw LibraryError.notPaperNote }
         guard manifest.format <= PaperNoteManifest.currentFormat else { throw LibraryError.newerPaperNote }
 
-        var meta = NotebookMeta(title: manifest.title, folderId: folder, coverHex: manifest.coverHex)
+        var meta = NotebookMeta(title: availableName(manifest.title, forFolder: false, in: folder), folderId: folder, coverHex: manifest.coverHex)
         let dir = notebookURL(meta.id)
         do {
             for e in archive.entries where e.path.hasPrefix("notebook/") && !e.isDirectory {

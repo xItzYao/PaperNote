@@ -367,8 +367,14 @@ extension NotebookViewController {
         subBarStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         presetButtons = [:]
         penWidthButtons = []
+        penStyleButton = nil
         switch tool {
         case .pen, .highlighter:
+            // 筆：最左邊先選筆型
+            if tool == .pen {
+                subBarStack.addArrangedSubview(makePenStylePicker())
+                subBarStack.addArrangedSubview(toolbarSeparator())
+            }
             subBarStack.addArrangedSubview(makePresetStrip())
             // 新增緊接在常用筆刷的右邊
             let add = makeButton(symbol: "plus", title: nil, action: nil)
@@ -644,6 +650,59 @@ extension NotebookViewController {
             presetButtons[p.id]?.setImage(presetImage(p, selected: p.id == BrushStore.shared.currentID), for: .normal)
         }
         refreshPenStyleControls()
+        refreshPenStylePicker()
+    }
+
+    // MARK: 筆型
+
+    /// 筆工具列最左邊的筆型：圖示是用目前的顏色畫的一筆，點開選別的筆型（一樣用目前的顏色預覽）
+    func makePenStylePicker() -> UIButton {
+        let b = UIButton(configuration: .plain())
+        b.accessibilityLabel = "筆型"
+        b.showsMenuAsPrimaryAction = true
+        penStyleButton = b
+        refreshPenStylePicker()
+        return b
+    }
+
+    func refreshPenStylePicker() {
+        guard let b = penStyleButton else { return }
+        let p = BrushStore.shared.current
+        var c = b.configuration ?? .plain()
+        c.image = Self.penStyleImage(p.style, color: p.colorHex, size: CGSize(width: 44, height: 24))
+        c.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6)
+        c.background.backgroundColor = .secondarySystemFill
+        c.background.cornerRadius = 8
+        b.configuration = c
+        b.accessibilityValue = p.style.title
+        b.menu = UIMenu(title: "筆型", children: InkStyle.allCases.filter { $0 != .marker }.map { s in
+            UIAction(title: s.title, image: Self.penStyleImage(s, color: p.colorHex, size: CGSize(width: 56, height: 24)),
+                     state: s == p.style ? .on : .off) { [weak self] _ in self?.setPenStyle(s) }
+        })
+    }
+
+    /// 換目前這支筆的筆型：粗細留在同一格（細、中、粗）
+    func setPenStyle(_ s: InkStyle) {
+        var p = BrushStore.shared.current
+        guard p.style != s, p.style != .marker, s != .marker else { return }
+        let slot = currentWidthSlot()
+        p.style = s
+        p.width = BrushStore.shared.styleWidths(s)[slot]
+        updateCurrentPreset(p)
+        // 可能從自製筆刷換成 PencilKit（或相反）
+        applyInkEngine()
+    }
+
+    /// 這種筆型用這個顏色畫的一筆（中等粗細）
+    static func penStyleImage(_ style: InkStyle, color: String, size: CGSize) -> UIImage {
+        let path = (0...40).map { i -> CGPoint in
+            let t = CGFloat(i) / 40
+            return CGPoint(x: 4 + (size.width - 8) * t, y: size.height / 2 - sin(t * .pi * 2) * size.height * 0.25)
+        }
+        let width = min(max(style.styleWidths[1], 1.5), 4)
+        return BrushPreset(style: style, colorHex: color, width: width)
+            .strokePreview(path, in: size, scale: UIScreen.main.scale)
+            .withRenderingMode(.alwaysOriginal)
     }
 
     // MARK: 筆的線條樣式
@@ -757,7 +816,8 @@ extension NotebookViewController {
 
     // MARK: 工具列的小視窗
 
-    /// 粗細、虛線、筆刷設定的小視窗：開著時筆照樣可以在畫布上寫（一下筆就關掉），換工具也會關掉
+    /// 粗細、虛線、筆刷設定的小視窗。開著時碰到頁面（筆或手指，點或畫）都當作點旁邊：
+    /// 關掉它、這一下不寫字也不捲動，關好了才照常寫。換工具也會關掉
     /// rect：指著 source 裡的這一塊（沒給就是整個 source）
     func presentToolPopover(_ vc: UIViewController, from source: UIView, rect: CGRect? = nil, size: CGSize) {
         dismissToolPopover()
@@ -766,7 +826,8 @@ extension NotebookViewController {
         if let pop = vc.popoverPresentationController {
             pop.sourceView = source
             pop.sourceRect = rect ?? source.bounds
-            pop.passthroughViews = [canvas]
+            // 頁面上的觸碰交給 popoverShield（不讓系統的透明底接走：點旁邊關掉後頁面的手勢會卡住）
+            pop.passthroughViews = [popoverShield]
         }
         present(vc, animated: true)
     }
@@ -774,36 +835,12 @@ extension NotebookViewController {
     /// 關掉小視窗。工具列重建時它依附的按鈕會被拿掉，不關的話可能卡在看不到的地方擋住所有觸控（這時不要動畫）。
     /// animated：點旁邊關掉時縮回去
     func dismissToolPopover(animated: Bool = false) {
-        toolPopoverCollapsed = false
         guard let p = presentedViewController, p.modalPresentationStyle == .popover, !p.isBeingDismissed else { return }
         p.dismiss(animated: animated)
     }
 
-    /// 這次觸碰會寫字（或擦除）
-    func touchWillDraw(_ t: UITouch) -> Bool {
-        tool.isDrawing && !previewMode && (t.type == .pencil || settings.fingerDrawing)
-    }
-
-    /// 下筆時：小視窗馬上縮回去（和點旁邊一樣的感覺），筆放開才真的關掉。
-    /// 寫到一半關掉視窗，系統會打斷正在寫的這一筆
-    func collapseToolPopoverForWriting() {
-        guard !toolPopoverCollapsed, let p = presentedViewController, p.modalPresentationStyle == .popover, !p.isBeingDismissed,
-              let container = p.presentationController?.containerView else { return }
-        toolPopoverCollapsed = true
-        container.isUserInteractionEnabled = false
-        UIView.animate(withDuration: 0.2, delay: 0, options: [.beginFromCurrentState, .curveEaseIn]) {
-            for v in container.subviews {
-                v.alpha = 0
-                v.transform = CGAffineTransform(scaleX: 0.85, y: 0.85)
-            }
-        }
-    }
-
-    /// 筆放開了：縮回去的小視窗真的關掉
-    func finishCollapsedToolPopover() {
-        guard toolPopoverCollapsed else { return }
-        dismissToolPopover()
-    }
+    /// 工具列的小視窗開著（包含正在關的時候）
+    var toolPopoverShown: Bool { presentedViewController?.modalPresentationStyle == .popover }
 
     /// 依目前的筆更新「細、中、粗」與虛線按鈕
     func refreshPenStyleControls() {
@@ -1297,20 +1334,17 @@ private struct DashPreview: View {
     }
 }
 
-/// 手指或筆一碰到就通知一次，然後放棄（不擋其他手勢、不延遲觸控）
-final class TouchDownRecognizer: UIGestureRecognizer {
-    private let onTouch: (UITouch) -> Void
+/// 蓋在頁面上：工具列的小視窗開著時接下頁面上的觸碰（一碰到就通知），這整個觸碰都不會到頁面；
+/// 小視窗關好了就讓觸碰穿過去
+final class PopoverShieldView: UIView {
+    var isActive: () -> Bool = { false }
+    var onTouch: () -> Void = {}
 
-    init(_ onTouch: @escaping (UITouch) -> Void) {
-        self.onTouch = onTouch
-        super.init(target: nil, action: nil)
-        cancelsTouchesInView = false
-        delaysTouchesBegan = false
-        delaysTouchesEnded = false
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        isActive() && super.point(inside: point, with: event)
     }
 
-    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
-        if let t = touches.first { onTouch(t) }
-        state = .failed
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        onTouch()
     }
 }

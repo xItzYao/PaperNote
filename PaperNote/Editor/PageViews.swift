@@ -222,6 +222,8 @@ final class OverlayView: UIView {
     let circuitDeleteHandle = CALayer()
     /// 選取導線名稱時右下角的縮放控制點
     let circuitLabelResizeHandle = CALayer()
+    /// 文字框四邊中間的把手（上、下、左、右）
+    let edgeHandles: [BoxEdge: CALayer] = Dictionary(uniqueKeysWithValues: BoxEdge.allCases.map { ($0, CALayer()) })
     private static let handleSize: CGFloat = 30
     /// 導線名稱的縮放控制點小一點（名稱本身不大）
     static let labelResizeHandleScale: CGFloat = 0.8
@@ -352,7 +354,11 @@ final class OverlayView: UIView {
                                    (circuitFlipHandle, "arrow.left.and.right", UIColor.systemBlue),
                                    (circuitCopyHandle, "plus.square.on.square", UIColor.systemBlue),
                                    (circuitDeleteHandle, "xmark", UIColor.systemRed),
-                                   (circuitLabelResizeHandle, "arrow.up.left.and.arrow.down.right", UIColor.systemBlue)] {
+                                   (circuitLabelResizeHandle, "arrow.up.left.and.arrow.down.right", UIColor.systemBlue),
+                                   (edgeHandles[.top]!, "arrow.up.and.down", UIColor.systemTeal),
+                                   (edgeHandles[.bottom]!, "arrow.up.and.down", UIColor.systemTeal),
+                                   (edgeHandles[.left]!, "arrow.left.and.right", UIColor.systemTeal),
+                                   (edgeHandles[.right]!, "arrow.left.and.right", UIColor.systemTeal)] {
             l.contents = Self.handleImage(symbol, color: color)
             l.contentsGravity = .resizeAspect
             l.shadowColor = UIColor.black.cgColor
@@ -757,7 +763,8 @@ final class OverlayView: UIView {
         CATransaction.commit()
     }
 
-    func showSelection(_ rect: CGRect?, locked: Bool, handle: CGPoint?) {
+    /// edges：四邊中間的把手（文字框才有）
+    func showSelection(_ rect: CGRect?, locked: Bool, handle: CGPoint?, edges: [(BoxEdge, CGPoint)] = []) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         if let r = rect {
@@ -773,6 +780,15 @@ final class OverlayView: UIView {
             resizeHandleImage.isHidden = false
         } else {
             resizeHandleImage.isHidden = true
+        }
+        let s = Self.handleSize * lineScale * 0.85
+        for (side, l) in edgeHandles {
+            if let p = edges.first(where: { $0.0 == side })?.1 {
+                l.frame = CGRect(x: p.x - s / 2, y: p.y - s / 2, width: s, height: s)
+                l.isHidden = false
+            } else {
+                l.isHidden = true
+            }
         }
         CATransaction.commit()
     }

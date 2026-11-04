@@ -114,43 +114,60 @@ final class ToolbarRequestsTests: XCTestCase {
         XCTAssertNil(editor.presentedViewController, "設定關掉了")
     }
 
-    /// 小視窗讓畫布的觸控穿過去（開著也能寫字），碰一下頁面要關掉
-    func testTouchingThePageClosesThePopover() throws {
-        editor.setTool(.pen)
-        let b = try XCTUnwrap(editor.presetButtons[BrushStore.shared.currentID])
-        editor.presentBrushSettings(BrushStore.shared.current, from: b)
-        waitForPopover()
-        XCTAssertNotNil(editor.presentedViewController)
-        let r = try XCTUnwrap(editor.canvas.gestureRecognizers?.compactMap { $0 as? TouchDownRecognizer }.first, "畫布上有碰一下就關掉的手勢")
-        r.touchesBegan([FakeTouch(type: .direct, location: CGPoint(x: 300, y: 500))], with: UIEvent())
-        wait { editor.presentedViewController == nil }
-        XCTAssertNil(editor.presentedViewController, "碰到頁面就關掉")
-    }
-
-    /// 回報的問題：開著筆刷設定直接下筆，視窗過一下子才消失；要和點旁邊一樣馬上縮回去，
-    /// 而且不能打斷正在寫的這一筆（筆放開才真的關掉）
-    func testWritingCollapsesThePopoverRightAway() throws {
+    /// 回報的需求：小視窗開著時，用筆點或畫旁邊的頁面都當作點旁邊：關掉（系統的關閉動畫）、這一下不寫字，
+    /// 等小視窗關好了才照常寫
+    func testTouchingThePageClosesThePopoverWithoutWriting() throws {
         editor.setTool(.pen)
         let b = try XCTUnwrap(editor.presetButtons[BrushStore.shared.currentID])
         editor.presentBrushSettings(BrushStore.shared.current, from: b)
         waitForPopover()
         let popover = try XCTUnwrap(editor.presentedViewController)
-        let container = try XCTUnwrap(popover.presentationController?.containerView)
-        let r = try XCTUnwrap(editor.canvas.gestureRecognizers?.compactMap { $0 as? TouchDownRecognizer }.first)
-        r.touchesBegan([FakeTouch(type: .pencil, location: CGPoint(x: 300, y: 500))], with: UIEvent())
-        XCTAssertTrue(container.subviews.allSatisfy { $0.alpha == 0 }, "一下筆就縮回去")
-        XCTAssertFalse(container.isUserInteractionEnabled, "縮回去的視窗不擋筆")
-        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
-        XCTAssertTrue(editor.presentedViewController === popover, "寫的時候先不真的關掉（會打斷這一筆）")
+        let canvas = editor.canvas
+        let p = canvas.convert(CGPoint(x: canvas.bounds.midX, y: canvas.bounds.midY), to: window)
+        let hit = window.hitTest(p, with: nil)
+        XCTAssertTrue(hit === editor.popoverShield, "小視窗開著：頁面上的觸碰被接下來，到不了畫布（不會寫字），而是 \(String(describing: hit))")
 
-        let tracker = try XCTUnwrap(editor.pencilPointTracker)
-        let t = FakeTouch(type: .pencil, location: CGPoint(x: 300, y: 500))
-        tracker.touchesBegan([t], with: UIEvent())
-        t.fakePhase = .ended
-        tracker.touchesEnded([t], with: UIEvent())
+        editor.popoverShield.touchesBegan([FakeTouch(type: .pencil, location: p)], with: nil)
+        XCTAssertTrue(popover.isBeingDismissed, "一碰到就開始關（有動畫）")
+        XCTAssertTrue(window.hitTest(p, with: nil) === editor.popoverShield, "正在關的時候也還不能寫")
         wait { editor.presentedViewController == nil }
-        XCTAssertNil(editor.presentedViewController, "筆放開就關掉")
-        XCTAssertFalse(editor.toolPopoverCollapsed)
+        XCTAssertNil(editor.presentedViewController, "碰到頁面就關掉")
+        let after = window.hitTest(p, with: nil)
+        XCTAssertTrue(after?.isDescendant(of: canvas) ?? false, "關好了，筆照常寫在頁面上，而是 \(String(describing: after))")
+    }
+
+    // MARK: 筆型在工具列最左邊
+
+    private var penStyleButton: UIButton? { editor.subBarStack.arrangedSubviews.first as? UIButton }
+
+    func testThePenStylePickerIsLeftmost() throws {
+        let original = BrushStore.shared.current
+        defer { BrushStore.shared.update(original); editor.applyTool() }
+        editor.setTool(.pen)
+        let picker = try XCTUnwrap(penStyleButton, "筆工具列最左邊是筆型")
+        XCTAssertEqual(picker.accessibilityLabel, "筆型")
+        XCTAssertEqual(picker.accessibilityValue, original.style.title)
+        XCTAssertNotNil(picker.configuration?.image, "有用目前顏色畫的預覽")
+        let actions = try XCTUnwrap(picker.menu?.children.compactMap { $0 as? UIAction })
+        XCTAssertEqual(actions.map(\.title), InkStyle.allCases.filter { $0 != .marker }.map(\.title), "每種筆型都可以選（螢光筆不在這裡）")
+        XCTAssertTrue(actions.allSatisfy { $0.image != nil }, "每種筆型都有預覽")
+        XCTAssertEqual(actions.filter { $0.state == .on }.map(\.title), [original.style.title], "勾著目前的筆型")
+
+        let slot = BrushStore.shared.styleWidths(original.style).firstIndex { abs($0 - original.width) < 0.01 }
+        let target: InkStyle = original.style == .watercolor ? .pencil : .watercolor
+        editor.setPenStyle(target)
+        let now = BrushStore.shared.current
+        XCTAssertEqual(now.id, original.id, "改的是目前這支筆")
+        XCTAssertEqual(now.style, target)
+        XCTAssertEqual(now.colorHex, original.colorHex, "顏色不變")
+        if let slot { XCTAssertEqual(now.width, BrushStore.shared.styleWidths(target)[slot], accuracy: 0.01, "粗細留在同一格") }
+        XCTAssertEqual(penStyleButton?.accessibilityValue, target.title, "工具列的筆型跟著換")
+        XCTAssertEqual(penStyleButton?.menu?.children.compactMap { ($0 as? UIAction)?.state == .on ? $0.title : nil }, [target.title])
+    }
+
+    func testTheHighlighterHasNoPenStylePicker() {
+        editor.setTool(.highlighter)
+        XCTAssertFalse(editor.subBarStack.arrangedSubviews.contains { $0.accessibilityLabel == "筆型" })
     }
 
     // MARK: 螢光筆不蓋住筆跡

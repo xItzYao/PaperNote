@@ -21,27 +21,6 @@ enum ShapeRecognizer {
         }
     }
 
-    /// 路徑是封閉圖形時回傳修正後的點，否則 nil（當成直線處理）
-    static func closedShapePoints(_ input: [CGPoint]) -> [CGPoint]? {
-        var pts = input
-        guard pts.count >= 6 else { return nil }
-        let end = pts[pts.count - 1]
-        while pts.count > 6, pts[pts.count - 2].distance(to: end) < 4 { pts.removeLast() }
-
-        var length: CGFloat = 0
-        for i in 1..<pts.count { length += pts[i].distance(to: pts[i - 1]) }
-        let bbox = boundingBox(pts)
-        let span = max(bbox.width, bbox.height)
-        guard length > 60, span > 20,
-              pts[0].distance(to: pts[pts.count - 1]) < span * 0.3,
-              pts[0].distance(to: pts[pts.count - 1]) / length < 0.5 else { return nil }
-
-        let poly = simplifyClosed(pts, epsilon: max(6, hypot(bbox.width, bbox.height) * 0.07))
-        if poly.count == 3 { return polygon(poly) }
-        if poly.count == 4 { return polygon(axisAlignIfNeeded(poly, bbox: bbox)) }
-        return ellipse(in: bbox)
-    }
-
     /// 封閉路徑簡化成多邊形後的角點
     static func closedCorners(_ pts: [CGPoint], box: CGRect) -> [CGPoint] {
         simplifyClosed(pts, epsilon: max(6, hypot(box.width, box.height) * 0.07))
@@ -91,49 +70,6 @@ enum ShapeRecognizer {
     }
 
     // MARK: - Helpers
-
-    private static func boundingBox(_ pts: [CGPoint]) -> CGRect {
-        var minX = CGFloat.greatestFiniteMagnitude, minY = CGFloat.greatestFiniteMagnitude
-        var maxX = -CGFloat.greatestFiniteMagnitude, maxY = -CGFloat.greatestFiniteMagnitude
-        for p in pts {
-            minX = min(minX, p.x); minY = min(minY, p.y)
-            maxX = max(maxX, p.x); maxY = max(maxY, p.y)
-        }
-        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
-    }
-
-    private static func polygon(_ corners: [CGPoint]) -> [CGPoint] {
-        var out: [CGPoint] = []
-        for i in 0..<corners.count {
-            let a = corners[i], b = corners[(i + 1) % corners.count]
-            // 角落重複一個點讓轉角更銳利
-            out.append(a)
-            out.append(contentsOf: segment(a, b).dropLast())
-        }
-        out.append(corners[0])
-        out.append(corners[0])
-        return out
-    }
-
-    private static func ellipse(in r: CGRect) -> [CGPoint] {
-        let n = 96
-        return (0...n).map { i in
-            let a = CGFloat(i) / CGFloat(n) * 2 * .pi - .pi / 2
-            return CGPoint(x: r.midX + cos(a) * r.width / 2, y: r.midY + sin(a) * r.height / 2)
-        }
-    }
-
-    private static func axisAlignIfNeeded(_ q: [CGPoint], bbox: CGRect) -> [CGPoint] {
-        // 四條邊都接近水平/垂直 → 直接用外框矩形
-        for i in 0..<4 {
-            let a = q[i], b = q[(i + 1) % 4]
-            let deg = abs(atan2(b.y - a.y, b.x - a.x) * 180 / .pi)
-            let off = min(deg, abs(deg - 90), abs(180 - deg))
-            if off > 12 { return q }
-        }
-        return [CGPoint(x: bbox.minX, y: bbox.minY), CGPoint(x: bbox.maxX, y: bbox.minY),
-                CGPoint(x: bbox.maxX, y: bbox.maxY), CGPoint(x: bbox.minX, y: bbox.maxY)]
-    }
 
     /// 封閉路徑簡化成多邊形的角點
     private static func simplifyClosed(_ pts: [CGPoint], epsilon: CGFloat) -> [CGPoint] {

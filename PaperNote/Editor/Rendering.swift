@@ -294,21 +294,71 @@ enum ElementRenderer {
     }
 }
 
+/// 要匯出的頁面：「7-10」「7~10」「1 3 5 6 7」「1,3、5-7」都可以；空白＝全部。頁碼從 1 開始
+enum PageSelection {
+    struct Invalid: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
+    static let hint = "例如 7-10 或 1 3 5 6 7，空白是全部"
+
+    /// 排好、不重複的頁面索引（從 0 開始）
+    static func parse(_ text: String, pageCount: Int) throws -> [Int] {
+        // 全形的數字、～、，也可以
+        var s = text.applyingTransform(.fullwidthToHalfwidth, reverse: false) ?? text
+        for dash in ["~", "〜", "–", "—", "－"] { s = s.replacingOccurrences(of: dash, with: "-") }
+        s = s.replacingOccurrences(of: #"\s*-\s*"#, with: "-", options: .regularExpression)
+        let tokens = s.components(separatedBy: CharacterSet(charactersIn: " ,;、､\n\t")).filter { !$0.isEmpty }
+        guard !tokens.isEmpty else { return Array(0..<pageCount) }
+        var result = Set<Int>()
+        for t in tokens {
+            let parts = t.split(separator: "-", omittingEmptySubsequences: false)
+            guard (1...2).contains(parts.count), let a = Int(parts[0]), let b = Int(parts[parts.count - 1]) else {
+                throw Invalid(message: "看不懂「\(t)」，請輸入像 7-10 或 1 3 5 這樣的頁碼")
+            }
+            let lo = min(a, b), hi = max(a, b)
+            guard lo >= 1, hi <= pageCount else { throw Invalid(message: "這本筆記本只有 \(pageCount) 頁，沒有第 \(lo < 1 ? lo : hi) 頁") }
+            result.formUnion((lo - 1)..<hi)
+        }
+        return result.sorted()
+    }
+}
+
 enum NotebookExporter {
     /// 匯出成 PaperNote 筆記本檔（.papernote）：筆跡、PDF、圖片都在，匯入後可以繼續編輯
-    static func exportPaperNote(session: NotebookSession) throws -> URL {
+    /// pages：只匯出這幾頁（索引從 0 開始，nil＝全部）
+    static func exportPaperNote(session: NotebookSession, pages: [Int]? = nil) throws -> URL {
         session.save()
         let meta = LibraryStore.shared.notebook(session.id)
         var zip = ZipWriter()
         let manifest = PaperNoteManifest(title: session.title, coverHex: meta?.coverHex ?? "#2654A0FF")
         try zip.add("papernote.json", JSONEncoder.app.encode(manifest))
+        // 只匯出部分頁面：document.json 換成只有這幾頁的，其他頁（和最近刪除的頁）的筆跡不帶
+        var subset: NotebookDocument?
+        var skipped: Set<String> = []
+        if let pages, pages != Array(session.document.pages.indices) {
+            let all = session.document.pages
+            let keep = pages.filter { all.indices.contains($0) }.map { all[$0] }
+            let kept = Set(keep.map(\.id))
+            for p in all where !kept.contains(p.id) { skipped.insert("drawings/\(p.id.uuidString).drawing") }
+            for t in session.document.trash ?? [] { skipped.insert("drawings/\(t.page.id.uuidString).drawing") }
+            var doc = session.document
+            doc.pages = keep
+            doc.trash = nil
+            subset = doc
+        }
         let base = session.directory.resolvingSymlinksInPath().path + "/"
         let files = FileManager.default.enumerator(at: session.directory, includingPropertiesForKeys: [.isRegularFileKey])
         while let url = files?.nextObject() as? URL {
             guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
             let rel = String(url.resolvingSymlinksInPath().path.dropFirst(base.count))
             // 縮圖打開時會重畫，不用帶
-            guard !rel.hasPrefix("thumbs/") else { continue }
+            guard !rel.hasPrefix("thumbs/"), !skipped.contains(rel) else { continue }
+            if let subset, rel == NotebookSession.documentURL(in: session.directory).lastPathComponent {
+                try zip.add("notebook/" + rel, JSONEncoder.app.encode(subset))
+                continue
+            }
             try zip.add("notebook/" + rel, Data(contentsOf: url, options: .alwaysMapped))
         }
         let safe = session.title.replacingOccurrences(of: "/", with: "-")
@@ -318,13 +368,15 @@ enum NotebookExporter {
         return url
     }
 
-    static func exportPDF(session: NotebookSession) throws -> URL {
+    /// pages：只匯出這幾頁（索引從 0 開始，nil＝全部）
+    static func exportPDF(session: NotebookSession, pages: [Int]? = nil) throws -> URL {
         let safe = session.title.replacingOccurrences(of: "/", with: "-")
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(safe).pdf")
         try? FileManager.default.removeItem(at: url)
         let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 595, height: 842))
         try renderer.writePDF(to: url) { ctx in
-            for page in session.document.pages {
+            let all = session.document.pages
+            for page in pages.map({ $0.filter { all.indices.contains($0) }.map { all[$0] } }) ?? all {
                 autoreleasepool {
                     let size = session.fullSize(of: page)
                     ctx.beginPage(withBounds: CGRect(origin: .zero, size: size), pageInfo: [:])

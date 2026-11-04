@@ -74,7 +74,6 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             }
         }
         pencilPointTracker.onEnded = { [weak self] in
-            self?.finishCollapsedToolPopover()
             self?.pencilDown = false
             self?.lastPencilTime = CACurrentMediaTime()
         }
@@ -623,7 +622,17 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         let e = pages[pi].elements[ei]
         let r = docFrame(of: e, pageIndex: pi)
         // 電路圖不能拉角落縮放（元件、導線照格點排），不顯示縮放把手
-        overlay.showSelection(r, locked: e.locked, handle: e.locked || e.isCircuit ? nil : CGPoint(x: r.maxX, y: r.maxY))
+        overlay.showSelection(r, locked: e.locked, handle: e.locked || e.isCircuit ? nil : CGPoint(x: r.maxX, y: r.maxY),
+                              edges: e.isTextBox && !e.locked ? Self.edgeHandlePoints(r) : [])
+    }
+
+    /// 文字框的字級（工具列的放大縮小、右下角的等比例縮放）
+    static let textSizeRange: ClosedRange<CGFloat> = 8...72
+
+    /// 文字框四邊中間的把手（上、下、左、右）
+    static func edgeHandlePoints(_ r: CGRect) -> [(BoxEdge, CGPoint)] {
+        [(.top, CGPoint(x: r.midX, y: r.minY)), (.bottom, CGPoint(x: r.midX, y: r.maxY)),
+         (.left, CGPoint(x: r.minX, y: r.midY)), (.right, CGPoint(x: r.maxX, y: r.midY))]
     }
 
     func dragTarget(at p: CGPoint) -> (ElementRef, DragKind)? {
@@ -665,6 +674,9 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         }
         guard !e.locked else { return nil }
         if !e.isCircuit, p.distance(to: CGPoint(x: r.maxX, y: r.maxY)) < tol * 1.5 { return (ref, .resize) }
+        if e.isTextBox, let edge = Self.edgeHandlePoints(r).first(where: { p.distance(to: $0.1) < tol * 1.5 })?.0 {
+            return (ref, .edge(edge))
+        }
         guard r.insetBy(dx: -tol, dy: -tol).contains(p) else { return nil }
         return (ref, .move)
     }
@@ -759,14 +771,38 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             case .image:
                 let w = min(max(30, o.width + dx), room.width, room.height * o.width / max(o.height, 1))
                 e.frame.size = CGSize(width: w, height: w * o.height / max(o.width, 1))
-            case .text:
-                e.frame.size = CGSize(width: min(max(40, o.width + dx), room.width), height: min(max(28, o.height + dy), room.height))
+            case var .text(t):
+                // 字和框一起等比例縮放（照拖的方向投影到對角線上，和縮放筆跡一樣）
+                let diag = o.width * o.width + o.height * o.height
+                var k = 1 + (dx * o.width + dy * o.height) / max(diag, 1)
+                k = max(k, 40 / max(o.width, 1), 28 / max(o.height, 1), Self.textSizeRange.lowerBound / t.fontSize)
+                k = min(k, room.width / max(o.width, 1), room.height / max(o.height, 1), Self.textSizeRange.upperBound / t.fontSize)
+                e.frame.size = CGSize(width: o.width * k, height: o.height * k)
+                t.fontSize = (t.fontSize * k * 2).rounded() / 2
+                e.content = .text(t)
             case var .table(t):
                 t.scale(to: CGSize(width: min(o.width + dx, room.width), height: min(o.height + dy, room.height)))
                 e.content = .table(t)
                 e.frame.size = t.size
             case .circuit:
                 break
+            }
+        case let .edge(side):
+            // 只拉這一邊，對面那一邊不動；不超出頁面
+            guard case let (pi, _)? = locate(d.ref) else { break }
+            let ins = pages[pi].insets
+            let room = pageRoom(for: d.ref, from: o.origin)
+            switch side {
+            case .top:
+                let y = min(max(-ins.top, o.minY + dy), o.maxY - 28)
+                e.frame = CGRect(x: o.minX, y: y, width: o.width, height: o.maxY - y)
+            case .bottom:
+                e.frame.size.height = min(max(28, o.height + dy), room.height)
+            case .left:
+                let x = min(max(-ins.left, o.minX + dx), o.maxX - 40)
+                e.frame = CGRect(x: x, y: o.minY, width: o.maxX - x, height: o.height)
+            case .right:
+                e.frame.size.width = min(max(40, o.width + dx), room.width)
             }
         case let .colLine(c):
             if case var .table(t) = e.content {
@@ -878,8 +914,8 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             })
             items.append(UIMenu(title: "樣式", image: UIImage(systemName: "textformat.size"), children: [
                 UIAction(title: "字體…", image: UIImage(systemName: "textformat")) { [weak self] _ in self?.presentFontPicker(ref) },
-                UIAction(title: "字放大") { [weak self] _ in self?.modifyTextBox(ref) { $0.fontSize = min($0.fontSize + 2, 72) } },
-                UIAction(title: "字縮小") { [weak self] _ in self?.modifyTextBox(ref) { $0.fontSize = max($0.fontSize - 2, 8) } },
+                UIAction(title: "字放大") { [weak self] _ in self?.modifyTextBox(ref) { $0.fontSize = min($0.fontSize + 2, Self.textSizeRange.upperBound) } },
+                UIAction(title: "字縮小") { [weak self] _ in self?.modifyTextBox(ref) { $0.fontSize = max($0.fontSize - 2, Self.textSizeRange.lowerBound) } },
                 UIAction(title: "無底色") { [weak self] _ in self?.modifyTextBox(ref) { $0.backgroundHex = nil } },
                 UIAction(title: "黃色便利貼") { [weak self] _ in self?.modifyTextBox(ref) { $0.backgroundHex = "#FFF59DFF" } },
                 UIAction(title: "藍色便利貼") { [weak self] _ in self?.modifyTextBox(ref) { $0.backgroundHex = "#BBDEFBFF" } },

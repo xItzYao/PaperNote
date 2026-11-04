@@ -12,15 +12,18 @@ final class BrushSettingsMenuUITests: XCTestCase {
         app.launch()
     }
 
-    /// 打開這支筆的筆刷設定，再打開「筆型」選單
+    /// 選這支筆，再打開工具列最左邊的「筆型」選單
     private func openStyleMenu(_ pen: String = "鉛筆") {
         let button = app.buttons[pen].firstMatch
         XCTAssertTrue(button.waitForExistence(timeout: 20), "要打開測試用的筆記本")
-        // 已經是目前的筆：點一下就打開設定；不是的話第一下選它、第二下打開
         button.tap()
-        let picker = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "筆型")).firstMatch
-        if !picker.waitForExistence(timeout: 2) { button.tap() }
-        XCTAssertTrue(picker.waitForExistence(timeout: 5), "再點一下打開筆刷設定")
+        // 已經是目前的筆：點一下會打開筆刷設定，點旁邊的頁面關掉它
+        if app.buttons["把這個顏色加進色票"].waitForExistence(timeout: 1.5) {
+            app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.8)).tap()
+            XCTAssertTrue(app.buttons["把這個顏色加進色票"].waitForNonExistence(timeout: 5), "點旁邊關掉筆刷設定")
+        }
+        let picker = app.buttons["筆型"].firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout: 5), "筆工具列最左邊是筆型")
         picker.tap()
         XCTAssertTrue(app.descendants(matching: .any)["水彩"].waitForExistence(timeout: 5), "筆型選單要打開")
     }
@@ -32,7 +35,7 @@ final class BrushSettingsMenuUITests: XCTestCase {
         a.press(forDuration: 0.05, thenDragTo: b, withVelocity: .slow, thenHoldForDuration: 0)
     }
 
-    /// 筆型選單開著，直接在畫布上寫：筆刷設定關掉、選單收起，App 不能閃退
+    /// 筆型選單開著，直接在畫布上寫：選單收起，App 不能閃退
     func testWritingWithTheStyleMenuOpen() {
         openStyleMenu()
         draw(y: 0.6)
@@ -44,7 +47,7 @@ final class BrushSettingsMenuUITests: XCTestCase {
         XCTAssertEqual(app.state, .runningForeground, "之後照常寫")
     }
 
-    /// 回報的版本每支筆都用自製筆刷：下筆時自製筆刷關掉筆刷設定，選單還開著
+    /// 回報的版本每支筆都用自製筆刷：選單開著時用自製筆刷寫
     func testWritingWithCustomInkAndTheStyleMenuOpen() {
         openStyleMenu("原子筆")
         draw(y: 0.6)
@@ -56,14 +59,14 @@ final class BrushSettingsMenuUITests: XCTestCase {
         XCTAssertEqual(app.state, .runningForeground, "之後照常寫")
     }
 
-    /// 選一個筆型：選單收起，筆刷設定還開著
+    /// 選一個筆型：選單收起，工具列的筆型跟著換
     func testPickingAStyle() {
         openStyleMenu()
         app.descendants(matching: .any)["水彩"].firstMatch.tap()
         sleep(2)
         XCTAssertEqual(app.state, .runningForeground, "不能閃退")
-        let picker = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "筆型")).firstMatch
-        XCTAssertTrue(picker.exists, "筆刷設定還開著")
+        let picker = app.buttons["筆型"].firstMatch
+        XCTAssertEqual(picker.value as? String, "水彩", "工具列的筆型換成水彩")
         // 改回鉛筆（筆刷存在 App 裡，之後的測試還要用「鉛筆」；工具列那支現在叫「水彩」，選單裡的才是「鉛筆」）
         picker.tap()
         let pencil = app.descendants(matching: .any)["鉛筆"].firstMatch
@@ -71,5 +74,6 @@ final class BrushSettingsMenuUITests: XCTestCase {
         pencil.tap()
         sleep(1)
         XCTAssertEqual(app.state, .runningForeground)
+        XCTAssertEqual(picker.value as? String, "鉛筆")
     }
 }

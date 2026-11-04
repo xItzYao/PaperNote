@@ -32,8 +32,15 @@ struct ElementRef: Hashable {
     var elementID: UUID
 }
 
+/// 選取框四邊中間的把手
+enum BoxEdge: CaseIterable {
+    case top, bottom, left, right
+}
+
 enum DragKind {
     case move, resize, colLine(Int), rowLine(Int), cells
+    /// 文字框四邊中間的把手：只拉這一邊
+    case edge(BoxEdge)
     /// 拖曳選取範圍右下角的填滿控制點：重複這一組
     case fill
     /// 拖曳表格上方的欄標頭／左邊的列標頭：選好幾欄（列），參數是一開始按的那一欄（列）
@@ -175,6 +182,10 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     /// 筆工具列的「細、中、粗」三個粗細按鈕與虛線開關
     var penWidthButtons: [UIButton] = []
     weak var penDashButton: UIButton?
+    /// 筆工具列最左邊的筆型
+    weak var penStyleButton: UIButton?
+    /// 工具列的小視窗開著時接下頁面上的觸碰
+    let popoverShield = PopoverShieldView()
     var favoriteButton: UIButton!
     var settingsButton: UIButton!
 
@@ -276,8 +287,6 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     /// 拖曳中預覽的自製筆刷筆跡（文件座標）、預覽圖是照多大的倍數畫的
     var lassoMoveInk: [InkStroke] = []
     var lassoPreviewScale: CGFloat = 1
-    /// 下筆時縮回去的小視窗：筆放開才真的關掉（寫到一半關掉會打斷這一筆）
-    var toolPopoverCollapsed = false
     var lassoMoveOriginal: PKDrawing?
     var lassoMoveStrokes: [PKStroke] = []
     var lassoMoveElementFrames: [ElementRef: CGRect] = [:]
@@ -439,6 +448,18 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         canvas.bouncesZoom = true
         view.addSubview(canvas)
         canvas.layer.addSublayer(holdToShape.previewLayer)
+        // 小視窗開著時碰到頁面：當作點旁邊，系統的關閉動畫，這一下不寫字
+        popoverShield.translatesAutoresizingMaskIntoConstraints = false
+        popoverShield.backgroundColor = .clear
+        popoverShield.isActive = { [weak self] in self?.toolPopoverShown ?? false }
+        popoverShield.onTouch = { [weak self] in self?.dismissToolPopover(animated: true) }
+        view.insertSubview(popoverShield, aboveSubview: canvas)
+        NSLayoutConstraint.activate([
+            popoverShield.topAnchor.constraint(equalTo: canvas.topAnchor),
+            popoverShield.bottomAnchor.constraint(equalTo: canvas.bottomAnchor),
+            popoverShield.leadingAnchor.constraint(equalTo: canvas.leadingAnchor),
+            popoverShield.trailingAnchor.constraint(equalTo: canvas.trailingAnchor),
+        ])
 
         pagesContainer.backgroundColor = .clear
         overlay.frame = .zero
@@ -447,12 +468,6 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         inkContainer.backgroundColor = .clear
         inkContainer.isUserInteractionEnabled = false
         canvas.addSubview(inkContainer)
-        // 工具列的小視窗讓畫布的觸控穿過去（開著也能直接寫），所以碰一下頁面就關掉它
-        canvas.addGestureRecognizer(TouchDownRecognizer { [weak self] t in
-            guard let self else { return }
-            // 下筆寫字：小視窗馬上縮回去；點旁邊：系統的關閉動畫
-            if self.touchWillDraw(t) { self.collapseToolPopoverForWriting() } else { self.dismissToolPopover(animated: true) }
-        })
 
         editMenu = UIEditMenuInteraction(delegate: self)
         canvas.addInteraction(editMenu)
@@ -976,8 +991,6 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         pkUsingSince = CACurrentMediaTime()
         holdToShape.pencilKitBegan()
         strokeGesture = StrokeGesture(before: canvas.drawing, mark: history.recordCount)
-        // 下筆就收起工具列的小視窗（粗細、虛線、筆刷設定），筆放開才真的關掉
-        collapseToolPopoverForWriting()
         // 開始寫字 → 收起還沒點的調色盤小圖示
         if let p = paletteOverlay, p.mode == .launcher { dismissPalette() }
         toolBeganAt = CACurrentMediaTime()
@@ -986,7 +999,6 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
         pkUsingSince = nil
-        finishCollapsedToolPopover()
         // 停住變直線的那一筆：交給 holdToShape 換成直線，不當成新筆跡處理
         if holdToShape.pencilKitEnded() { return }
         let gesture = strokeGesture
@@ -1189,22 +1201,37 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     /// 匯出：畫面中間跳出小視窗選格式
     func presentExportChoice(from source: UIView) {
-        let alert = UIAlertController(title: "匯出「\(session.title)」", message: "要匯出成哪一種格式？", preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "PDF（給別人看、列印）", style: .default) { [weak self] _ in
-            self?.export(paperNote: false, from: source)
+        let alert = UIAlertController(title: "匯出「\(session.title)」", message: "要匯出成哪一種格式？可以只匯出部分頁面。", preferredStyle: .alert)
+        alert.addTextField { f in
+            f.placeholder = PageSelection.hint
+            f.accessibilityLabel = "匯出的頁面"
+            f.keyboardType = .numbersAndPunctuation
+            f.clearButtonMode = .whileEditing
+        }
+        alert.addAction(UIAlertAction(title: "PDF（給別人看、列印）", style: .default) { [weak self, weak alert] _ in
+            self?.export(paperNote: false, pages: alert?.textFields?.first?.text ?? "", from: source)
         })
-        alert.addAction(UIAlertAction(title: "PaperNote（可以繼續編輯筆跡）", style: .default) { [weak self] _ in
-            self?.export(paperNote: true, from: source)
+        alert.addAction(UIAlertAction(title: "PaperNote（可以繼續編輯筆跡）", style: .default) { [weak self, weak alert] _ in
+            self?.export(paperNote: true, pages: alert?.textFields?.first?.text ?? "", from: source)
         })
         alert.addAction(UIAlertAction(title: "取消", style: .cancel))
         present(alert, animated: true)
     }
 
-    func export(paperNote: Bool, from source: UIView) {
+    /// pages：使用者輸入的頁碼（見 PageSelection），空白＝全部
+    func export(paperNote: Bool, pages text: String = "", from source: UIView) {
         endTextEditing()
         saveNow()
+        let pages: [Int]
         do {
-            let url = paperNote ? try NotebookExporter.exportPaperNote(session: session) : try NotebookExporter.exportPDF(session: session)
+            pages = try PageSelection.parse(text, pageCount: session.document.pages.count)
+        } catch {
+            showMessage("頁碼有誤", error.localizedDescription)
+            return
+        }
+        do {
+            let url = paperNote ? try NotebookExporter.exportPaperNote(session: session, pages: pages)
+                                : try NotebookExporter.exportPDF(session: session, pages: pages)
             let vc = UIActivityViewController(activityItems: [url], applicationActivities: nil)
             vc.popoverPresentationController?.sourceView = source
             vc.popoverPresentationController?.sourceRect = source.bounds

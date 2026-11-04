@@ -1,11 +1,13 @@
 import XCTest
 import PencilKit
+import PDFKit
 @testable import PaperNote
 
 /// 匯出成 PaperNote 檔再匯入：內容一模一樣、筆跡可以繼續編輯
 final class PaperNoteFormatTests: XCTestCase {
     private let store = LibraryStore.shared
     private var created: [UUID] = []
+    private var folders: [UUID] = []
     private var work: URL!
 
     override func setUpWithError() throws {
@@ -15,6 +17,7 @@ final class PaperNoteFormatTests: XCTestCase {
 
     override func tearDown() {
         for id in created { store.deleteNotebook(id) }
+        for id in folders { store.deleteFolder(id) }
         try? FileManager.default.removeItem(at: work)
         super.tearDown()
     }
@@ -47,7 +50,8 @@ final class PaperNoteFormatTests: XCTestCase {
         let original = try richNotebook()
         let file = try NotebookExporter.exportPaperNote(session: original)
         XCTAssertEqual(file.pathExtension, "papernote")
-        let meta = try store.importPaperNote(from: file, folder: nil)
+        // 匯入到另一個資料夾（同一層有同名的會加上 (1)，見 testImportingANameThatIsTakenAddsANumber）
+        let meta = try store.importPaperNote(from: file, folder: newFolder())
         created.append(meta.id)
 
         XCTAssertNotEqual(meta.id, original.id, "匯入是一本新的筆記本")
@@ -70,6 +74,84 @@ final class PaperNoteFormatTests: XCTestCase {
         } else {
             XCTFail("圖片物件不見了")
         }
+    }
+
+    private func newFolder() -> UUID {
+        let f = store.createFolder(name: "PaperNoteFormatTests \(UUID().uuidString.prefix(6))", parent: nil)
+        folders.append(f.id)
+        return f.id
+    }
+
+    /// 回報的需求：匯入時這個資料夾裡已經有同名的筆記本（UUID 不同，但使用者是看名稱的），後面加 (1)、(2)…
+    func testImportingANameThatIsTakenAddsANumber() throws {
+        let folder = newFolder()
+        let pdfURL = work.appendingPathComponent("期中考.pdf")
+        try UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 595, height: 842)).pdfData { $0.beginPage() }.write(to: pdfURL)
+        var titles: [String] = []
+        for _ in 0..<3 {
+            let m = try store.importPDF(from: pdfURL, folder: folder)
+            created.append(m.id)
+            titles.append(m.title)
+        }
+        XCTAssertEqual(titles, ["期中考", "期中考 (1)", "期中考 (2)"])
+
+        let file = try NotebookExporter.exportPaperNote(session: try NotebookSession(id: created[0]))
+        let again = try store.importPaperNote(from: file, folder: folder)
+        created.append(again.id)
+        XCTAssertEqual(again.title, "期中考 (3)", "PaperNote 檔也一樣")
+
+        let elsewhere = try store.importPDF(from: pdfURL, folder: newFolder())
+        created.append(elsewhere.id)
+        XCTAssertEqual(elsewhere.title, "期中考", "只看同一個資料夾裡的名稱")
+    }
+
+    /// 回報的需求：匯出時選頁面，例如 7~10 或 1 3 5 6 7 這種不連續的
+    func testPageSelection() throws {
+        XCTAssertEqual(try PageSelection.parse("7-10", pageCount: 12), [6, 7, 8, 9])
+        XCTAssertEqual(try PageSelection.parse("7~10", pageCount: 12), [6, 7, 8, 9])
+        XCTAssertEqual(try PageSelection.parse("7～10", pageCount: 12), [6, 7, 8, 9], "全形的～")
+        XCTAssertEqual(try PageSelection.parse("1 3 5 6 7", pageCount: 12), [0, 2, 4, 5, 6])
+        XCTAssertEqual(try PageSelection.parse("１，３、5 - 6", pageCount: 12), [0, 2, 4, 5], "全形數字、逗號、頓號、空格")
+        XCTAssertEqual(try PageSelection.parse("10-7 8 8", pageCount: 12), [6, 7, 8, 9], "倒過來、重複都可以")
+        XCTAssertEqual(try PageSelection.parse("  ", pageCount: 3), [0, 1, 2], "空白＝全部")
+        XCTAssertThrowsError(try PageSelection.parse("13", pageCount: 12), "超過頁數")
+        XCTAssertThrowsError(try PageSelection.parse("0-2", pageCount: 12))
+        XCTAssertThrowsError(try PageSelection.parse("a", pageCount: 12))
+        XCTAssertThrowsError(try PageSelection.parse("1-2-3", pageCount: 12))
+    }
+
+    /// 只匯出選的頁面：PDF 只有這幾頁；PaperNote 檔匯入後也只有這幾頁，沒選的頁的筆跡不在檔案裡
+    func testExportingChosenPages() throws {
+        let meta = store.createNotebook(title: "選頁匯出", folder: newFolder(), paper: .blank, landscape: false)
+        created.append(meta.id)
+        let session = try NotebookSession(id: meta.id)
+        while session.document.pages.count < 5 {
+            session.document.pages.append(Page(background: .paper(width: 595, height: 842, style: .grid)))
+        }
+        for (i, p) in session.document.pages.enumerated() {
+            let pts = (0..<10).map { CGPoint(x: 30 + CGFloat($0) * 4, y: 100 + CGFloat(i * 20)) }
+            session.drawings[p.id] = PKDrawing(strokes: [ShapeRecognizer.makeStroke(points: pts, preset: BrushStore.shared.current)])
+        }
+        session.save()
+        let ids = session.document.pages.map(\.id)
+        let chosen = try PageSelection.parse("2 4-5", pageCount: 5)
+
+        let pdfURL = try NotebookExporter.exportPDF(session: session, pages: chosen)
+        XCTAssertEqual(PDFDocument(url: pdfURL)?.pageCount, 3, "PDF 只有選的三頁")
+
+        let file = try NotebookExporter.exportPaperNote(session: session, pages: chosen)
+        let entries = try ZipArchive(url: file).entries.map(\.path)
+        XCTAssertFalse(entries.contains("notebook/drawings/\(ids[0].uuidString).drawing"), "沒選的頁的筆跡不帶")
+        XCTAssertTrue(entries.contains("notebook/drawings/\(ids[1].uuidString).drawing"))
+        let copy = try store.importPaperNote(from: file, folder: newFolder())
+        created.append(copy.id)
+        XCTAssertEqual(copy.pageCount, 3)
+        let s = try NotebookSession(id: copy.id)
+        XCTAssertEqual(s.document.pages.map(\.id), [ids[1], ids[3], ids[4]], "照順序只有選的頁")
+        XCTAssertEqual(s.drawings[ids[3]]?.strokes.count, 1, "選的頁筆跡還在、可以編輯")
+
+        let whole = try NotebookExporter.exportPDF(session: session, pages: try PageSelection.parse("", pageCount: 5))
+        XCTAssertEqual(PDFDocument(url: whole)?.pageCount, 5, "沒填＝全部")
     }
 
     func testRejectsFilesThatAreNotPaperNote() throws {

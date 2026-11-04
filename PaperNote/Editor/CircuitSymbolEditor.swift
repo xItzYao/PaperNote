@@ -1,10 +1,11 @@
 import UIKit
 
 enum CircuitSymbolTool: Int, CaseIterable {
-    case line, brush, text, pin, eraser
+    case select, line, brush, text, pin, eraser
 
     var title: String {
         switch self {
+        case .select: return "選取"
         case .line: return "線條"
         case .brush: return "筆刷"
         case .text: return "文字"
@@ -15,8 +16,9 @@ enum CircuitSymbolTool: Int, CaseIterable {
 
     var hint: String {
         switch self {
+        case .select: return "點一下選取字或線條，拖曳移動；選到字時拉右下角的把手調整大小。"
         case .line: return "拖一條直線：兩端自動吸到最近的格點。從線的端點接著畫就連在一起。"
-        case .brush: return "用 Pencil 或手指直接畫；畫到一半停住會修成直線、圓弧、圓、橢圓、矩形或三角形，筆不放開繼續移動可以調整。"
+        case .brush: return "用 Pencil 或手指直接畫；畫到一半停住會修成直線、圓弧、圓、橢圓、矩形、三角形或平滑的曲線，筆不放開繼續移動可以調整。"
         case .text: return "點一下加上文字（例如 +、−、A、VCC），點已經有的字修改、換大小或刪除；拖曳移動。上下標寫 R_1、V^2。"
         case .pin: return "點格點加上接腳（導線接的地方），再點一下拿掉。至少要有一個。"
         case .eraser: return "點或劃過線條、接腳擦掉：「整條」擦掉整條線，「局部」只擦掉碰到的那一段。Pencil 筆身點兩下、Pencil Pro 按壓可以切換橡皮擦。"
@@ -95,11 +97,11 @@ struct CircuitSymbolDraft {
         symbol.strokes[last].points.append(p)
     }
 
-    /// 抖動的取樣點拿掉（線條還是照手畫的走），存起來和畫起來都比較輕。
-    /// held：停住修成的圖形，已經是乾淨的線，不再簡化（圓簡化會變成多邊形）
+    /// 擠在一起的取樣點拿掉（存起來比較輕），線條照手畫的走；畫的時候用平滑的曲線連（Stroke.path）。
+    /// 不用折線簡化：點會被拿到只剩幾個，圓就變成多邊形。held：停住修成的圖形，原樣留著
     mutating func endBrush(held: Bool = false) {
         guard let last = symbol.strokes.indices.last, symbol.strokes[last].freehand else { return }
-        let points = held ? symbol.strokes[last].points : Self.simplified(symbol.strokes[last].points, tolerance: 0.3)
+        let points = held ? symbol.strokes[last].points : Self.thinned(symbol.strokes[last].points, minDistance: 0.3)
         if points.count < 2 {
             symbol.strokes.removeLast()
             _ = history.popLast()
@@ -133,19 +135,15 @@ struct CircuitSymbolDraft {
         symbol.strokes[last].points = pts.map { CGPoint(x: $0.x / scale, y: $0.y / scale) }
     }
 
-    static func simplified(_ points: [CGPoint], tolerance: CGFloat) -> [CGPoint] {
-        guard points.count > 2, let first = points.first, let last = points.last else { return points }
-        var worst = 0, distance: CGFloat = 0
-        for i in 1..<(points.count - 1) {
-            let d = segmentDistance(points[i], first, last)
-            if d > distance {
-                distance = d
-                worst = i
-            }
+    /// 和上一個留下的點距離不到 minDistance 的點拿掉（最後一點一定留著）
+    static func thinned(_ points: [CGPoint], minDistance: CGFloat) -> [CGPoint] {
+        guard let first = points.first, points.count > 2 else { return points }
+        var out = [first]
+        for p in points.dropFirst().dropLast() where hypot(p.x - out[out.count - 1].x, p.y - out[out.count - 1].y) >= minDistance {
+            out.append(p)
         }
-        guard distance > tolerance else { return first == last ? [first] : [first, last] }
-        let left = simplified(Array(points[...worst]), tolerance: tolerance)
-        return Array(left.dropLast()) + simplified(Array(points[worst...]), tolerance: tolerance)
+        out.append(points[points.count - 1])
+        return out
     }
 
     private static func segmentDistance(_ p: CGPoint, _ a: CGPoint, _ b: CGPoint) -> CGFloat {
@@ -194,6 +192,62 @@ struct CircuitSymbolDraft {
     mutating func moveText(_ i: Int, to p: CGPoint) {
         guard symbol.texts.indices.contains(i) else { return }
         symbol.texts[i].center = p
+    }
+
+    // MARK: 選取
+
+    enum Item: Equatable {
+        case text(Int), stroke(Int)
+    }
+
+    /// 點到的字或線條（字優先：字常常疊在線上）
+    func item(at p: CGPoint, tolerance: CGFloat) -> Item? {
+        if let i = textIndex(at: p, tolerance: tolerance / 2) { return .text(i) }
+        let hit = symbol.strokes.indices.last { i in
+            let pts = symbol.strokes[i].points
+            return pts.count == 1 ? hypot(pts[0].x - p.x, pts[0].y - p.y) <= tolerance
+                : zip(pts, pts.dropFirst()).contains { Self.segmentDistance(p, $0, $1) <= tolerance }
+        }
+        return hit.map { .stroke($0) }
+    }
+
+    /// 選到的東西的範圍；已經不在了（復原、擦掉）回傳 nil
+    func bounds(of item: Item) -> CGRect? {
+        switch item {
+        case let .text(i): return symbol.texts[safe: i]?.bounds
+        case let .stroke(i): return symbol.strokes[safe: i].flatMap { $0.points.isEmpty ? nil : InkShapes.bounds($0.points) }
+        }
+    }
+
+    /// 開始拖選到的東西（拖完算一步）：回傳拖之前的樣子，移動、縮放都從它算
+    mutating func beginTransform() -> CircuitSymbol {
+        remember()
+        return symbol
+    }
+
+    /// 拖完：沒有改到就不算一步
+    mutating func endTransform(from original: CircuitSymbol) {
+        if symbol == original { _ = history.popLast() }
+    }
+
+    /// 移動 d（元件座標）。直線照格點移動，才和接腳、其他直線對得上
+    mutating func move(_ item: Item, in original: CircuitSymbol, by d: CGPoint) {
+        switch item {
+        case let .text(i):
+            guard let t = original.texts[safe: i], symbol.texts.indices.contains(i) else { return }
+            symbol.texts[i].center = CGPoint(x: t.center.x + d.x, y: t.center.y + d.y)
+        case let .stroke(i):
+            guard let s = original.strokes[safe: i], symbol.strokes.indices.contains(i) else { return }
+            let step = s.freehand ? d : CircuitData.snap(d)
+            symbol.strokes[i].points = s.points.map { CGPoint(x: $0.x + step.x, y: $0.y + step.y) }
+        }
+    }
+
+    /// 選到的字換大小（拉右下角的把手）
+    mutating func resizeText(_ i: Int, to size: CGFloat) {
+        guard symbol.texts.indices.contains(i) else { return }
+        let r = CircuitSymbol.Label.sizeRange
+        symbol.texts[i].size = min(max(size, r.lowerBound), r.upperBound)
     }
 
     // MARK: 接腳、橡皮擦
@@ -294,6 +348,12 @@ final class CircuitSymbolCanvas: UIView {
     private let pinLayer = CAShapeLayer()
     /// 橡皮擦擦到的範圍（擦的時候、Pencil 懸停時顯示）
     let eraserLayer = CAShapeLayer()
+    /// 選取工具選到的東西（元件座標的範圍、要不要縮放把手）
+    var selection: () -> (rect: CGRect, handle: Bool)? = { nil }
+    let selectionLayer = CAShapeLayer()
+    let selectionHandle = CALayer()
+    /// 縮放把手的位置（畫面座標）；沒有把手是 nil
+    private(set) var handlePoint: CGPoint?
     /// 文字：字改了才重畫（畫筆刷時不用每次重畫）
     private let labelsView = SymbolLabelsView()
     private(set) var drawnTexts: [CircuitSymbol.Label] = []
@@ -316,6 +376,17 @@ final class CircuitSymbolCanvas: UIView {
         eraserLayer.isHidden = true
         eraserLayer.zPosition = 1
         layer.addSublayer(eraserLayer)
+        selectionLayer.fillColor = nil
+        selectionLayer.strokeColor = UIColor.systemBlue.cgColor
+        selectionLayer.lineWidth = 1.5
+        selectionLayer.lineDashPattern = [6, 4]
+        selectionLayer.zPosition = 2
+        layer.addSublayer(selectionLayer)
+        selectionHandle.contents = Self.handleImage
+        selectionHandle.contentsGravity = .resizeAspect
+        selectionHandle.zPosition = 3
+        selectionHandle.isHidden = true
+        layer.addSublayer(selectionHandle)
         labelsView.isOpaque = false
         labelsView.backgroundColor = .clear
         labelsView.isUserInteractionEnabled = false
@@ -366,11 +437,7 @@ final class CircuitSymbolCanvas: UIView {
         CATransaction.setDisableActions(true)
         let symbol = draft().symbol
         let path = CGMutablePath()
-        for s in symbol.strokes {
-            guard let first = s.points.first else { continue }
-            path.move(to: viewPoint(first))
-            for p in s.points.dropFirst() { path.addLine(to: viewPoint(p)) }
-        }
+        for s in symbol.strokes { path.addPath(s.path(viewPoint)) }
         strokeLayer.path = path
         strokeLayer.lineWidth = scale
         strokeLayer.strokeColor = UIColor.label.resolvedColor(with: traitCollection).cgColor
@@ -380,6 +447,19 @@ final class CircuitSymbolCanvas: UIView {
             pins.addEllipse(in: CGRect(x: v.x - 6, y: v.y - 6, width: 12, height: 12))
         }
         pinLayer.path = pins
+        if let sel = selection() {
+            let a = viewPoint(CGPoint(x: sel.rect.minX, y: sel.rect.minY)), b = viewPoint(CGPoint(x: sel.rect.maxX, y: sel.rect.maxY))
+            let r = CGRect(x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y).insetBy(dx: -6, dy: -6)
+            selectionLayer.path = UIBezierPath(rect: r).cgPath
+            handlePoint = sel.handle ? CGPoint(x: r.maxX, y: r.maxY) : nil
+        } else {
+            selectionLayer.path = nil
+            handlePoint = nil
+        }
+        if let h = handlePoint {
+            selectionHandle.frame = CGRect(x: h.x - 14, y: h.y - 14, width: 28, height: 28)
+        }
+        selectionHandle.isHidden = handlePoint == nil
         CATransaction.commit()
         if symbol.texts != drawnTexts {
             drawnTexts = symbol.texts
@@ -391,9 +471,28 @@ final class CircuitSymbolCanvas: UIView {
         CGPoint(x: (p.x - bounds.midX) / scale, y: (p.y - bounds.midY) / scale)
     }
 
-    private func viewPoint(_ p: CGPoint) -> CGPoint {
+    func viewPoint(_ p: CGPoint) -> CGPoint {
         CGPoint(x: bounds.midX + p.x * scale, y: bounds.midY + p.y * scale)
     }
+
+    /// 青綠色圓形的縮放把手（和頁面上文字框的一樣）
+    private static let handleImage: CGImage? = {
+        let size = CGSize(width: 28, height: 28)
+        let fmt = UIGraphicsImageRendererFormat()
+        fmt.scale = 6
+        return UIGraphicsImageRenderer(size: size, format: fmt).image { _ in
+            let circle = UIBezierPath(ovalIn: CGRect(origin: .zero, size: size).insetBy(dx: 1.5, dy: 1.5))
+            UIColor.systemTeal.setFill()
+            circle.fill()
+            circle.lineWidth = 2
+            UIColor.white.setStroke()
+            circle.stroke()
+            if let img = UIImage(systemName: "arrow.up.left.and.arrow.down.right", withConfiguration: UIImage.SymbolConfiguration(pointSize: 11, weight: .bold))?
+                .withTintColor(.white, renderingMode: .alwaysOriginal) {
+                img.draw(at: CGPoint(x: (size.width - img.size.width) / 2, y: (size.height - img.size.height) / 2))
+            }
+        }.cgImage
+    }()
 
     override func draw(_ rect: CGRect) {
         guard let ctx = UIGraphicsGetCurrentContext() else { return }
@@ -483,6 +582,10 @@ final class CircuitSymbolEditorViewController: UIViewController {
     private var heldShape: InkShape?
     /// 文字工具正在拖的字
     private var movingText: Int?
+    /// 選取工具選到的東西
+    private(set) var selection: CircuitSymbolDraft.Item?
+    /// 選取工具正在拖：拖之前的樣子、起點；resizing：拉的是字的縮放把手
+    private var transform: (original: CircuitSymbol, start: CGPoint, resizing: Bool)?
     /// 文字的大小選項（元件座標，格點 10）
     static let textSizes: [(String, CGFloat)] = [("小字", 8), ("中字", 12), ("大字", 16)]
 
@@ -530,6 +633,7 @@ final class CircuitSymbolEditorViewController: UIViewController {
         }, for: .valueChanged)
 
         canvas.draft = { [weak self] in self?.draft ?? CircuitSymbolDraft() }
+        canvas.selection = { [weak self] in self?.selectionChrome() }
         canvas.layer.borderColor = UIColor.separator.cgColor
         canvas.layer.borderWidth = 1
         let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
@@ -584,6 +688,10 @@ final class CircuitSymbolEditorViewController: UIViewController {
         hint.text = t.hint
         eraseKind.isHidden = t != .eraser
         if t != .eraser { canvas.showEraser(at: nil, radius: Self.eraserRadius) }
+        if t != .select {
+            selection = nil
+            canvas.refresh()
+        }
         // 筆刷、橡皮擦一碰到就開始；線條、接腳用點一下、拖曳（拖曳的起點會扣回剛碰到的位置）
         let immediate = t == .brush || t == .eraser
         strokeTouch.isEnabled = immediate
@@ -625,12 +733,54 @@ final class CircuitSymbolEditorViewController: UIViewController {
     /// 點一下（元件座標）
     func handleTap(at p: CGPoint) {
         switch tool {
+        case .select: selection = draft.item(at: p, tolerance: tolerance)
         case .pin: draft.togglePin(at: p)
         case .eraser: draft.erase(at: p, tolerance: tolerance, partial: EditorSettings.shared.symbolPartialErase)
         case .text: presentTextEditor(editing: draft.textIndex(at: p, tolerance: tolerance / 2), at: p)
         case .line, .brush: break
         }
         canvas.refresh()
+    }
+
+    /// 選取框（藍色虛線）；選到的是字才有縮放把手
+    private func selectionChrome() -> (rect: CGRect, handle: Bool)? {
+        guard tool == .select, let s = selection, let r = draft.bounds(of: s) else { return nil }
+        if case .text = s { return (r, true) }
+        return (r, false)
+    }
+
+    /// 按在字的縮放把手上（元件座標 p）
+    private func onHandle(_ p: CGPoint) -> Bool {
+        guard let h = canvas.handlePoint else { return false }
+        let v = canvas.viewPoint(p)
+        return hypot(v.x - h.x, v.y - h.y) < 22
+    }
+
+    private func dragSelection(_ state: UIGestureRecognizer.State, at p: CGPoint) {
+        switch state {
+        case .began:
+            if selection == nil || !onHandle(p) {
+                selection = draft.item(at: p, tolerance: tolerance)
+            }
+            guard selection != nil else { return }
+            transform = (draft.beginTransform(), p, onHandle(p))
+        case .changed, .ended, .cancelled, .failed:
+            guard let t = transform, let sel = selection else { return }
+            if t.resizing, case let .text(i) = sel, let label = t.original.texts[safe: i] {
+                // 字的中心不動，大小跟著把手離中心的距離
+                let d0 = hypot(t.start.x - label.center.x, t.start.y - label.center.y)
+                let d1 = hypot(p.x - label.center.x, p.y - label.center.y)
+                if d0 > 0.5 { draft.resizeText(i, to: label.size * d1 / d0) }
+            } else {
+                draft.move(sel, in: t.original, by: CGPoint(x: p.x - t.start.x, y: p.y - t.start.y))
+            }
+            if state != .changed {
+                draft.endTransform(from: t.original)
+                transform = nil
+            }
+        default:
+            break
+        }
     }
 
     /// 文字工具：輸入字、選大小。editing：點到的那一段（nil＝新增在 p）
@@ -674,6 +824,8 @@ final class CircuitSymbolEditorViewController: UIViewController {
 
     private func apply(_ state: UIGestureRecognizer.State, at p: CGPoint) {
         switch tool {
+        case .select:
+            dragSelection(state, at: p)
         case .line:
             switch state {
             case .began: draft.beginLine(at: p)

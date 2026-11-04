@@ -81,6 +81,21 @@ final class HoldToLineFlowTests: XCTestCase {
         XCTAssertGreaterThan(last.renderBounds.width, 150, file: file, line: line)
     }
 
+    /// PencilKit 的筆停住也和自製筆刷一樣認：S 形修成平滑的曲線，筆不放開繼續移動終點跟著走
+    func testPencilKitPenHoldMakesACurve() throws {
+        let wave = (0...80).map { i -> CGPoint in
+            let t = CGFloat(i) / 80
+            return docPoint(100 + t * 300, 300 + sin(t * 2 * .pi) * 60 + sin(CGFloat(i) * 1.7) * 2)
+        }
+        editor.holdToShape.hold(wave)
+        let live = try XCTUnwrap(editor.holdToShape.live)
+        XCTAssertEqual(live.shape?.kind, .curve)
+        XCTAssertEqual(live.points, live.shape?.points, "預覽、放開後留下的都是這條曲線")
+        editor.holdToShape.move(docPoint(500, 300))
+        let moved = try XCTUnwrap(editor.holdToShape.live?.points.last)
+        XCTAssertEqual(moved.x, docPoint(500, 300).x, accuracy: 3, "終點跟著筆尖")
+    }
+
     func testLineIsPlacedWhenPenLiftsBeforePencilKitFinishes() {
         assertStraightLineReplacedHand(drawHoldLine(pencilKitEndsFirst: false))
     }

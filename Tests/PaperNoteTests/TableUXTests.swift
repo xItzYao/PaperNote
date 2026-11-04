@@ -433,7 +433,7 @@ final class TableEditorUXTests: XCTestCase {
             wait { editor.presentedViewController is UIHostingController<ColorPalettePanel> }
             let host = try XCTUnwrap(editor.presentedViewController as? UIHostingController<ColorPalettePanel>, "按「\(title)」打開調色盤")
             let pass = host.popoverPresentationController?.passthroughViews ?? []
-            XCTAssertTrue(pass.contains(editor.canvas), "調色盤打開時頁面還接得到觸碰（點旁邊不會卡住手勢）")
+            XCTAssertTrue(pass.contains(editor.popoverShield), "調色盤打開時頁面上的觸碰由我們接（點旁邊不會卡住手勢）")
             return host
         }
         func closed() { wait { editor.presentedViewController == nil } }

@@ -89,7 +89,7 @@ struct RootView: View {
     @ViewBuilder
     private var importPicker: some View {
         if let item = pendingImport {
-            FolderPickerSheet(title: "匯入「\(item.url.deletingPathExtension().lastPathComponent)」到…") { dest in
+            FolderPickerSheet(title: "匯入「\(item.url.deletingPathExtension().lastPathComponent)」到…", confirmTitle: "匯入") { dest in
                 pendingImport = nil
                 // 等選資料夾的視窗收起來再打開筆記本
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { importShared(item.url, into: dest) }
@@ -167,6 +167,8 @@ struct FolderView: View {
     @State private var importSummary: String?
     @State private var importing = false
     @State private var exportTarget: NotebookMeta?
+    /// 匯出的頁面（見 PageSelection），空白＝全部
+    @State private var exportPages = ""
     /// 我的最愛文件（畫面中間的視窗）；在視窗裡點的筆記本，等視窗關掉再打開
     @State private var showFavorites = false
     @State private var openAfterFavorites: UUID?
@@ -543,11 +545,14 @@ struct FolderView: View {
         }
         .alert("匯出「\(exportTarget?.title ?? "")」", isPresented: Binding(get: { exportTarget != nil }, set: { if !$0 { exportTarget = nil } }),
                presenting: exportTarget) { nb in
-            Button("PDF（給別人看、列印）") { export(nb.id, paperNote: false) }
-            Button("PaperNote（可以繼續編輯筆跡）") { export(nb.id, paperNote: true) }
+            TextField(PageSelection.hint, text: $exportPages)
+                .keyboardType(.numbersAndPunctuation)
+                .accessibilityLabel("匯出的頁面")
+            Button("PDF（給別人看、列印）") { export(nb.id, paperNote: false, pages: exportPages) }
+            Button("PaperNote（可以繼續編輯筆跡）") { export(nb.id, paperNote: true, pages: exportPages) }
             Button("取消", role: .cancel) {}
         } message: { _ in
-            Text("要匯出成哪一種格式？")
+            Text("要匯出成哪一種格式？可以只匯出部分頁面。")
         }
         // 畫面中間的小視窗（和新增頁面同一個）：點旁邊取消
         .fullScreenCover(isPresented: $showNewNotebook) {
@@ -764,19 +769,21 @@ struct FolderView: View {
         } label: { Label("複製", systemImage: "plus.square.on.square") }
         Button { moveTarget = item } label: { Label("移動到…", systemImage: "folder") }
         if case let .notebook(n) = item {
-            Button { exportTarget = n } label: { Label("匯出…", systemImage: "square.and.arrow.up") }
+            Button { exportPages = ""; exportTarget = n } label: { Label("匯出…", systemImage: "square.and.arrow.up") }
         }
         Divider()
         Button(role: .destructive) { moveToTrash([item]) } label: { Label("刪除", systemImage: "trash") }
     }
 
-    private func export(_ id: UUID, paperNote: Bool) {
+    private func export(_ id: UUID, paperNote: Bool, pages text: String) {
         exporting = true
         DispatchQueue.main.async {
             defer { exporting = false }
             do {
                 let session = try NotebookSession(id: id)
-                let url = paperNote ? try NotebookExporter.exportPaperNote(session: session) : try NotebookExporter.exportPDF(session: session)
+                let pages = try PageSelection.parse(text, pageCount: session.document.pages.count)
+                let url = paperNote ? try NotebookExporter.exportPaperNote(session: session, pages: pages)
+                                    : try NotebookExporter.exportPDF(session: session, pages: pages)
                 shareItem = ShareItem(url: url)
             } catch {
                 errorMessage = "匯出失敗：\(error.localizedDescription)"
@@ -882,7 +889,7 @@ struct MoveSheet: View {
 
     var body: some View {
         FolderPickerSheet(title: items.count == 1 ? "移動「\(items[0].name)」到…" : "移動 \(items.count) 個項目到…",
-                          isDisabled: isDisabled, onPick: onPick, onCancel: onCancel)
+                          confirmTitle: "移動", isDisabled: isDisabled, onPick: onPick, onCancel: onCancel)
     }
 
     private func isDisabled(_ f: Folder) -> Bool {
@@ -894,36 +901,70 @@ struct MoveSheet: View {
 }
 
 /// 選資料夾（移動、匯入）：一開始只列出最上層，點最左邊的 ＞ 展開（展開後朝下），點名稱選這個資料夾
+/// 選資料夾的視窗目前選了哪一個、展開了哪些
+struct FolderPickerState {
+    /// nil：資料庫（最上層）
+    var selected: UUID?
+    var expanded: Set<UUID> = []
+
+    /// 點一個資料夾：選它，有子資料夾就展開（只是想看裡面有什麼也不會馬上匯入）；
+    /// 點已經選著的資料夾：收合／展開
+    mutating func tap(_ id: UUID?, hasChildren: Bool) {
+        guard let id else { selected = nil; return }
+        if selected == id {
+            if hasChildren { toggle(id) }
+        } else {
+            selected = id
+            if hasChildren { expanded.insert(id) }
+        }
+    }
+
+    mutating func toggle(_ id: UUID) {
+        if expanded.contains(id) { expanded.remove(id) } else { expanded.insert(id) }
+    }
+}
+
 struct FolderPickerSheet: View {
     @EnvironmentObject var store: LibraryStore
     let title: String
+    /// 右上角確定的按鈕（匯入、移動）
+    var confirmTitle = "選擇"
     var isDisabled: (Folder) -> Bool = { _ in false }
     let onPick: (UUID?) -> Void
     let onCancel: () -> Void
-    @State var expanded: Set<UUID> = []
+    @State var state = FolderPickerState()
 
     private static let chevronWidth: CGFloat = 28
+
+    /// 選著的那一列：比較深的灰色
+    private func background(_ id: UUID?) -> Color? {
+        state.selected == id ? Color(uiColor: .systemGray4) : nil
+    }
+
+    private func tap(_ id: UUID?, hasChildren: Bool) {
+        withAnimation(.easeInOut(duration: 0.15)) { state.tap(id, hasChildren: hasChildren) }
+    }
 
     var body: some View {
         NavigationStack {
             List {
                 HStack(spacing: 6) {
                     Color.clear.frame(width: Self.chevronWidth)
-                    Button { onPick(nil) } label: {
+                    Button { tap(nil, hasChildren: false) } label: {
                         Label("資料庫（最上層）", systemImage: "books.vertical")
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.borderless)
+                    .accessibilityAddTraits(state.selected == nil ? .isSelected : [])
                 }
-                ForEach(store.folderRows(expanded: expanded), id: \.folder.id) { row in
+                .listRowBackground(background(nil))
+                ForEach(store.folderRows(expanded: state.expanded), id: \.folder.id) { row in
                     HStack(spacing: 6) {
                         if row.hasChildren {
-                            let open = expanded.contains(row.folder.id)
+                            let open = state.expanded.contains(row.folder.id)
                             Button {
-                                withAnimation(.easeInOut(duration: 0.15)) {
-                                    if open { expanded.remove(row.folder.id) } else { expanded.insert(row.folder.id) }
-                                }
+                                withAnimation(.easeInOut(duration: 0.15)) { state.toggle(row.folder.id) }
                             } label: {
                                 Image(systemName: "chevron.right")
                                     .font(.subheadline.weight(.semibold))
@@ -937,21 +978,27 @@ struct FolderPickerSheet: View {
                         } else {
                             Color.clear.frame(width: Self.chevronWidth)
                         }
-                        Button { onPick(row.folder.id) } label: {
+                        Button { tap(row.folder.id, hasChildren: row.hasChildren) } label: {
                             Label(row.folder.name, systemImage: "folder")
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.borderless)
                         .disabled(isDisabled(row.folder))
+                        .accessibilityAddTraits(state.selected == row.folder.id ? .isSelected : [])
                     }
                     .padding(.leading, CGFloat(row.depth) * 20)
+                    .listRowBackground(background(row.folder.id))
                 }
             }
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消", action: onCancel) }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(confirmTitle) { onPick(state.selected) }
+                        .fontWeight(.semibold)
+                }
             }
         }
     }

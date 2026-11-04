@@ -163,6 +163,24 @@ struct CircuitSymbol: Codable, Equatable {
         var points: [CGPoint]
         /// 筆刷畫的（不是 Node 接起來的直線）
         var freehand = false
+
+        /// 畫成路徑（map：換到要畫的座標）。直線照點連；筆刷畫的用中點二次曲線連起來，
+        /// 圓滑、看不到一段一段的折線（點很密，轉角還是尖的）
+        func path(_ map: (CGPoint) -> CGPoint = { $0 }) -> CGPath {
+            let p = points.map(map)
+            let path = CGMutablePath()
+            guard let first = p.first else { return path }
+            path.move(to: first)
+            guard freehand, p.count > 2 else {
+                for q in p.dropFirst() { path.addLine(to: q) }
+                return path
+            }
+            for i in 1..<(p.count - 1) {
+                path.addQuadCurve(to: CGPoint(x: (p[i].x + p[i + 1].x) / 2, y: (p[i].y + p[i + 1].y) / 2), control: p[i])
+            }
+            path.addLine(to: p[p.count - 1])
+            return path
+        }
     }
 
     /// 符號上的字（極性 +、−，電表的 A、V，方塊上的名字）。位置跟著元件旋轉、翻轉，但字永遠是正的

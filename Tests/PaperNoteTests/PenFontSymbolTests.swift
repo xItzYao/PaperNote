@@ -166,17 +166,42 @@ final class PenFontSymbolTests: XCTestCase {
         XCTAssertLessThan((ar.max() ?? 0) - (ar.min() ?? 0), 1.5, "點都在同一個圓上：\(ar)")
     }
 
-    func testBrushKeepsTheShapeWithFewerPoints() {
+    /// 回報的問題：筆刷普通畫（沒有停住）的圓，放開後變成多邊形（折線簡化把點拿到只剩幾個）
+    func testBrushStaysSmoothAfterLettingGo() {
         var d = CircuitSymbolDraft()
-        d.beginBrush(at: .zero)
-        for i in 1...50 { d.continueBrush(to: CGPoint(x: CGFloat(i), y: 0.02 * CGFloat(i % 2))) }
-        d.continueBrush(to: CGPoint(x: 50, y: 30))
+        let circle = (0...120).map { i -> CGPoint in
+            let t = CGFloat(i) / 120 * 2 * .pi
+            return CGPoint(x: 20 * cos(t), y: 20 * sin(t))
+        }
+        d.beginBrush(at: circle[0])
+        for p in circle.dropFirst() { d.continueBrush(to: p) }
         d.endBrush()
-        let points = d.symbol.strokes[0].points
-        XCTAssertTrue(d.symbol.strokes[0].freehand)
-        XCTAssertLessThan(points.count, 6, "抖動的點拿掉")
+        let stroke = d.symbol.strokes[0]
+        XCTAssertTrue(stroke.freehand)
+        let longest = zip(stroke.points, stroke.points.dropFirst()).map { hypot($1.x - $0.x, $1.y - $0.y) }.max() ?? 0
+        XCTAssertLessThan(longest, 2, "放開後不會只剩幾個點（變成多邊形）")
+        var curves = 0, lines = 0
+        stroke.path().applyWithBlock { e in
+            if e.pointee.type == .addQuadCurveToPoint { curves += 1 }
+            if e.pointee.type == .addLineToPoint { lines += 1 }
+        }
+        XCTAssertGreaterThan(curves, 100, "筆刷畫的線用平滑的曲線連，不是折線")
+        XCTAssertLessThanOrEqual(lines, 1)
+        var straight = 0
+        CircuitSymbol.Stroke(points: [.zero, CGPoint(x: 10, y: 0), CGPoint(x: 10, y: 10)]).path().applyWithBlock { e in
+            if e.pointee.type == .addQuadCurveToPoint { straight += 1 }
+        }
+        XCTAssertEqual(straight, 0, "線條工具的直線照點連（轉角是尖的）")
+
+        // 擠在一起的點拿掉（存起來比較輕），頭尾不變
+        var e = CircuitSymbolDraft()
+        e.beginBrush(at: .zero)
+        for i in 1...100 { e.continueBrush(to: CGPoint(x: CGFloat(i) * 0.05, y: 0)) }
+        e.endBrush()
+        let points = e.symbol.strokes[0].points
+        XCTAssertLessThan(points.count, 25)
         XCTAssertEqual(points.first, .zero)
-        XCTAssertEqual(points.last, CGPoint(x: 50, y: 30))
+        XCTAssertEqual(points.last, CGPoint(x: 5, y: 0))
 
         var dot = CircuitSymbolDraft()
         dot.beginBrush(at: .zero)

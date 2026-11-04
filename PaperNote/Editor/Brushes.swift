@@ -325,15 +325,7 @@ struct BrushSettingsView: View {
 
     var body: some View {
         Form {
-            if preset.style != .marker {
-                Section("筆型") {
-                    Picker("筆型", selection: $preset.style) {
-                        ForEach(InkStyle.allCases.filter { $0 != .marker }) { Text($0.title).tag($0) }
-                    }
-                    .pickerStyle(.menu)
-                }
-            }
-            Section("顏色") {
+            Section("色票") {
                 LazyVGrid(columns: Array(repeating: GridItem(.fixed(34), spacing: 10), count: 6), spacing: 10) {
                     ForEach(Self.swatches, id: \.self) { swatch($0) }
                     // 喜歡的顏色：長按可以拿掉
@@ -393,22 +385,29 @@ struct BrushSettingsView: View {
     }
 }
 
+extension BrushPreset {
+    /// 用這支筆畫一筆：和真正寫出來的一樣（原子筆用自製筆刷畫，其他筆是 PencilKit 畫）
+    func strokePreview(_ path: [CGPoint], in size: CGSize, scale: CGFloat) -> UIImage {
+        let rect = CGRect(origin: .zero, size: size)
+        if style.usesCustomInk && EditorSettings.shared.customInk {
+            let stroke = InkStroke(colorHex: colorHex, points: path.map { InkPoint($0, width: width) })
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = scale
+            return UIGraphicsImageRenderer(size: size, format: format).image { InkRenderer.draw([stroke], in: $0.cgContext) }
+        }
+        let t = tool
+        let stroke = ShapeRecognizer.makeStroke(points: path, ink: t.ink, width: t.width, sample: nil)
+        return PKDrawing(strokes: [stroke]).image(from: rect, scale: scale)
+    }
+}
+
 private struct StrokePreview: View {
     let preset: BrushPreset
     var body: some View {
         Canvas { ctx, size in
-            // 筆：和真正寫出來的一樣（原子筆用自製筆刷畫，其他筆是 PencilKit 畫）
             if preset.style != .marker {
-                let path = InkStyle.samplePath(in: size)
-                if preset.style.usesCustomInk && EditorSettings.shared.customInk {
-                    let stroke = InkStroke(colorHex: preset.colorHex, points: path.map { InkPoint($0, width: preset.width) })
-                    ctx.withCGContext { InkRenderer.draw([stroke], in: $0) }
-                } else {
-                    let tool = preset.tool
-                    let stroke = ShapeRecognizer.makeStroke(points: path, ink: tool.ink, width: tool.width, sample: nil)
-                    let rect = CGRect(origin: .zero, size: size)
-                    ctx.draw(Image(uiImage: PKDrawing(strokes: [stroke]).image(from: rect, scale: ctx.environment.displayScale)), in: rect)
-                }
+                let image = preset.strokePreview(InkStyle.samplePath(in: size), in: size, scale: ctx.environment.displayScale)
+                ctx.draw(Image(uiImage: image), in: CGRect(origin: .zero, size: size))
                 return
             }
             var path = Path()
