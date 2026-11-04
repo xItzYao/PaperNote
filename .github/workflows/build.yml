@@ -62,15 +62,30 @@ jobs:
                       print(d["udid"]); sys.exit()
           ')
           echo "Simulator: $UDID"
-          xcodebuild test \
+          # 編譯的時候先把模擬器開起來，等它完全開好才跑測試：
+          # 剛開機的模擬器還在忙，UI 測試打開 App 會逾時（Failed to get background assertion）
+          xcrun simctl bootstatus "$UDID" -b > boot.log 2>&1 &
+          BOOT=$!
+          FILTER="error:|Test Case .* (passed|failed)|XCTAssert|Executed|TEST (BUILD |EXECUTE )?(SUCCEEDED|FAILED)"
+          xcodebuild build-for-testing \
+            -project PaperNote.xcodeproj \
+            -scheme PaperNote \
+            -destination "id=$UDID" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee test.log | grep -E "$FILTER" || true
+          grep -q "TEST BUILD SUCCEEDED" test.log
+          wait $BOOT || true
+          tail -3 boot.log
+          xcodebuild test-without-building \
             -project PaperNote.xcodeproj \
             -scheme PaperNote \
             -destination "id=$UDID" \
             -derivedDataPath build \
             -only-testing:${{ matrix.bundle }} \
             CODE_SIGNING_ALLOWED=NO \
-            2>&1 | tee test.log | grep -E "error:|Test Case .* (passed|failed)|XCTAssert|Executed|TEST (SUCCEEDED|FAILED)" || true
-          grep -q "TEST SUCCEEDED" test.log
+            2>&1 | tee -a test.log | grep -E "$FILTER" || true
+          grep -qE "TEST (EXECUTE )?SUCCEEDED" test.log
 
       - name: Upload test log
         if: always()
