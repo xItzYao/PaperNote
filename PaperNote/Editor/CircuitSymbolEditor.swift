@@ -1,12 +1,13 @@
 import UIKit
 
 enum CircuitSymbolTool: Int, CaseIterable {
-    case line, brush, pin, eraser
+    case line, brush, text, pin, eraser
 
     var title: String {
         switch self {
         case .line: return "線條"
         case .brush: return "筆刷"
+        case .text: return "文字"
         case .pin: return "接腳"
         case .eraser: return "橡皮擦"
         }
@@ -16,6 +17,7 @@ enum CircuitSymbolTool: Int, CaseIterable {
         switch self {
         case .line: return "拖一條直線：兩端自動吸到最近的格點。從線的端點接著畫就連在一起。"
         case .brush: return "用 Pencil 或手指直接畫；畫完停住一下會變成直線，或修成圓、三角形、四邊形。"
+        case .text: return "點一下加上文字（例如 +、−、A、VCC），點已經有的字修改、換大小或刪除；拖曳移動。上下標寫 R_1、V^2。"
         case .pin: return "點格點加上接腳（導線接的地方），再點一下拿掉。至少要有一個。"
         case .eraser: return "點或劃過線條、接腳擦掉：「整條」擦掉整條線，「局部」只擦掉碰到的那一段。Pencil 筆身點兩下、Pencil Pro 按壓可以切換橡皮擦。"
         }
@@ -153,6 +155,46 @@ struct CircuitSymbolDraft {
         return hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
     }
 
+    // MARK: 文字
+
+    /// 點到的字（容許誤差 tolerance）
+    func textIndex(at p: CGPoint, tolerance: CGFloat) -> Int? {
+        symbol.texts.indices.last { symbol.texts[$0].bounds.insetBy(dx: -tolerance, dy: -tolerance).contains(p) }
+    }
+
+    /// 新增一段字；空白不算
+    mutating func addText(_ text: String, at p: CGPoint, size: CGFloat) {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        remember()
+        symbol.texts.append(.init(text: t, center: p, size: size))
+    }
+
+    /// 改字、換大小；改成空白就刪掉
+    mutating func updateText(_ i: Int, text: String, size: CGFloat) {
+        guard symbol.texts.indices.contains(i) else { return }
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t != symbol.texts[i].text || size != symbol.texts[i].size else { return }
+        remember()
+        if t.isEmpty {
+            symbol.texts.remove(at: i)
+        } else {
+            symbol.texts[i].text = t
+            symbol.texts[i].size = size
+        }
+    }
+
+    /// 開始拖一段字（拖完算一步）
+    mutating func beginMovingText(_ i: Int) {
+        guard symbol.texts.indices.contains(i) else { return }
+        remember()
+    }
+
+    mutating func moveText(_ i: Int, to p: CGPoint) {
+        guard symbol.texts.indices.contains(i) else { return }
+        symbol.texts[i].center = p
+    }
+
     // MARK: 接腳、橡皮擦
 
     mutating func togglePin(at p: CGPoint) {
@@ -175,6 +217,8 @@ struct CircuitSymbolDraft {
         var s = symbol
         if let i = s.pins.firstIndex(where: { hypot($0.x - p.x, $0.y - p.y) <= tolerance }) {
             s.pins.remove(at: i)
+        } else if let i = s.texts.firstIndex(where: { $0.bounds.insetBy(dx: -tolerance / 2, dy: -tolerance / 2).contains(p) }) {
+            s.texts.remove(at: i)
         } else if partial {
             let cut = s.strokes.flatMap { Self.cutting($0, around: p, radius: tolerance) }
             guard cut != s.strokes else { return false }
@@ -235,7 +279,7 @@ struct CircuitSymbolDraft {
 
     /// 畫好的元件：中心移到格點上的原點。沒有線條或接腳回傳 nil
     func finished() -> CircuitSymbol? {
-        guard !symbol.strokes.isEmpty, !symbol.pins.isEmpty else { return nil }
+        guard !(symbol.strokes.isEmpty && symbol.texts.isEmpty), !symbol.pins.isEmpty else { return nil }
         return symbol.centered()
     }
 }
@@ -247,6 +291,9 @@ final class CircuitSymbolCanvas: UIView {
     var draft: () -> CircuitSymbolDraft = { CircuitSymbolDraft() }
     let strokeLayer = CAShapeLayer()
     private let pinLayer = CAShapeLayer()
+    /// 文字：字改了才重畫（畫筆刷時不用每次重畫）
+    private let labelsView = SymbolLabelsView()
+    private(set) var drawnTexts: [CircuitSymbol.Label] = []
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -260,7 +307,16 @@ final class CircuitSymbolCanvas: UIView {
         pinLayer.lineWidth = 2
         layer.addSublayer(strokeLayer)
         layer.addSublayer(pinLayer)
-        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (v: CircuitSymbolCanvas, _) in v.refresh() }
+        labelsView.isOpaque = false
+        labelsView.backgroundColor = .clear
+        labelsView.isUserInteractionEnabled = false
+        labelsView.contentMode = .redraw
+        labelsView.render = { [weak self] in self?.drawTexts() }
+        addSubview(labelsView)
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (v: CircuitSymbolCanvas, _) in
+            v.refresh()
+            v.labelsView.setNeedsDisplay()
+        }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -269,7 +325,17 @@ final class CircuitSymbolCanvas: UIView {
         super.layoutSubviews()
         strokeLayer.frame = bounds
         pinLayer.frame = bounds
+        labelsView.frame = bounds
         refresh()
+    }
+
+    private func drawTexts() {
+        for t in drawnTexts {
+            let str = CircuitRenderer.nameString(t.text, size: t.size * scale, color: .label)
+            let sz = str.size()
+            let c = viewPoint(t.center)
+            str.draw(at: CGPoint(x: c.x - sz.width / 2, y: c.y - sz.height / 2))
+        }
     }
 
     /// 線條、接腳改了：更新路徑
@@ -293,6 +359,10 @@ final class CircuitSymbolCanvas: UIView {
         }
         pinLayer.path = pins
         CATransaction.commit()
+        if symbol.texts != drawnTexts {
+            drawnTexts = symbol.texts
+            labelsView.setNeedsDisplay()
+        }
     }
 
     func symbolPoint(_ p: CGPoint) -> CGPoint {
@@ -316,6 +386,12 @@ final class CircuitSymbolCanvas: UIView {
             }
         }
     }
+}
+
+/// 畫元件的文字（由畫布畫）
+private final class SymbolLabelsView: UIView {
+    var render: (() -> Void)?
+    override func draw(_ rect: CGRect) { render?() }
 }
 
 /// 畫元件的筆刷、橡皮擦：一碰到就開始（拖曳手勢要先移動一小段才開始，畫起來會慢半拍），每個取樣點都送出來
@@ -383,6 +459,10 @@ final class CircuitSymbolEditorViewController: UIViewController {
     private var holdTimer: Timer?
     private var holdAnchor: CGPoint = .zero
     private var heldShape: CircuitSymbolDraft.HeldShape?
+    /// 文字工具正在拖的字
+    private var movingText: Int?
+    /// 文字的大小選項（元件座標，格點 10）
+    static let textSizes: [(String, CGFloat)] = [("小字", 8), ("中字", 12), ("大字", 16)]
 
     init(name: String, symbol: CircuitSymbol?, onDone: @escaping (String, CircuitSymbol) -> Void) {
         draft = CircuitSymbolDraft(symbol ?? CircuitSymbol())
@@ -504,7 +584,41 @@ final class CircuitSymbolEditorViewController: UIViewController {
         switch tool {
         case .pin: draft.togglePin(at: p)
         case .eraser: draft.erase(at: p, tolerance: tolerance, partial: EditorSettings.shared.symbolPartialErase)
+        case .text: presentTextEditor(editing: draft.textIndex(at: p, tolerance: tolerance / 2), at: p)
         case .line, .brush: break
+        }
+        canvas.refresh()
+    }
+
+    /// 文字工具：輸入字、選大小。editing：點到的那一段（nil＝新增在 p）
+    func presentTextEditor(editing: Int?, at p: CGPoint) {
+        let old = editing.flatMap { draft.symbol.texts[safe: $0] }
+        let a = UIAlertController(title: old == nil ? "加上文字" : "修改文字", message: "上下標寫成 R_1、V^2", preferredStyle: .alert)
+        a.addTextField { f in
+            f.text = old?.text
+            f.placeholder = "例如 +、A、VCC"
+        }
+        for (title, size) in Self.textSizes {
+            let current = old.map { abs($0.size - size) < 0.5 } ?? (size == CircuitSymbol.Label.defaultSize)
+            a.addAction(UIAlertAction(title: current ? title + " ✓" : title, style: .default) { [weak self, weak a] _ in
+                self?.commitText(a?.textFields?.first?.text ?? "", size: size, editing: editing, at: p)
+            })
+        }
+        if editing != nil {
+            a.addAction(UIAlertAction(title: "刪除", style: .destructive) { [weak self] _ in
+                self?.commitText("", size: old?.size ?? CircuitSymbol.Label.defaultSize, editing: editing, at: p)
+            })
+        }
+        a.addAction(UIAlertAction(title: "取消", style: .cancel))
+        present(a, animated: true)
+    }
+
+    /// 文字輸入完：新增或修改（空白＝刪掉）
+    func commitText(_ text: String, size: CGFloat, editing: Int?, at p: CGPoint) {
+        if let i = editing {
+            draft.updateText(i, text: text, size: size)
+        } else {
+            draft.addText(text, at: p, size: size)
         }
         canvas.refresh()
     }
@@ -559,6 +673,17 @@ final class CircuitSymbolEditorViewController: UIViewController {
             default:
                 // 放開的位置已經擦過了（整條擦除再擦一次會多擦掉底下的另一條）
                 draft.endErase()
+            }
+        case .text:
+            switch state {
+            case .began:
+                movingText = draft.textIndex(at: p, tolerance: tolerance / 2)
+                if let i = movingText { draft.beginMovingText(i) }
+            case .changed:
+                if let i = movingText { draft.moveText(i, to: p) }
+            default:
+                if let i = movingText { draft.moveText(i, to: p) }
+                movingText = nil
             }
         case .pin:
             break
@@ -633,7 +758,7 @@ final class CircuitSymbolEditorViewController: UIViewController {
 
     func finish() {
         guard let symbol = draft.finished() else {
-            alert(title: draft.symbol.strokes.isEmpty ? "還沒有畫符號" : "還沒有接腳，導線接不上去：用「接腳」工具在格點上點一下", message: nil)
+            alert(title: draft.symbol.strokes.isEmpty && draft.symbol.texts.isEmpty ? "還沒有畫符號" : "還沒有接腳，導線接不上去：用「接腳」工具在格點上點一下", message: nil)
             return
         }
         onDone(nameField.text ?? "", symbol)

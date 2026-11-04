@@ -175,3 +175,134 @@ final class SymbolEditorStrokeTests: XCTestCase {
         XCTAssertEqual(vc.draft.symbol.strokes.count, 1, "整條擦除：點一下擦掉一整條")
     }
 }
+
+/// 畫元件的文字工具：符號上的字（+、−、A、VCC），AI 的 JSON 也能寫字
+final class SymbolTextTests: XCTestCase {
+    func testAddingEditingMovingAndErasingText() {
+        var d = CircuitSymbolDraft()
+        d.addText("  ", at: .zero, size: 12)
+        XCTAssertTrue(d.symbol.texts.isEmpty, "空白不算")
+        XCTAssertFalse(d.canUndo)
+        d.addText("+", at: CGPoint(x: -14, y: -10), size: 12)
+        XCTAssertEqual(d.symbol.texts, [CircuitSymbol.Label(text: "+", center: CGPoint(x: -14, y: -10), size: 12)])
+        XCTAssertEqual(d.textIndex(at: CGPoint(x: -14, y: -9), tolerance: 2), 0)
+        XCTAssertNil(d.textIndex(at: CGPoint(x: 30, y: 30), tolerance: 2))
+        d.updateText(0, text: "V_{in}", size: 16)
+        XCTAssertEqual(d.symbol.texts.first?.text, "V_{in}")
+        XCTAssertEqual(d.symbol.texts.first?.size, 16, "可以換大小")
+        d.beginMovingText(0)
+        d.moveText(0, to: CGPoint(x: 0, y: 20))
+        d.moveText(0, to: CGPoint(x: 0, y: 30))
+        d.undo()
+        XCTAssertEqual(d.symbol.texts.first?.center, CGPoint(x: -14, y: -10), "拖一次算一步")
+        XCTAssertTrue(d.erase(at: CGPoint(x: -14, y: -10), tolerance: 6, partial: true), "橡皮擦擦得到字")
+        XCTAssertTrue(d.symbol.texts.isEmpty)
+        d.undo()
+        d.updateText(0, text: "", size: 12)
+        XCTAssertTrue(d.symbol.texts.isEmpty, "改成空白就刪掉")
+    }
+
+    func testTextCountsForTheSymbolsSizeAndCentering() throws {
+        var d = CircuitSymbolDraft()
+        d.beginLine(at: CGPoint(x: 100, y: 100))
+        d.endLine(at: CGPoint(x: 160, y: 100))
+        d.togglePin(at: CGPoint(x: 100, y: 100))
+        d.addText("GND", at: CGPoint(x: 130, y: 130), size: 12)
+        let raw = d.symbol
+        XCTAssertTrue(raw.bounds.contains(CGPoint(x: 130, y: 134)), "字也在元件的範圍裡（才點得到、框得到）")
+        let s = try XCTUnwrap(d.finished())
+        let shift = CGPoint(x: s.pins[0].x - 100, y: s.pins[0].y - 100)
+        XCTAssertEqual(s.texts[0].center, CGPoint(x: 130 + shift.x, y: 130 + shift.y), "置中時字跟著移")
+
+        var textOnly = CircuitSymbolDraft()
+        textOnly.addText("IC", at: .zero, size: 16)
+        textOnly.togglePin(at: CGPoint(x: 20, y: 0))
+        XCTAssertNotNil(textOnly.finished(), "只有字、接腳也可以")
+    }
+
+    func testOldSymbolsWithoutTextStillLoad() throws {
+        let json = #"{"strokes":[{"points":[[0,0],[10,0]],"freehand":false}],"pins":[[0,0]]}"#
+        let s = try JSONDecoder().decode(CircuitSymbol.self, from: Data(json.utf8))
+        XCTAssertEqual(s.strokes.count, 1)
+        XCTAssertTrue(s.texts.isEmpty)
+        let again = try JSONDecoder().decode(CircuitSymbol.self, from: JSONEncoder().encode(
+            CircuitSymbol(strokes: s.strokes, texts: [.init(text: "A", center: .zero, size: 10)], pins: s.pins)))
+        XCTAssertEqual(again.texts.map(\.text), ["A"], "存檔再讀回來字還在")
+    }
+
+    func testTextOnThePageFollowsRotationButStaysUpright() {
+        var c = CircuitComponent(part: .customSymbol, position: CGPoint(x: 100, y: 100))
+        c.symbol = CircuitSymbol(strokes: [.init(points: [CGPoint(x: -30, y: 0), CGPoint(x: 30, y: 0)])],
+                                 texts: [.init(text: "+", center: CGPoint(x: 20, y: 0), size: 12)],
+                                 pins: [CGPoint(x: -30, y: 0)])
+        XCTAssertEqual(CircuitRenderer.symbolTexts(c).first?.center, CGPoint(x: 120, y: 100))
+        c.rotation = 90
+        let p = CircuitRenderer.symbolTexts(c).first?.center ?? .zero
+        XCTAssertEqual(p.x, 100, accuracy: 0.01, "轉 90 度：字的位置跟著轉")
+        XCTAssertEqual(abs(p.y - 100), 20, accuracy: 0.01)
+        let svg = CircuitRenderer.svg(CircuitData(components: [c]))
+        XCTAssertTrue(svg.contains(">+</text>"), "匯出 SVG 也有字")
+    }
+
+    func testJSONCarriesTexts() throws {
+        let file = try CircuitSymbolJSON.parse(#"{"strokes":[{"points":[[-30,0],[30,0]]}],"texts":[{"text":" A ","center":[0,-12]},{"text":"x","center":[0,0],"size":999},{"text":"","center":[5,5]}],"pins":[[-30,0]]}"#)
+        XCTAssertEqual(file.symbol.texts.map(\.text), ["A", "x"], "空白的字不收")
+        XCTAssertEqual(file.symbol.texts[0].size, CircuitSymbol.Label.defaultSize, "沒寫大小用預設")
+        XCTAssertEqual(file.symbol.texts[1].size, CircuitSymbol.Label.sizeRange.upperBound, "太大的字縮回範圍內")
+        XCTAssertThrowsError(try CircuitSymbolJSON.parse(#"{"strokes":[{"points":[[0,0],[10,0]]}],"texts":[{"text":"A","center":[0]}],"pins":[[0,0]]}"#))
+        let back = try CircuitSymbolJSON.parse(CircuitSymbolJSON.export(file.symbol, name: "表"))
+        XCTAssertEqual(back.symbol, file.symbol, "拷貝出去再貼回來字還在")
+    }
+
+    /// 給 AI 的說明裡每個範例都要能直接貼上；有一個示範文字
+    func testEveryAIPromptExampleImports() throws {
+        let prompt = CircuitSymbolJSON.aiPrompt
+        XCTAssertTrue(prompt.contains("\"texts\""), "說明有寫文字方塊的格式")
+        var rest = prompt[...]
+        var names: [String] = []
+        var withText = 0
+        while let start = rest.range(of: "```json\n") {
+            let end = try XCTUnwrap(rest.range(of: "```", range: start.upperBound..<rest.endIndex))
+            let file = try CircuitSymbolJSON.parse(String(rest[start.upperBound..<end.lowerBound]))
+            names.append(file.name ?? "")
+            if !file.symbol.texts.isEmpty { withText += 1 }
+            rest = rest[end.upperBound...]
+        }
+        XCTAssertEqual(names, ["電解電容", "電阻"])
+        XCTAssertEqual(withText, 1)
+    }
+
+    func testTheTextToolInTheEditor() throws {
+        let window = try TestWindow.make()
+        defer { window.isHidden = true }
+        let vc = CircuitSymbolEditorViewController(name: "", symbol: nil) { _, _ in }
+        window.rootViewController = vc
+        window.makeKeyAndVisible()
+        vc.loadViewIfNeeded()
+        vc.setTool(.text)
+        XCTAssertTrue(vc.tapGesture.isEnabled)
+        XCTAssertTrue(vc.panGesture.isEnabled, "文字用點一下新增、拖曳移動")
+        vc.handleTap(at: CGPoint(x: 10, y: 10))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+        let alert = try XCTUnwrap(vc.presentedViewController as? UIAlertController, "點一下輸入字")
+        XCTAssertEqual(alert.textFields?.count, 1)
+        XCTAssertEqual(alert.actions.filter { $0.style == .default }.count, CircuitSymbolEditorViewController.textSizes.count, "選大小")
+        alert.dismiss(animated: false)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+
+        vc.commitText("A", size: 16, editing: nil, at: CGPoint(x: 10, y: 10))
+        XCTAssertEqual(vc.draft.symbol.texts.map(\.text), ["A"])
+        XCTAssertEqual(vc.canvas.drawnTexts.map(\.text), ["A"], "畫布畫出字")
+        vc.handlePan(.began, at: CGPoint(x: 10, y: 10))
+        vc.handlePan(.changed, at: CGPoint(x: 30, y: 10))
+        vc.handlePan(.ended, at: CGPoint(x: 40, y: 20))
+        XCTAssertEqual(vc.draft.symbol.texts.first?.center, CGPoint(x: 40, y: 20), "拖曳移動")
+        vc.handleTap(at: CGPoint(x: 40, y: 20))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+        let edit = try XCTUnwrap(vc.presentedViewController as? UIAlertController)
+        XCTAssertEqual(edit.textFields?.first?.text, "A", "點已經有的字：修改")
+        XCTAssertTrue(edit.actions.contains { $0.style == .destructive }, "可以刪除")
+        edit.dismiss(animated: false)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+    }
+}

@@ -14,7 +14,14 @@ enum CircuitSymbolJSON {
         var name: String?
         var strokes: [Line]?
         var circles: [Circle]?
+        var texts: [Text]?
         var pins: [[Double]]?
+    }
+
+    struct Text: Codable {
+        var text: String
+        var center: [Double]
+        var size: Double?
     }
 
     struct Line: Codable {
@@ -92,13 +99,24 @@ enum CircuitSymbolJSON {
         }
         guard !strokes.isEmpty else { throw ParseError.noLines }
 
+        var texts: [CircuitSymbol.Label] = []
+        for t in file.texts ?? [] {
+            let s = t.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let center = try point(t.center)
+            guard !s.isEmpty else { continue }
+            let raw = t.size.map { CGFloat($0) } ?? CircuitSymbol.Label.defaultSize
+            let size = raw.isFinite ? raw : CircuitSymbol.Label.defaultSize
+            texts.append(.init(text: s, center: center,
+                               size: min(max(size, CircuitSymbol.Label.sizeRange.lowerBound), CircuitSymbol.Label.sizeRange.upperBound)))
+        }
+
         var pins: [CGPoint] = []
         for a in file.pins ?? [] {
             let q = CircuitData.snap(try point(a))
             if !pins.contains(q) { pins.append(q) }
         }
         guard !pins.isEmpty else { throw ParseError.noPins }
-        return (file.name, CircuitSymbol(strokes: strokes, pins: pins))
+        return (file.name, CircuitSymbol(strokes: strokes, texts: texts, pins: pins))
     }
 
     static func export(_ symbol: CircuitSymbol, name: String) -> String {
@@ -106,7 +124,9 @@ enum CircuitSymbolJSON {
         let t = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let file = File(format: format, version: 1, name: t.isEmpty ? nil : t,
                         strokes: symbol.strokes.map { Line(points: $0.points.map(a), freehand: $0.freehand ? true : nil) },
-                        circles: nil, pins: symbol.pins.map(a))
+                        circles: nil,
+                        texts: symbol.texts.isEmpty ? nil : symbol.texts.map { Text(text: $0.text, center: a($0.center), size: Double($0.size)) },
+                        pins: symbol.pins.map(a))
         let e = JSONEncoder()
         e.outputFormatting = [.withoutEscapingSlashes]
         return String(decoding: (try? e.encode(file)) ?? Data(), as: UTF8.self)
@@ -128,17 +148,37 @@ enum CircuitSymbolJSON {
       "name": "元件名稱",
       "strokes": [ { "points": [[x, y], [x, y]], "freehand": false } ],
       "circles": [ { "center": [x, y], "radius": 10 } ],
+      "texts": [ { "text": "+", "center": [x, y], "size": 12 } ],
       "pins": [[x, y]]
     }
     - strokes：每一條是一條折線，依序把 points 連起來，至少 2 個點。直線、折線的 freehand 寫 false；弧線、波浪這類曲線用夠多的點（大約每 3 點一個）逼近，freehand 寫 true。要封閉的形狀，最後一個點寫回第一個點。
     - circles：完整的圓（例如電壓源、電表、燈泡的外框）；沒有就省略。
+    - texts：符號上的字（文字方塊）。text 是字，center 是字的中心，size 是字級（字高，單位同座標；常用 8 是接腳旁的小字，12 是一般記號，16 是大字），省略就是 12。上下標寫成 R_1、V^2、V_{in}。字永遠是正的（元件旋轉、翻轉時只有位置跟著動），不要讓字壓到線條。沒有就省略。
     - pins：導線接上去的位置，至少一個。接腳只是位置，不要另外畫圓圈。
     - name 可以省略。
 
     ## 怎麼判讀手繪
     - 線條抖、歪的時候，畫成它想表達的乾淨圖形：接近水平或垂直就拉正，看起來等長就等長，對稱的符號就畫成對稱。
-    - 元件名稱、數值、標號（例如 R1、10kΩ）不要畫進符號；符號本身的記號（例如極性的 +、箭頭）才用線條畫。
+    - 符號上寫的字用 texts，不要用線條拼字：極性的 +、−，電表的 A、V，方塊裡的名字（例如 IC、MCU），接腳旁的名字（例如 VCC、GND、IN、OUT）。箭頭、圓圈這類圖形才用線條畫。
+    - 元件名稱、數值、標號（例如 R1、10kΩ）不要寫進符號：放到頁面上可以另外替每個元件取名。
     - 引線從本體伸出去到接腳。圖上沒有標出接腳時，接腳放在每條引線的末端。
+
+    ## 範例：電解電容（極性用文字）
+    ```json
+    {
+      "format": "papernote-circuit-symbol",
+      "version": 1,
+      "name": "電解電容",
+      "strokes": [
+        { "points": [[-30, 0], [-4, 0]], "freehand": false },
+        { "points": [[-4, -12], [-4, 12]], "freehand": false },
+        { "points": [[4, -12], [4, 12]], "freehand": false },
+        { "points": [[4, 0], [30, 0]], "freehand": false }
+      ],
+      "texts": [ { "text": "+", "center": [-14, -10], "size": 12 } ],
+      "pins": [[-30, 0], [30, 0]]
+    }
+    ```
 
     ## 範例：電阻
     ```json

@@ -157,7 +157,7 @@ enum CircuitPart: String, Codable, CaseIterable, Identifiable {
     var hasOutputBubble: Bool { self == .nandGate || self == .norGate || self == .xnorGate || self == .notGate }
 }
 
-/// 自訂元件的符號：線條和接腳（元件座標：中心為原點，接腳在格點上）
+/// 自訂元件的符號：線條、文字和接腳（元件座標：中心為原點，接腳在格點上）
 struct CircuitSymbol: Codable, Equatable {
     struct Stroke: Codable, Equatable {
         var points: [CGPoint]
@@ -165,13 +165,43 @@ struct CircuitSymbol: Codable, Equatable {
         var freehand = false
     }
 
+    /// 符號上的字（極性 +、−，電表的 A、V，方塊上的名字）。位置跟著元件旋轉、翻轉，但字永遠是正的
+    struct Label: Codable, Equatable {
+        var text: String
+        /// 字的中心
+        var center: CGPoint
+        /// 字級（元件座標，格點 10）
+        var size: CGFloat = Label.defaultSize
+
+        static let defaultSize: CGFloat = 12
+        static let sizeRange: ClosedRange<CGFloat> = 4...40
+
+        var bounds: CGRect { CircuitText.bounds(text, center: center, size: size) }
+    }
+
     var strokes: [Stroke] = []
+    var texts: [Label] = []
     var pins: [CGPoint] = []
 
-    /// 包住線條和接腳；太小的話放大一點，才點得到
+    init(strokes: [Stroke] = [], texts: [Label] = [], pins: [CGPoint] = []) {
+        self.strokes = strokes
+        self.texts = texts
+        self.pins = pins
+    }
+
+    /// 舊的元件沒有 texts
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        strokes = try c.decodeIfPresent([Stroke].self, forKey: .strokes) ?? []
+        texts = try c.decodeIfPresent([Label].self, forKey: .texts) ?? []
+        pins = try c.decodeIfPresent([CGPoint].self, forKey: .pins) ?? []
+    }
+
+    /// 包住線條、文字和接腳；太小的話放大一點，才點得到
     var bounds: CGRect {
         var r = CGRect.null
         for p in strokes.flatMap(\.points) + pins { r = r.union(CGRect(origin: p, size: .zero)) }
+        for t in texts { r = r.union(t.bounds) }
         guard !r.isNull else { return CGRect(x: -20, y: -20, width: 40, height: 40) }
         return r.insetBy(dx: r.width < 20 ? (r.width - 20) / 2 : -2, dy: r.height < 20 ? (r.height - 20) / 2 : -2)
     }
@@ -184,6 +214,7 @@ struct CircuitSymbol: Codable, Equatable {
         var out = self
         out.pins = pins.map(moved)
         out.strokes = strokes.map { Stroke(points: $0.points.map(moved), freehand: $0.freehand) }
+        out.texts = texts.map { Label(text: $0.text, center: moved($0.center), size: $0.size) }
         return out
     }
 }

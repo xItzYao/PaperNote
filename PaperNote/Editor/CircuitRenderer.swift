@@ -79,6 +79,18 @@ enum CircuitRenderer {
         fill.fill()
         ctx.restoreGState()
         if labels, let b = CircuitGeometry.blockLayout(c) { drawBlockLabels(c, b, color: color) }
+        for item in symbolTexts(c) {
+            let str = nameString(item.text, size: item.size, color: color)
+            let sz = str.size()
+            str.draw(at: CGPoint(x: item.center.x - sz.width / 2, y: item.center.y - sz.height / 2))
+        }
+    }
+
+    /// 自訂元件上的字（電路圖座標的中心點）：位置跟著旋轉、翻轉，字永遠是正的
+    static func symbolTexts(_ c: CircuitComponent) -> [CircuitSymbol.Label] {
+        guard c.part == .customSymbol, let texts = c.symbol?.texts, !texts.isEmpty else { return [] }
+        let t = CircuitGeometry.transform(c)
+        return texts.filter { !$0.text.isEmpty }.map { CircuitSymbol.Label(text: $0.text, center: $0.center.applying(t), size: $0.size) }
     }
 
     /// 方塊元件上的一段字（電路圖座標的中心點）；inverted＝反相，字上面畫一條橫線
@@ -685,6 +697,7 @@ extension CircuitRenderer {
             if let b = CircuitGeometry.blockLayout(c) {
                 for item in blockTexts(c, b) { text(xmlEscaped(item.text), at: item.center, size: item.size, weight: item.bold ? "600" : "400", overline: item.inverted) }
             }
+            for item in symbolTexts(c) { text(nameMarkup(item.text, size: item.size), at: item.center, size: item.size, weight: "500") }
         }
         stroke(wirePath(d))
         for p in d.junctions() {
