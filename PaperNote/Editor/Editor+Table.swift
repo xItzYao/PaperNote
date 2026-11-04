@@ -270,9 +270,6 @@ extension NotebookViewController {
         if let g = t.repeatGroup, !g.before, isOriginalBlock(g, sel) {
             if g.axis == .rows { p.y = t.rowY(g.span.upperBound) } else { p.x = t.colX(g.span.upperBound) }
         }
-        // 和表格右下角的縮放控制點錯開
-        let z = canvas.zoomScale
-        if abs(p.x - t.size.width) < 1, abs(p.y - t.size.height) < 1 { p.x -= 14 / z; p.y -= 14 / z }
         return CGPoint(x: s.docRect.minX + p.x, y: s.docRect.minY + p.y)
     }
 

@@ -622,8 +622,16 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         let e = pages[pi].elements[ei]
         let r = docFrame(of: e, pageIndex: pi)
         // 電路圖不能拉角落縮放（元件、導線照格點排），不顯示縮放把手
-        overlay.showSelection(r, locked: e.locked, handle: e.locked || e.isCircuit ? nil : CGPoint(x: r.maxX, y: r.maxY),
+        let handle = e.isTable ? tableScaleHandlePoint(r) : CGPoint(x: r.maxX, y: r.maxY)
+        overlay.showSelection(r, locked: e.locked, handle: e.locked || e.isCircuit ? nil : handle,
                               edges: e.isTextBox && !e.locked ? Self.edgeHandlePoints(r) : [])
+    }
+
+    /// 表格的縮放把手：右下角外面斜下方。角落本身是最後一條直線、橫線的圓點（在下方、右邊）和填滿點，
+    /// 放在角落上會互相搶，很難點到
+    func tableScaleHandlePoint(_ r: CGRect) -> CGPoint {
+        let off = 32 / canvas.zoomScale
+        return CGPoint(x: r.maxX + off, y: r.maxY + off)
     }
 
     /// 文字框的字級（工具列的放大縮小、右下角的等比例縮放）
@@ -641,14 +649,15 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         let r = docFrame(of: e, pageIndex: pi)
         let tol = 16 / canvas.zoomScale
         if case let .table(t) = e.content, t.size.width > 0, t.size.height > 0 {
+            // 縮放把手和其他控制點分開放，按在它附近就是縮放
+            if !e.locked, p.distance(to: tableScaleHandlePoint(r)) < tol * 1.5 { return (ref, .resize) }
             // 上方、左邊的標頭：拖兩個標頭的分界＝調整欄寬（列高），拖標頭本身＝選好幾欄（列）
             if let line = tableHeaderBoundary(at: p) { return (ref, line) }
-            // 表格外側的格線圓點（比右下角的縮放點優先）
+            // 表格外側的格線圓點
             if let grip = tableGripTarget(at: p) { return (ref, grip) }
             if let h = tableHeaderHit(at: p) { return (ref, h.columns ? .colHeaders(h.index) : .rowHeaders(h.index)) }
             if !e.locked, let f = tableFillHandlePoint(), p.distance(to: f) < tol * 1.3 { return (ref, .fill) }
             if !e.locked {
-                if p.distance(to: CGPoint(x: r.maxX, y: r.maxY)) < tol * 1.5 { return (ref, .resize) }
                 if let m = tableMoveHandlePoint(), p.distance(to: m) < tol * 1.4 { return (ref, .move) }
                 // 外框邊緣也能拖動整個表格
                 let outer = r.insetBy(dx: -tol, dy: -tol), innerArea = r.insetBy(dx: tol * 0.6, dy: tol * 0.6)
@@ -781,7 +790,13 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
                 t.fontSize = (t.fontSize * k * 2).rounded() / 2
                 e.content = .text(t)
             case var .table(t):
-                t.scale(to: CGSize(width: min(o.width + dx, room.width), height: min(o.height + dy, room.height)))
+                // 整個表格（格子和字）等比例縮放：照拖的方向投影到對角線上，和文字框一樣
+                let diag = o.width * o.width + o.height * o.height
+                var k = 1 + (dx * o.width + dy * o.height) / max(diag, 1)
+                k = max(k, Self.textSizeRange.lowerBound / t.fontSize)
+                k = min(k, room.width / max(o.width, 1), room.height / max(o.height, 1), Self.textSizeRange.upperBound / t.fontSize)
+                t.scale(to: CGSize(width: o.width * k, height: o.height * k))
+                t.fontSize = (t.fontSize * k * 2).rounded() / 2
                 e.content = .table(t)
                 e.frame.size = t.size
             case .circuit:

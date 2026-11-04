@@ -316,6 +316,50 @@ final class TableEditorUXTests: XCTestCase {
         XCTAssertEqual(editor.tableCellSel, CellRange((0, 0), (2, 2)), "從 A 拖到 C＝選 A–C 三欄")
     }
 
+    /// 回報的問題：表格右下角的縮放把手很難點到，和角落的格線圓點、填滿點疊在一起，很難整個表格等比例縮放
+    func testTheScaleHandleIsApartFromTheCornerHandles() throws {
+        let r = try XCTUnwrap(editor.selectedTable()).docRect
+        let h = editor.tableScaleHandlePoint(r)
+        XCTAssertGreaterThan(h.x, r.maxX, "把手在角落外面")
+        XCTAssertGreaterThan(h.y, r.maxY)
+        let image = editor.overlay.resizeHandleImage
+        XCTAssertFalse(image.isHidden)
+        XCTAssertEqual(image.frame.midX, h.x, accuracy: 0.5, "畫出來的把手就在這裡")
+        XCTAssertEqual(image.frame.midY, h.y, accuracy: 0.5)
+
+        // 選右下角的格子：填滿點在角落上
+        let corner = CGPoint(x: r.maxX - 10, y: r.maxY - 10)
+        editor.updateCellSelection(from: corner, to: corner)
+        let fill = try XCTUnwrap(editor.tableFillHandlePoint())
+        let grips = try XCTUnwrap(editor.selectedTableHandles()).handles
+        let lastCol = try XCTUnwrap(grips.colGrips.last), lastRow = try XCTUnwrap(grips.rowGrips.last)
+        guard case .resize? = editor.dragTarget(at: h)?.1 else { return XCTFail("按把手是縮放") }
+        guard case .fill? = editor.dragTarget(at: fill)?.1 else { return XCTFail("按填滿點還是填滿") }
+        guard case .colLine(3)? = editor.dragTarget(at: lastCol.point)?.1 else { return XCTFail("最後一條直線的圓點還是調欄寬") }
+        guard case .rowLine(3)? = editor.dragTarget(at: lastRow.point)?.1 else { return XCTFail("最後一條橫線的圓點還是調列高") }
+        // 稍微偏一點也按得到（和每個圓點都隔開）
+        let z = editor.canvas.zoomScale
+        for d in [CGPoint(x: -10, y: -10), CGPoint(x: 12, y: 4), CGPoint(x: 4, y: 12)] {
+            guard case .resize? = editor.dragTarget(at: CGPoint(x: h.x + d.x / z, y: h.y + d.y / z))?.1 else { return XCTFail("偏 \(d) 也是縮放") }
+        }
+
+        // 拉把手：整個表格（格子和字）等比例縮放
+        let before = table
+        let g = FakePan(target: nil, action: nil)
+        let end = CGPoint(x: h.x - 60, y: h.y - 20)
+        for (i, p) in [h, CGPoint(x: h.x - 30, y: h.y - 10), end].enumerated() {
+            g.fake = i == 0 ? .began : (i == 2 ? .ended : .changed)
+            editor.handleElementPan(g, p)
+        }
+        let k = 1 + (-60 * 300 - 20 * 120) / CGFloat(300 * 300 + 120 * 120)
+        XCTAssertEqual(table.size.width, 300 * k, accuracy: 0.5, "照拖的方向等比例縮小")
+        XCTAssertEqual(table.size.width / table.size.height, 300 / 120, accuracy: 0.01, "寬高比例不變")
+        XCTAssertEqual(table.fontSize, 13, "字也跟著縮小（16 × \(k)）")
+        editor.undoTapped()
+        XCTAssertEqual(table.size, before.size, "復原")
+        XCTAssertEqual(table.fontSize, before.fontSize)
+    }
+
     // MARK: 工具列、長按
 
     private func ribbonButtons(_ views: [UIView]? = nil) -> [UIButton] {
@@ -742,8 +786,8 @@ final class TableEditorUXTests: XCTestCase {
         XCTAssertEqual(editor.pages[0].ink.first { $0.id == inCell.id }?.points[0].point, inCell.points[0].point, "同一次復原：字也回去")
     }
 
-    /// 回報的需求：套索要把整個表格圈起來才選到表格；只圈表格上的字，表格不會被拿走
-    func testLassoTakesTheTableOnlyWhenItIsFullyCircled() {
+    /// 回報的需求：沒鎖的表格，套索圈到一部分就選到（以前要整個圈起來）；鎖起來的表格不會被圈走
+    func testLassoTakesAnUnlockedTableWhenPartlyCircled() {
         let o = origin
         let w = word(at: CGPoint(x: o.x + 120, y: o.y + 60))
         editor.updatePage(0) { $0.ink = [w] }
@@ -759,9 +803,15 @@ final class TableEditorUXTests: XCTestCase {
         }
         lasso(CGRect(x: o.x + 110, y: o.y + 45, width: 80, height: 30))
         XCTAssertEqual(editor.lassoSel?.ink.count, 1, "圈到表格上的字")
-        XCTAssertEqual(editor.lassoSel?.elements.count, 0, "只圈到表格的一部分：不選表格")
+        XCTAssertEqual(editor.lassoSel?.elements, [ref], "只圈到表格的一部分：表格也選到")
         editor.clearLassoSelection()
-        lasso(CGRect(x: o.x - 20, y: o.y - 20, width: 340, height: 160))
-        XCTAssertEqual(editor.lassoSel?.elements, [ref], "整個表格圈起來才選到")
+        lasso(CGRect(x: o.x + 250, y: o.y + 90, width: 120, height: 80))
+        XCTAssertEqual(editor.lassoSel?.elements, [ref], "只圈到角落也算")
+        editor.clearLassoSelection()
+
+        editor.toggleLock(ref)
+        lasso(CGRect(x: o.x + 110, y: o.y + 45, width: 80, height: 30))
+        XCTAssertEqual(editor.lassoSel?.ink.count, 1, "鎖起來：還是圈得到上面的字")
+        XCTAssertEqual(editor.lassoSel?.elements.count ?? 0, 0, "鎖起來的表格不會被圈走")
     }
 }

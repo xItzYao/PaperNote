@@ -212,10 +212,10 @@ extension NotebookViewController {
                 ink.append(InkRef(pageID: page.id, id: s.id))
                 bounds = bounds.union(InkGeometry.bounds(of: s).offsetBy(dx: io.x, dy: io.y))
             }
+            // 圈到一部分就算（表格、圖片、電路圖都一樣）；不想被圈到就鎖起來
             for e in page.elements where !e.locked {
                 let f = docFrame(of: e, pageIndex: pi)
-                // 表格要整個圈到才算：圈上面的字時，不會連表格一起拿走（電路圖和圖片一樣，不想被圈到就鎖起來）
-                if e.isTable ? LassoGeometry.encloses(f, path: path) : touches(f) {
+                if touches(f) {
                     elements.append(ElementRef(pageID: page.id, elementID: e.id))
                     bounds = bounds.union(f)
                 }
