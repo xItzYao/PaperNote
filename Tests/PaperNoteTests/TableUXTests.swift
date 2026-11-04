@@ -344,7 +344,7 @@ final class TableEditorUXTests: XCTestCase {
         }
 
         // 拉把手：整個表格（格子和字）等比例縮放
-        let before = table
+        let before = try XCTUnwrap(editor.selectedTable()).table
         let g = FakePan(target: nil, action: nil)
         let end = CGPoint(x: h.x - 60, y: h.y - 20)
         for (i, p) in [h, CGPoint(x: h.x - 30, y: h.y - 10), end].enumerated() {
@@ -352,12 +352,14 @@ final class TableEditorUXTests: XCTestCase {
             editor.handleElementPan(g, p)
         }
         let k = 1 + (-60 * 300 - 20 * 120) / CGFloat(300 * 300 + 120 * 120)
-        XCTAssertEqual(table.size.width, 300 * k, accuracy: 0.5, "照拖的方向等比例縮小")
-        XCTAssertEqual(table.size.width / table.size.height, 300 / 120, accuracy: 0.01, "寬高比例不變")
-        XCTAssertEqual(table.fontSize, 13, "字也跟著縮小（16 × \(k)）")
+        let after = try XCTUnwrap(editor.selectedTable(), "拉完還選著表格").table
+        XCTAssertEqual(after.size.width, 300 * k, accuracy: 0.5, "照拖的方向等比例縮小（原本 \(before.size)）")
+        XCTAssertEqual(after.size.width / after.size.height, 300 / 120, accuracy: 0.01, "寬高比例不變")
+        XCTAssertEqual(after.fontSize, 13, "字也跟著縮小（16 × \(k)）")
         editor.undoTapped()
-        XCTAssertEqual(table.size, before.size, "復原")
-        XCTAssertEqual(table.fontSize, before.fontSize)
+        let undone = try XCTUnwrap(editor.selectedTable(), "復原的是縮放，表格還在").table
+        XCTAssertEqual(undone.size, before.size, "復原")
+        XCTAssertEqual(undone.fontSize, before.fontSize)
     }
 
     // MARK: 工具列、長按
