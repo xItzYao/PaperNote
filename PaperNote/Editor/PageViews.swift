@@ -207,6 +207,8 @@ final class OverlayView: UIView {
     let circuitHandleLayer = CAShapeLayer()
     let lassoSelLayer = CAShapeLayer()
     let lassoPreviewLayer = CALayer()
+    /// 只圈到筆跡時，選取框右下角的縮放把手
+    let lassoResizeHandle = CALayer()
     let cellSelLayer = CAShapeLayer()
     let moveHandleLayer = CAShapeLayer()
     let moveHandleMarks = CAShapeLayer()
@@ -345,6 +347,7 @@ final class OverlayView: UIView {
         layer.addSublayer(moveHandleMarks)
         for (l, symbol, color) in [(moveHandleImage, "arrow.up.and.down.and.arrow.left.and.right", UIColor.systemTeal),
                                    (resizeHandleImage, "arrow.up.left.and.arrow.down.right", UIColor.systemTeal),
+                                   (lassoResizeHandle, "arrow.up.left.and.arrow.down.right", UIColor.systemTeal),
                                    (circuitRotateHandle, "rotate.right", UIColor.systemBlue),
                                    (circuitFlipHandle, "arrow.left.and.right", UIColor.systemBlue),
                                    (circuitCopyHandle, "plus.square.on.square", UIColor.systemBlue),
@@ -359,6 +362,8 @@ final class OverlayView: UIView {
             l.isHidden = true
             layer.addSublayer(l)
         }
+        // 套索的選取框之後才加：把手要在它上面
+        lassoResizeHandle.zPosition = 1
 
         selectionLayer.fillColor = UIColor.clear.cgColor
         selectionLayer.lineDashPattern = [6, 4]
@@ -520,10 +525,15 @@ final class OverlayView: UIView {
         CATransaction.commit()
     }
 
-    func showLassoSelection(_ rect: CGRect?) {
+    func showLassoSelection(_ rect: CGRect?, handle: CGPoint? = nil) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         lassoSelLayer.path = rect.map { UIBezierPath(roundedRect: $0.insetBy(dx: -6 * lineScale, dy: -6 * lineScale), cornerRadius: 6 * lineScale).cgPath }
+        if let h = handle {
+            let s = Self.handleSize * lineScale
+            lassoResizeHandle.frame = CGRect(x: h.x - s / 2, y: h.y - s / 2, width: s, height: s)
+        }
+        lassoResizeHandle.isHidden = rect == nil || handle == nil
         CATransaction.commit()
     }
 

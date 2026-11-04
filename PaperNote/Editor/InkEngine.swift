@@ -166,6 +166,14 @@ enum InkGeometry {
         return out
     }
 
+    /// 移動、等比例縮放（線也跟著變粗變細）
+    static func applying(_ s: InkStroke, _ t: CGAffineTransform) -> InkStroke {
+        let k = abs(t.a * t.d - t.b * t.c).squareRoot()
+        var out = s
+        out.points = s.points.map { InkPoint($0.point.applying(t), width: $0.width * k) }
+        return out
+    }
+
     /// 點到線段的距離
     static func distance(_ p: CGPoint, _ a: CGPoint, _ b: CGPoint) -> CGFloat {
         let dx = b.x - a.x, dy = b.y - a.y

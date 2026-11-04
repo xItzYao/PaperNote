@@ -266,6 +266,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var lassoPoints: [CGPoint] = []
     var lassoSel: LassoSelection?
     var lassoMoveStart: CGPoint?
+    /// 拖的是右下角的縮放把手（不是移動）
+    var lassoScaling = false
     var lassoMoveOriginal: PKDrawing?
     var lassoMoveStrokes: [PKStroke] = []
     var lassoMoveElementFrames: [ElementRef: CGRect] = [:]
@@ -462,12 +464,14 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             updatePageIndicator()
         } else if abs(w - lastLayoutWidth) > 1 {
             let relative = canvas.zoomScale / fitZoom
-            let anchor = currentPageIndex
+            // 畫面左上角對到的文件位置不變：App 切到背景時系統會用另一個方向排版截圖，
+            // 切回來要回到原本看的地方，不是那一頁的最上面
+            let anchor = visibleDocRect().origin
             lastLayoutWidth = w
             updateZoomLimits(resetZoom: false)
             canvas.zoomScale = min(max(fitZoom * relative, canvas.minimumZoomScale), canvas.maximumZoomScale)
             updateZoomLayout()
-            scrollToPage(anchor, animated: false)
+            setVisibleDocOrigin(anchor)
             pinOverlay.clampAll()
         }
     }

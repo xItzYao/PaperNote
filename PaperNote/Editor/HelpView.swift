@@ -13,9 +13,9 @@ struct HelpView: View {
         Item(symbol: "pencil.tip", title: "筆", detail: "第二列切換常用筆刷、粗細、虛線；原子筆用自製筆刷（照筆尖原始軌跡、不做圓滑），鋼筆、毛筆、鉛筆、蠟筆、水彩和 PencilKit 一樣。管理常用筆刷裡可以把喜歡的顏色加進色票。筆尖停住約 0.5 秒會變直線或修正成圖形。"),
         Item(symbol: "highlighter", title: "螢光筆", detail: "畫在 PDF 文字上會自動對齊文字。"),
         Item(symbol: "eraser", title: "橡皮擦", detail: "Pencil 筆身點兩下切換橡皮擦。表格、圖片不會被擦掉。"),
-        Item(symbol: "lasso", title: "套索", detail: "圈起來可以移動、改顏色、拷貝、刪除。表格要整個圈到才會選到；圖片、電路圖圈到一部分就算，不想被圈到就點鎖頭鎖起來。"),
+        Item(symbol: "lasso", title: "套索", detail: "圈起來可以移動、改顏色、拷貝、刪除；只圈到筆跡時拉右下角可以等比例縮放。表格要整個圈到才會選到；圖片、電路圖圈到一部分就算，不想被圈到就點鎖頭鎖起來。"),
         Item(symbol: "camera.viewfinder", title: "截圖", detail: "框選範圍，可以釘在畫面上、拷貝、翻譯、存到照片。"),
-        Item(symbol: "hand.point.up.left", title: "選取", detail: "點物件選取，拖曳移動、拉右下角縮放；左上角的鎖頭固定位置。"),
+        Item(symbol: "hand.point.up.left", title: "選取", detail: "點物件或筆跡選取，拖曳移動、拉右下角縮放（筆跡是等比例）；再點一下打開選單。左上角的鎖頭固定物件的位置。"),
         Item(symbol: "character.cursor.ibeam", title: "PDF 文字", detail: "選取 PDF 的文字來翻譯、拷貝、查詢、螢光標示。"),
     ]
 

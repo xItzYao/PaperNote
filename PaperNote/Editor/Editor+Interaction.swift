@@ -147,7 +147,8 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
                 return true
             case .select, .image:
                 // 用手指剛碰到的位置判斷：拖曳要移動一小段才開始，那時手指已經離開格線了
-                return editingTextView == nil && dragTarget(at: panTouchDownPoint(g)) != nil
+                let q = panTouchDownPoint(g)
+                return editingTextView == nil && (dragTarget(at: q) != nil || (tool == .select && lassoGrab(at: q) != nil))
             case .pageResize:
                 return pageHandle(at: g.location(in: pagesContainer)) != nil
             case .lasso:
@@ -237,8 +238,8 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         }
         // 截圖、PDF 文字、手繪表格、套索：沒開「用手指書寫」時只接受 Pencil，手指只用來捲動
         if g === toolPan, tool.drawsWithPan {
-            // 套索：手指按在圈選範圍內可以直接拖著移動（範圍外照樣捲動頁面）
-            if tool == .lasso, touch.type == .direct, lassoSelectionHit(touch.location(in: pagesContainer)) { return true }
+            // 套索：手指按在圈選範圍內（或縮放把手上）可以直接拖著移動、縮放（範圍外照樣捲動頁面）
+            if tool == .lasso, touch.type == .direct, lassoGrab(at: touch.location(in: pagesContainer)) != nil { return true }
             return touch.type == .pencil || settings.fingerDrawing
         }
         // 套索模式下 Pencil 或手指點鎖頭都可以
@@ -328,6 +329,9 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         switch tool {
         case .capture: handleCapturePan(g, p)
         case .textSelect: handleTextPan(g, g.state == .began ? panTouchDownPoint(g) : p)
+        // 選取工具選起的筆跡：和套索圈到的一樣拖曳移動、縮放
+        case .select where lassoMoveStart != nil || (g.state == .began && lassoGrab(at: panTouchDownPoint(g)) != nil):
+            handleLassoPan(g, g.state == .began ? panTouchDownPoint(g) : p)
         case .select, .image: handleElementPan(g, g.state == .began ? panTouchDownPoint(g) : p)
         case .pageResize: handlePageResizePan(g, p)
         case .lasso: handleLassoPan(g, g.state == .began ? panTouchDownPoint(g) : p)
@@ -374,6 +378,17 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
                 toggleLock(ref)
                 return
             }
+            // 點在選起來的筆跡上：打開選單（和套索一樣）
+            if lassoSelectionHit(p) {
+                presentLassoMenu()
+                return
+            }
+            // 點在筆跡上就選筆跡（選起來的物件、表格優先，才能繼續操作它）
+            if hitElement(at: p).map({ $0 != selected }) ?? true, let ink = inkSelection(at: p) {
+                selectInk(ink)
+                return
+            }
+            clearLassoSelection()
             if let hit = hitElement(at: p) {
                 if case let (pi, ei)? = locate(hit), pages[pi].elements[ei].isTable {
                     // 點在選起來的格子上：打開選單（和套索一樣）；點別格：改選那一格。打字是點兩下
@@ -500,11 +515,19 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             presentTableHeaderMenu(h, at: p)
             return
         }
-        if let hit = hitElement(at: p) {
+        let hit = hitElement(at: p)
+        if tool == .select, lassoSelectionHit(p) {
+            presentLassoMenu()
+        } else if tool == .select, hit.map({ $0 != selected }) ?? true, let ink = inkSelection(at: p) {
+            // 長按筆跡：選起來並打開選單（和點一下一樣，選起來的物件優先）
+            selectInk(ink)
+            presentLassoMenu()
+        } else if let hit {
             select(hit)
             presentMenu(elementMenu(hit, at: p), atDocPoint: p)
         } else {
             select(nil)
+            clearLassoSelection()
             presentMenu(emptyAreaMenu(at: p), atDocPoint: p)
         }
     }
@@ -570,6 +593,8 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
 
     func select(_ ref: ElementRef?) {
         let changed = ref != selected
+        // 選物件就不再選著筆跡（選取工具兩種只會選一種）
+        if ref != nil { clearLassoSelection() }
         selected = ref
         if changed { tableCellSel = nil }
         updateSelectionChrome()
@@ -582,6 +607,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             updateTableCellChrome()
             updateLockChrome()
             updateCircuitChrome()
+            updateLassoChrome()
         }
         guard let ref = selected, case let (pi, ei)? = locate(ref) else {
             overlay.showSelection(nil, locked: false, handle: nil)

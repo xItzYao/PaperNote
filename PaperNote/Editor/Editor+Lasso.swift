@@ -24,6 +24,15 @@ enum LassoGeometry {
         return false
     }
 
+    /// 點 p 落在筆跡上（離線 radius 以內，加上線寬一半）
+    static func touches(_ stroke: PKStroke, at p: CGPoint, radius: CGFloat) -> Bool {
+        guard stroke.renderBounds.insetBy(dx: -radius, dy: -radius).contains(p) else { return false }
+        let k = abs(stroke.transform.a * stroke.transform.d - stroke.transform.b * stroke.transform.c).squareRoot()
+        let pts = stroke.path.interpolatedPoints(by: .distance(2)).map { ($0.location.applying(stroke.transform), $0.size.width * k / 2) }
+        if pts.count == 1 { return pts[0].0.distance(to: p) <= radius + pts[0].1 }
+        return zip(pts, pts.dropFirst()).contains { a, b in InkGeometry.distance(p, a.0, b.0) <= radius + max(a.1, b.1) }
+    }
+
     /// 矩形整個在套索裡面。邊緣留一點寬容：手畫的圈稍微切到角落也算
     static func encloses(_ r: CGRect, path: UIBezierPath) -> Bool {
         let inset = min(12, r.width * 0.05, r.height * 0.05)
@@ -49,6 +58,8 @@ struct LassoSelection {
     var isEmpty: Bool { strokeIndices.isEmpty && elements.isEmpty && highlights.isEmpty && ink.isEmpty }
     /// 圈到可以改顏色的筆跡
     var hasInk: Bool { !strokeIndices.isEmpty || !ink.isEmpty }
+    /// 只有筆跡：可以拖右下角等比例縮放（物件、螢光標示有自己的大小，不跟著縮放）
+    var canScale: Bool { hasInk && elements.isEmpty && highlights.isEmpty }
 }
 
 /// 套索拷貝的內容（文件座標）
@@ -68,8 +79,8 @@ extension NotebookViewController {
     func handleLassoPan(_ g: UIPanGestureRecognizer, _ p: CGPoint) {
         switch g.state {
         case .began:
-            if lassoSelectionHit(p) {
-                beginLassoMove(at: p)
+            if let grab = lassoGrab(at: p) {
+                beginLassoMove(at: p, scaling: grab == .scale)
             } else {
                 clearLassoSelection()
                 lassoPoints = [p]
@@ -102,12 +113,63 @@ extension NotebookViewController {
         return sel.bounds.insetBy(dx: -m, dy: -m).contains(p)
     }
 
+    enum LassoGrab { case move, scale }
+
+    /// 按在選取範圍上是移動，按在右下角的把手上是縮放
+    func lassoGrab(at p: CGPoint) -> LassoGrab? {
+        guard let sel = lassoSel else { return nil }
+        if let h = lassoScaleHandle(sel.bounds), h.distance(to: p) < 22 / canvas.zoomScale { return .scale }
+        return lassoSelectionHit(p) ? .move : nil
+    }
+
+    /// 縮放把手的位置（選取框右下角）；不能縮放時 nil
+    func lassoScaleHandle(_ bounds: CGRect) -> CGPoint? {
+        guard lassoSel?.canScale == true else { return nil }
+        let m = 6 / canvas.zoomScale
+        return CGPoint(x: bounds.maxX + m, y: bounds.maxY + m)
+    }
+
+    /// 選取框和縮放把手（拖曳中由拖曳自己更新）
+    func updateLassoChrome() {
+        guard lassoMoveStart == nil else { return }
+        overlay.showLassoSelection(lassoSel?.bounds, handle: lassoSel.flatMap { lassoScaleHandle($0.bounds) })
+    }
+
     func clearLassoSelection() {
         // 剪下、刪除之後選單跟著關掉
         if lassoSel != nil { editMenu.dismissMenu() }
         lassoSel = nil
         overlay.showLassoSelection(nil)
         overlay.showLassoPreview(nil, frame: .zero)
+    }
+
+    /// 選取工具點到的筆跡：最上面那一筆（虛線是整條）；沒點到筆跡回傳 nil
+    func inkSelection(at p: CGPoint) -> LassoSelection? {
+        let r = 8 / canvas.zoomScale
+        // 自製筆刷的筆跡畫在 PencilKit 上面，先看它
+        if let pi = pageIndex(containing: p) {
+            let page = pages[pi]
+            let o = contentOrigin(pi)
+            if let hit = page.ink.last(where: { InkGeometry.hits($0, at: p - o, radius: r) }) {
+                let picked = page.ink.filter { $0.id == hit.id || (hit.dashGroup != nil && $0.dashGroup == hit.dashGroup) }
+                let bounds = picked.reduce(CGRect.null) { $0.union(InkGeometry.bounds(of: $1).offsetBy(dx: o.x, dy: o.y)) }
+                return LassoSelection(strokeIndices: [], elements: [], highlights: [], bounds: bounds,
+                                      ink: picked.map { InkRef(pageID: page.id, id: $0.id) })
+            }
+        }
+        let strokes = canvas.drawing.strokes
+        guard let hit = strokes.indices.last(where: { LassoGeometry.touches(strokes[$0], at: p, radius: r) }) else { return nil }
+        let picked = DashedStroke.wholeDashes(in: strokes, picked: [hit])
+        let bounds = picked.reduce(CGRect.null) { $0.union(strokes[$1].renderBounds) }
+        return LassoSelection(strokeIndices: picked, elements: [], highlights: [], bounds: bounds)
+    }
+
+    /// 選取工具：選起這些筆跡（和套索圈到的一樣可以移動、縮放、打開選單）
+    func selectInk(_ sel: LassoSelection) {
+        select(nil)
+        clearLassoSelection()
+        lassoSel = sel
+        updateLassoChrome()
     }
 
     private func finishLassoPath() {
@@ -170,26 +232,27 @@ extension NotebookViewController {
         let sel = LassoSelection(strokeIndices: strokes, elements: elements, highlights: highlights, bounds: bounds, ink: ink)
         guard !sel.isEmpty else { return }
         lassoSel = sel
-        overlay.showLassoSelection(sel.bounds)
+        updateLassoChrome()
         // 不馬上跳選單（會蓋住圈到的東西、沒辦法拖）：點一下選取範圍才打開
         let hintKey = "lasso.tapForMenuHintShown"
         if !UserDefaults.standard.bool(forKey: hintKey) {
             UserDefaults.standard.set(true, forKey: hintKey)
-            showToast("拖曳可以移動；點一下選取範圍打開選單")
+            showToast("拖曳可以移動，只圈到筆跡時拉右下角可以縮放；點一下選取範圍打開選單")
         }
     }
 
-    // MARK: 移動
+    // MARK: 移動、縮放
 
-    private func beginLassoMove(at p: CGPoint) {
+    private func beginLassoMove(at p: CGPoint, scaling: Bool) {
         guard let sel = lassoSel else { return }
         editMenu.dismissMenu()
         lassoMoveStart = p
+        lassoScaling = scaling
         let drawing = canvas.drawing
         lassoMoveOriginal = drawing
         let set = Set(sel.strokeIndices)
         lassoMoveStrokes = sel.strokeIndices.compactMap { drawing.strokes[safe: $0] }
-        // 移動中先把筆跡拿出來，用圖片預覽
+        // 拖曳中先把筆跡拿出來，用圖片預覽
         var rest = drawing
         rest.strokes = drawing.strokes.enumerated().filter { !set.contains($0.offset) }.map(\.element)
         isApplyingDrawing = true
@@ -207,47 +270,68 @@ extension NotebookViewController {
         }
     }
 
+    /// 拖到 p 時圈到的東西要套用的變換（文件座標）：移動不超出頁面；縮放以左上角為基準、等比例，不超出頁面
+    private func lassoDragTransform(to p: CGPoint) -> CGAffineTransform {
+        guard let start = lassoMoveStart, let sel = lassoSel else { return .identity }
+        let b = sel.bounds
+        let v = CGPoint(x: p.x - start.x, y: p.y - start.y)
+        guard lassoScaling else {
+            let d = clampedDelta(moving: b, by: v)
+            return CGAffineTransform(translationX: d.x, y: d.y)
+        }
+        // 把手沿著對角線走：拖曳的距離投影到對角線上
+        let w = max(b.width, 1), h = max(b.height, 1)
+        var k = 1 + (v.x * w + v.y * h) / (w * w + h * h)
+        let c = CGPoint(x: b.midX, y: b.midY)
+        if let f = pageFrames[safe: pageIndex(containing: c) ?? nearestPageIndex(to: c)] {
+            k = min(k, max(1, min((f.maxX - b.minX) / w, (f.maxY - b.minY) / h)))
+        }
+        // 不縮到看不見
+        k = max(k, min(1, 12 / max(w, h)))
+        return CGAffineTransform(translationX: b.minX, y: b.minY).scaledBy(x: k, y: k).translatedBy(x: -b.minX, y: -b.minY)
+    }
+
     private func updateLassoMove(to p: CGPoint) {
-        guard let start = lassoMoveStart, let sel = lassoSel else { return }
-        // 不超出頁面
-        let d = clampedDelta(moving: sel.bounds, by: CGPoint(x: p.x - start.x, y: p.y - start.y))
-        let moved = sel.bounds.offsetBy(dx: d.x, dy: d.y)
-        overlay.showLassoSelection(moved)
-        overlay.moveLassoPreview(to: moved)
+        guard let sel = lassoSel else { return }
+        let t = lassoDragTransform(to: p)
+        let r = sel.bounds.applying(t)
+        overlay.showLassoSelection(r, handle: lassoScaleHandle(r))
+        overlay.moveLassoPreview(to: r)
+        // 圈到物件時只能移動
         for (ref, frame) in lassoMoveElementFrames {
             guard case let (pi, ei)? = locate(ref) else { continue }
             var e = pages[pi].elements[ei]
-            e.frame = frame.offsetBy(dx: d.x, dy: d.y)
+            e.frame = frame.offsetBy(dx: t.tx, dy: t.ty)
             pageViews[pages[pi].id]?.liveUpdate(e)
         }
     }
 
     private func endLassoMove(at p: CGPoint) {
-        guard let start = lassoMoveStart, let sel = lassoSel, let original = lassoMoveOriginal else { return }
+        guard lassoMoveStart != nil, let sel = lassoSel, let original = lassoMoveOriginal else { return }
+        let t = lassoDragTransform(to: p)
         lassoMoveStart = nil
-        let d = clampedDelta(moving: sel.bounds, by: CGPoint(x: p.x - start.x, y: p.y - start.y))
+        lassoScaling = false
         overlay.showLassoPreview(nil, frame: .zero)
         // 一次復原整個移動（筆跡可能移到別頁，那一頁也要能復原）
-        let inkTargets = inkStrokes(sel.ink).map { pages[inkPageIndex(for: InkGeometry.offset($0, by: d))].id }
+        let inkTargets = inkStrokes(sel.ink).map { pages[inkPageIndex(for: InkGeometry.applying($0, t))].id }
         recordEdit(drawing: original, pageIDs: Array(Set(affectedPageIDs(sel) + inkTargets)))
         setInkHidden([])
 
         var drawing = canvas.drawing
         let base = drawing.strokes.count
-        let t = CGAffineTransform(translationX: d.x, y: d.y)
         drawing.strokes.append(contentsOf: lassoMoveStrokes.map { s in
             var s = s
             s.transform = s.transform.concatenating(t)
             return s
         })
         setDrawing(drawing)
-        let movedInk = offsetModel(sel, by: d)
+        let movedInk = transformModel(sel, t)
         lassoMoveStrokes = []
         lassoMoveOriginal = nil
         lassoMoveElementFrames = [:]
         lassoSel = LassoSelection(strokeIndices: Array(base..<(base + sel.strokeIndices.count)), elements: sel.elements,
-                                  highlights: sel.highlights, bounds: sel.bounds.offsetBy(dx: d.x, dy: d.y), ink: movedInk)
-        overlay.showLassoSelection(lassoSel?.bounds)
+                                  highlights: sel.highlights, bounds: sel.bounds.applying(t), ink: movedInk)
+        updateLassoChrome()
     }
 
     private func cancelLassoMove() {
@@ -257,14 +341,17 @@ extension NotebookViewController {
             if case let (pi, _)? = locate(ref) { refreshPage(pi) }
         }
         lassoMoveStart = nil
+        lassoScaling = false
         lassoMoveOriginal = nil
         lassoMoveStrokes = []
         lassoMoveElementFrames = [:]
         clearLassoSelection()
     }
 
-    /// 物件、螢光標示、自製筆刷的筆跡一起平移（不另外登記復原，由呼叫端登記）；回傳筆跡移動後的位置
-    private func offsetModel(_ sel: LassoSelection, by d: CGPoint) -> [InkRef] {
+    /// 物件、螢光標示、自製筆刷的筆跡套用 t（文件座標；不另外登記復原，由呼叫端登記）；回傳筆跡移動後的位置。
+    /// 物件、螢光標示只會移動（圈到它們時不能縮放）
+    private func transformModel(_ sel: LassoSelection, _ t: CGAffineTransform) -> [InkRef] {
+        let d = CGPoint(x: t.tx, y: t.ty)
         for ref in sel.elements {
             guard case let (pi, ei)? = locate(ref) else { continue }
             updatePage(pi, undoable: false) {
@@ -280,8 +367,7 @@ extension NotebookViewController {
         var moved: [InkRef] = []
         for r in sel.ink {
             guard let pi = pageIndex(of: r.pageID), let s = pages[pi].ink.first(where: { $0.id == r.id }) else { continue }
-            let o = contentOrigin(pi)
-            let doc = InkGeometry.offset(s, by: CGPoint(x: o.x + d.x, y: o.y + d.y))
+            let doc = InkGeometry.applying(InkGeometry.offset(s, by: contentOrigin(pi)), t)
             let ti = inkPageIndex(for: doc)
             let to = contentOrigin(ti)
             let local = InkGeometry.offset(doc, by: CGPoint(x: -to.x, y: -to.y))
@@ -547,10 +633,11 @@ extension NotebookViewController {
                 newHighlights.append(HighlightRef(pageID: page.id, id: hl.id))
             }
         }
-        if tool != .lasso { setTool(.lasso) }
+        // 選取工具選起的筆跡複製一份：留在選取工具
+        if tool != .lasso && tool != .select { setTool(.lasso) }
         lassoSel = LassoSelection(strokeIndices: Array(base..<(base + clip.strokes.count)), elements: newElements,
                                   highlights: newHighlights, bounds: clip.bounds.offsetBy(dx: d.x, dy: d.y), ink: newInk)
-        overlay.showLassoSelection(lassoSel?.bounds)
+        updateLassoChrome()
     }
 
     // MARK: - 鎖頭
