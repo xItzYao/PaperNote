@@ -118,6 +118,11 @@ final class EditorSettings {
         set { d.set(newValue, forKey: "squeezeAction") }
     }
     static func squeezeKey(_ t: EditorTool) -> String { String(describing: t) }
+    /// 畫元件的橡皮擦：只擦掉碰到的那一段（關掉＝整條擦掉）
+    var symbolPartialErase: Bool {
+        get { bool("symbolPartialErase", false) }
+        set { d.set(newValue, forKey: "symbolPartialErase") }
+    }
     var customInk: Bool {
         get { bool("customInk", true) }
         set { d.set(newValue, forKey: "customInk") }
@@ -438,7 +443,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         inkContainer.isUserInteractionEnabled = false
         canvas.addSubview(inkContainer)
         // 工具列的小視窗讓畫布的觸控穿過去（開著也能直接寫），所以碰一下頁面就關掉它
-        canvas.addGestureRecognizer(TouchDownRecognizer { [weak self] in self?.dismissToolPopover() })
+        canvas.addGestureRecognizer(TouchDownRecognizer { [weak self] in self?.dismissToolPopover(animated: true) })
 
         editMenu = UIEditMenuInteraction(delegate: self)
         canvas.addInteraction(editMenu)
@@ -1056,10 +1061,15 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     /// 螢光筆排到最前面、其他順序不變；本來就排好了回傳 nil
     static func highlightsBelowInk(_ strokes: [PKStroke]) -> [PKStroke]? {
-        let isHighlight = { (s: PKStroke) in s.ink.inkType == .marker }
+        let isHighlight = isHighlighterStroke
         guard let firstInk = strokes.firstIndex(where: { !isHighlight($0) }),
               strokes[firstInk...].contains(where: isHighlight) else { return nil }
         return strokes.filter(isHighlight) + strokes.filter { !isHighlight($0) }
+    }
+
+    /// 螢光筆畫的：螢光筆是半透明的 monoline 墨水（見 InkStyle.inkType），舊的筆記可能有 PencilKit 的 marker
+    static func isHighlighterStroke(_ s: PKStroke) -> Bool {
+        s.ink.inkType == .marker || (s.ink.inkType == .monoline && s.ink.color.cgColor.alpha < 1)
     }
 
     /// 除錯紀錄：PencilKit 這一筆的取樣（墨水、點數、平均間隔，和平均挑的 8 個點的粗細、筆壓、傾斜、方位、透明度）。

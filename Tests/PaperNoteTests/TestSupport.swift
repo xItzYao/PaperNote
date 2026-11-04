@@ -17,7 +17,8 @@ enum TestWindow {
 final class FakeTouch: UITouch {
     private let kind: UITouch.TouchType
     private let radius: CGFloat
-    private let point: CGPoint
+    var point: CGPoint
+    var fakePhase: UITouch.Phase = .began
 
     init(type: UITouch.TouchType, radius: CGFloat = 10, location: CGPoint = .zero) {
         kind = type
@@ -28,6 +29,7 @@ final class FakeTouch: UITouch {
 
     override var type: UITouch.TouchType { kind }
     override var majorRadius: CGFloat { radius }
+    override var phase: UITouch.Phase { fakePhase }
     override func location(in view: UIView?) -> CGPoint { point }
     override var view: UIView? { nil }
 }

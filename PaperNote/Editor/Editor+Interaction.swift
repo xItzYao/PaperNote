@@ -196,7 +196,13 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRequireFailureOf other: UIGestureRecognizer) -> Bool {
-        g === tapGesture && other === doubleTapGesture && tool == .select
+        g === tapGesture && other === doubleTapGesture && tool == .select && tapWaitsForDoubleTap(at: g.location(in: pagesContainer))
+    }
+
+    /// 選取工具點一下要不要先等「點兩下」失敗（大約 0.3 秒）：點兩下只對物件有用（編輯文字、表格、電路圖），
+    /// 點在筆跡或空白處就馬上選
+    func tapWaitsForDoubleTap(at p: CGPoint) -> Bool {
+        hitElement(at: p) != nil
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
@@ -615,7 +621,8 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         }
         let e = pages[pi].elements[ei]
         let r = docFrame(of: e, pageIndex: pi)
-        overlay.showSelection(r, locked: e.locked, handle: e.locked ? nil : CGPoint(x: r.maxX, y: r.maxY))
+        // 電路圖不能拉角落縮放（元件、導線照格點排），不顯示縮放把手
+        overlay.showSelection(r, locked: e.locked, handle: e.locked || e.isCircuit ? nil : CGPoint(x: r.maxX, y: r.maxY))
     }
 
     func dragTarget(at p: CGPoint) -> (ElementRef, DragKind)? {

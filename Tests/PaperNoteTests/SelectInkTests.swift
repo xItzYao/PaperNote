@@ -103,6 +103,28 @@ final class SelectInkTests: XCTestCase {
         XCTAssertNotNil(editor.pendingMenu, "再點一下打開選單（拷貝、刪除、改顏色…）")
     }
 
+    /// 回報的問題：選取工具點下去大約 0.5 秒才選到（一直在等「點兩下」）
+    func testTappingInkOrEmptySpaceDoesNotWaitForADoubleTap() throws {
+        XCTAssertFalse(editor.tapWaitsForDoubleTap(at: doc(150, 302)), "點筆跡馬上選")
+        XCTAssertFalse(editor.tapWaitsForDoubleTap(at: doc(400, 700)), "點空白處馬上取消")
+        let ref = try XCTUnwrap(editor.insertElement(.circuit(CircuitData()), size: CGSize(width: 200, height: 150), at: doc(300, 850)))
+        let info = try XCTUnwrap(editor.circuitInfo(ref))
+        let center = editor.docFrame(of: info.element, pageIndex: info.pi).center
+        XCTAssertTrue(editor.tapWaitsForDoubleTap(at: center), "物件上點兩下有用（編輯電路圖、文字），要等")
+    }
+
+    /// 回報的問題：電路圖右下角的縮放把手拉了沒反應
+    func testASelectedCircuitHasNoResizeHandle() throws {
+        let ref = try XCTUnwrap(editor.insertElement(.circuit(CircuitData()), size: CGSize(width: 200, height: 150), at: doc(300, 850)))
+        editor.setTool(.select)
+        editor.select(ref)
+        XCTAssertEqual(editor.selected, ref)
+        XCTAssertTrue(editor.overlay.resizeHandleImage.isHidden, "電路圖不能拉角落縮放，不顯示把手")
+        let info = try XCTUnwrap(editor.circuitInfo(ref))
+        let r = editor.docFrame(of: info.element, pageIndex: info.pi)
+        if case .resize? = editor.dragTarget(at: CGPoint(x: r.maxX, y: r.maxY))?.1 { XCTFail("角落不是縮放") }
+    }
+
     func testLongPressOnInkSelectsItAndOpensTheMenu() {
         editor.handleLongPress(FakeLongPress(doc(150, 302)))
         XCTAssertEqual(editor.lassoSel?.ink.map(\.id), [inkID])

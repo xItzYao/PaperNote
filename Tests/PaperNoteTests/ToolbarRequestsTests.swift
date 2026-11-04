@@ -179,9 +179,16 @@ final class ToolbarRequestsTests: XCTestCase {
     func testHighlighterStrokesGoUnderPencilKitInk() {
         let pen = ShapeRecognizer.makeStroke(points: [CGPoint(x: 0, y: 0), CGPoint(x: 50, y: 0)], ink: PKInk(.pencil, color: .black), width: 3, sample: nil)
         let pen2 = ShapeRecognizer.makeStroke(points: [CGPoint(x: 0, y: 10), CGPoint(x: 50, y: 10)], ink: PKInk(.pen, color: .blue), width: 3, sample: nil)
-        let marker = ShapeRecognizer.makeStroke(points: [CGPoint(x: 0, y: 5), CGPoint(x: 50, y: 5)], ink: PKInk(.marker, color: .yellow), width: 20, sample: nil)
+        // 螢光筆真正畫出來的墨水：半透明的 monoline（不是 PencilKit 的 marker）
+        let highlighter = BrushPreset(style: .marker, colorHex: "#FFE14DFF", width: 18).tool.ink
+        let marker = ShapeRecognizer.makeStroke(points: [CGPoint(x: 0, y: 5), CGPoint(x: 50, y: 5)], ink: highlighter, width: 20, sample: nil)
         let sorted = NotebookViewController.highlightsBelowInk([pen, marker, pen2])
-        XCTAssertEqual(sorted?.map(\.ink.inkType), [.marker, .pencil, .pen], "螢光筆在最前面，其他順序不變")
+        XCTAssertEqual(sorted?.map(\.ink.inkType), [.monoline, .pencil, .pen], "螢光筆在最前面，其他順序不變")
+        let monoline = ShapeRecognizer.makeStroke(points: [CGPoint(x: 0, y: 20), CGPoint(x: 50, y: 20)],
+                                                  ink: BrushPreset(style: .monoline, colorHex: "#000000FF", width: 2).tool.ink, width: 2, sample: nil)
+        XCTAssertNil(NotebookViewController.highlightsBelowInk([monoline, pen]), "不透明的原子筆不是螢光筆")
+        let legacy = ShapeRecognizer.makeStroke(points: [CGPoint(x: 0, y: 5), CGPoint(x: 50, y: 5)], ink: PKInk(.marker, color: .yellow), width: 20, sample: nil)
+        XCTAssertTrue(NotebookViewController.isHighlighterStroke(legacy), "舊筆記的 PencilKit marker 也算")
         XCTAssertNil(NotebookViewController.highlightsBelowInk([marker, pen, pen2]), "已經排好就不動")
         XCTAssertNil(NotebookViewController.highlightsBelowInk([pen, pen2]))
     }

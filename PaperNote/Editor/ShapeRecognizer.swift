@@ -211,6 +211,13 @@ final class PencilHoldRecognizer: UIGestureRecognizer {
     private func location(_ t: UITouch) -> CGPoint { t.location(in: coordinateView) }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        // 上一筆的結束沒收到（見 UITouch.isOver）：當它取消了。不能用 finish，它會讓這一筆也失敗
+        if let old = tracked, old.isOver {
+            timer?.invalidate()
+            if triggered { onEnd?(lastPoint, true) }
+            tracked = nil
+            triggered = false
+        }
         guard tracked == nil, let t = touches.first else { return }
         guard t.type == .pencil || (allowFinger && t.type == .direct) else { return }
         tracked = t
@@ -301,6 +308,10 @@ final class TouchTracker: UIGestureRecognizer {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        if let old = tracked, old.isOver {
+            tracked = nil
+            onEnded?()
+        }
         guard tracked == nil, let t = touches.first else { return }
         guard t.type == .pencil || (allowFinger && t.type == .direct) else { return }
         tracked = t
@@ -332,6 +343,12 @@ final class TouchTracker: UIGestureRecognizer {
         if tracked != nil { onEnded?() }
         tracked = nil
     }
+}
+
+extension UITouch {
+    /// 已經放開了。系統的選單開著時下筆，這一筆的「結束」不一定會送到畫布上的辨識器：
+    /// 下一筆開始時看到記著的那一筆已經放開，就當它結束了，不然之後的筆都會被當成「上一筆還沒放開」而忽略
+    var isOver: Bool { phase == .ended || phase == .cancelled }
 }
 
 /// 手掌防誤觸：判定為手掌的觸碰一出現就「辨識成功」，讓畫布的捲動、縮放無法開始。

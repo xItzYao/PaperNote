@@ -771,10 +771,11 @@ extension NotebookViewController {
         present(vc, animated: true)
     }
 
-    /// 關掉小視窗。工具列重建時它依附的按鈕會被拿掉，不關的話可能卡在看不到的地方擋住所有觸控
-    func dismissToolPopover() {
+    /// 關掉小視窗。工具列重建時它依附的按鈕會被拿掉，不關的話可能卡在看不到的地方擋住所有觸控（這時不要動畫）。
+    /// animated：點旁邊關掉時縮回去
+    func dismissToolPopover(animated: Bool = false) {
         guard let p = presentedViewController, p.modalPresentationStyle == .popover, !p.isBeingDismissed else { return }
-        p.dismiss(animated: false)
+        p.dismiss(animated: animated)
     }
 
     /// 依目前的筆更新「細、中、粗」與虛線按鈕
