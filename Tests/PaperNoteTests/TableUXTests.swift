@@ -343,7 +343,9 @@ final class TableEditorUXTests: XCTestCase {
             guard case .resize? = editor.dragTarget(at: CGPoint(x: h.x + d.x / z, y: h.y + d.y / z))?.1 else { return XCTFail("偏 \(d) 也是縮放") }
         }
 
-        // 拉把手：整個表格（格子和字）等比例縮放
+        // 拉把手：整個表格（格子和字）等比例縮放。
+        // 先讓 run loop 轉一圈：同一圈裡的改動會併成一步（插入表格和縮放在 App 裡不會在同一圈）
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         let before = try XCTUnwrap(editor.selectedTable()).table
         let g = FakePan(target: nil, action: nil)
         let end = CGPoint(x: h.x - 60, y: h.y - 20)
