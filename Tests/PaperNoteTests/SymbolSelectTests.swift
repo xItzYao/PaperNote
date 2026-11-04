@@ -36,7 +36,7 @@ final class SymbolSelectTests: XCTestCase {
 
         original = d.beginTransform()
         d.move(.stroke(0), in: original, by: CGPoint(x: 13, y: 4))
-        XCTAssertEqual(d.symbol.strokes[0].points, [CGPoint(x: -20, y: 0), CGPoint(x: 20, y: 0)], "直線照格點移動")
+        XCTAssertEqual(d.symbol.strokes[0].points, [CGPoint(x: -20, y: 0), CGPoint(x: 40, y: 0)], "直線照格點移動（13 → 10）")
         d.move(.stroke(1), in: original, by: CGPoint(x: 1.5, y: 0))
         XCTAssertEqual(d.symbol.strokes[1].points.first?.x ?? .nan, -18.5, accuracy: 0.001, "筆刷線照拖的移動")
         d.endTransform(from: original)

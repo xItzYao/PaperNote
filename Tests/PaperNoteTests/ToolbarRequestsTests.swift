@@ -74,8 +74,10 @@ final class ToolbarRequestsTests: XCTestCase {
         for t in [EditorTool.pen, .highlighter] {
             editor.setTool(t)
             let items = editor.subBarStack.arrangedSubviews
-            XCTAssertTrue(items.first is UIScrollView, "\(t)：最左邊是常用筆刷")
-            XCTAssertEqual((items[safe: 1] as? UIButton)?.accessibilityLabel, "新增常用筆刷", "\(t)：新增就在筆刷右邊，不在最右邊")
+            // 筆的最左邊是筆型（隔一條分隔線），接著才是常用筆刷
+            let strip = try XCTUnwrap(items.firstIndex { $0 is UIScrollView }, "\(t)：有常用筆刷")
+            XCTAssertEqual(strip, t == .pen ? 2 : 0, "\(t)：常用筆刷的位置")
+            XCTAssertEqual((items[safe: strip + 1] as? UIButton)?.accessibilityLabel, "新增常用筆刷", "\(t)：新增就在筆刷右邊，不在最右邊")
         }
     }
 
