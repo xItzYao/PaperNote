@@ -182,8 +182,6 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     /// 筆工具列的「細、中、粗」三個粗細按鈕與虛線開關
     var penWidthButtons: [UIButton] = []
     weak var penDashButton: UIButton?
-    /// 筆工具列最左邊的筆型
-    weak var penStyleButton: UIButton?
     /// 工具列的小視窗開著時接下頁面上的觸碰
     let popoverShield = PopoverShieldView()
     var favoriteButton: UIButton!

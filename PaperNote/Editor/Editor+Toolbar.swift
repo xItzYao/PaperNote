@@ -367,14 +367,8 @@ extension NotebookViewController {
         subBarStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         presetButtons = [:]
         penWidthButtons = []
-        penStyleButton = nil
         switch tool {
         case .pen, .highlighter:
-            // 筆：最左邊先選筆型
-            if tool == .pen {
-                subBarStack.addArrangedSubview(makePenStylePicker())
-                subBarStack.addArrangedSubview(toolbarSeparator())
-            }
             subBarStack.addArrangedSubview(makePresetStrip())
             // 新增緊接在常用筆刷的右邊
             let add = makeButton(symbol: "plus", title: nil, action: nil)
@@ -648,61 +642,10 @@ extension NotebookViewController {
     func refreshPresetButtons() {
         for p in BrushStore.shared.presets {
             presetButtons[p.id]?.setImage(presetImage(p, selected: p.id == BrushStore.shared.currentID), for: .normal)
+            // 換了筆型，名稱也跟著換
+            presetButtons[p.id]?.accessibilityLabel = p.style.title
         }
         refreshPenStyleControls()
-        refreshPenStylePicker()
-    }
-
-    // MARK: 筆型
-
-    /// 筆工具列最左邊的筆型：圖示是用目前的顏色畫的一筆，點開選別的筆型（一樣用目前的顏色預覽）
-    func makePenStylePicker() -> UIButton {
-        let b = UIButton(configuration: .plain())
-        b.accessibilityLabel = L("筆型")
-        b.showsMenuAsPrimaryAction = true
-        penStyleButton = b
-        refreshPenStylePicker()
-        return b
-    }
-
-    func refreshPenStylePicker() {
-        guard let b = penStyleButton else { return }
-        let p = BrushStore.shared.current
-        var c = b.configuration ?? .plain()
-        c.image = Self.penStyleImage(p.style, color: p.colorHex, size: CGSize(width: 44, height: 24))
-        c.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6)
-        c.background.backgroundColor = .secondarySystemFill
-        c.background.cornerRadius = 8
-        b.configuration = c
-        b.accessibilityValue = p.style.title
-        b.menu = UIMenu(title: L("筆型"), children: InkStyle.allCases.filter { $0 != .marker }.map { s in
-            UIAction(title: s.title, image: Self.penStyleImage(s, color: p.colorHex, size: CGSize(width: 56, height: 24)),
-                     state: s == p.style ? .on : .off) { [weak self] _ in self?.setPenStyle(s) }
-        })
-    }
-
-    /// 換目前這支筆的筆型：粗細留在同一格（細、中、粗）
-    func setPenStyle(_ s: InkStyle) {
-        var p = BrushStore.shared.current
-        guard p.style != s, p.style != .marker, s != .marker else { return }
-        let slot = currentWidthSlot()
-        p.style = s
-        p.width = BrushStore.shared.styleWidths(s)[slot]
-        updateCurrentPreset(p)
-        // 可能從自製筆刷換成 PencilKit（或相反）
-        applyInkEngine()
-    }
-
-    /// 這種筆型用這個顏色畫的一筆（中等粗細）
-    static func penStyleImage(_ style: InkStyle, color: String, size: CGSize) -> UIImage {
-        let path = (0...40).map { i -> CGPoint in
-            let t = CGFloat(i) / 40
-            return CGPoint(x: 4 + (size.width - 8) * t, y: size.height / 2 - sin(t * .pi * 2) * size.height * 0.25)
-        }
-        let width = min(max(style.styleWidths[1], 1.5), 4)
-        return BrushPreset(style: style, colorHex: color, width: width)
-            .strokePreview(path, in: size, scale: UIScreen.main.scale)
-            .withRenderingMode(.alwaysOriginal)
     }
 
     // MARK: 筆的線條樣式
@@ -943,7 +886,8 @@ extension NotebookViewController {
                 self?.applyTool()
             }
         }
-        presentToolPopover(UIHostingController(rootView: view), from: source, size: CGSize(width: 340, height: 460))
+        // 筆多了最上面的筆型
+        presentToolPopover(UIHostingController(rootView: view), from: source, size: CGSize(width: 340, height: preset.style == .marker ? 460 : 600))
     }
 
     // MARK: - Menus

@@ -255,6 +255,17 @@ final class BrushStore {
         return saved
     }
 
+    /// 換筆型：粗細留在同一格（細、中、粗），顏色不變
+    func restyled(_ preset: BrushPreset, to style: InkStyle) -> BrushPreset {
+        guard preset.style != style, preset.style != .marker, style != .marker else { return preset }
+        let old = styleWidths(preset.style)
+        let slot = old.indices.min { abs(old[$0] - preset.width) < abs(old[$1] - preset.width) } ?? 1
+        var p = preset
+        p.style = style
+        p.width = styleWidths(style)[slot]
+        return p
+    }
+
     func setStyleWidth(_ width: CGFloat, slot: Int, style: InkStyle) {
         var widths = styleWidths(style)
         guard widths.indices.contains(slot) else { return }
@@ -323,8 +334,37 @@ struct BrushSettingsView: View {
             .onTapGesture { preset.colorHex = hex }
     }
 
+    private func styleTile(_ s: InkStyle) -> some View {
+        let on = s == preset.style
+        return Button { preset = BrushStore.shared.restyled(preset, to: s) } label: {
+            VStack(spacing: 2) {
+                Image(uiImage: s.previewImage(color: preset.colorHex, size: CGSize(width: 64, height: 22)))
+                Text(s.title).font(.caption2).lineLimit(1).minimumScaleFactor(0.7)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 8).fill(on ? Color.accentColor.opacity(0.18) : Color(uiColor: .secondarySystemFill)))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(on ? Color.accentColor : .clear, lineWidth: 2))
+            .contentShape(Rectangle())
+        }
+        // 同一列有好幾個按鈕：plain 才會各自點
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(s.title)
+        .accessibilityIdentifier("penStyle.\(s.rawValue)")
+        .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+    }
+
     var body: some View {
         Form {
+            // 筆型和顏色在同一個選單：直接點格子換，不另外開下拉選單
+            if preset.style != .marker {
+                Section(L("筆型")) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
+                        ForEach(InkStyle.allCases.filter { $0 != .marker }) { styleTile($0) }
+                    }
+                }
+            }
             Section(L("色票")) {
                 LazyVGrid(columns: Array(repeating: GridItem(.fixed(34), spacing: 10), count: 6), spacing: 10) {
                     ForEach(Self.swatches, id: \.self) { swatch($0) }
@@ -382,6 +422,20 @@ struct BrushSettingsView: View {
             if v != preset { preset = v }
             onChange(v)
         }
+    }
+}
+
+extension InkStyle {
+    /// 這種筆型用這個顏色畫的一筆（中等粗細）
+    func previewImage(color: String, size: CGSize) -> UIImage {
+        let path = (0...40).map { i -> CGPoint in
+            let t = CGFloat(i) / 40
+            return CGPoint(x: 4 + (size.width - 8) * t, y: size.height / 2 - sin(t * .pi * 2) * size.height * 0.25)
+        }
+        let width = min(max(styleWidths[1], 1.5), 4)
+        return BrushPreset(style: self, colorHex: color, width: width)
+            .strokePreview(path, in: size, scale: UIScreen.main.scale)
+            .withRenderingMode(.alwaysOriginal)
     }
 }
 

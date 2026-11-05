@@ -74,9 +74,8 @@ final class ToolbarRequestsTests: XCTestCase {
         for t in [EditorTool.pen, .highlighter] {
             editor.setTool(t)
             let items = editor.subBarStack.arrangedSubviews
-            // 筆的最左邊是筆型（隔一條分隔線），接著才是常用筆刷
             let strip = try XCTUnwrap(items.firstIndex { $0 is UIScrollView }, "\(t)：有常用筆刷")
-            XCTAssertEqual(strip, t == .pen ? 2 : 0, "\(t)：常用筆刷的位置")
+            XCTAssertEqual(strip, 0, "\(t)：常用筆刷在最左邊")
             XCTAssertEqual((items[safe: strip + 1] as? UIButton)?.accessibilityLabel, "新增常用筆刷", "\(t)：新增就在筆刷右邊，不在最右邊")
         }
     }
@@ -138,38 +137,51 @@ final class ToolbarRequestsTests: XCTestCase {
         XCTAssertTrue(after?.isDescendant(of: canvas) ?? false, "關好了，筆照常寫在頁面上，而是 \(String(describing: after))")
     }
 
-    // MARK: 筆型在工具列最左邊
+    // MARK: 筆型在顏色選單（筆刷設定）裡，工具列沒有
 
-    private var penStyleButton: UIButton? { editor.subBarStack.arrangedSubviews.first as? UIButton }
+    func testThePenTypeIsNotOnTheToolbar() {
+        for t in [EditorTool.pen, .highlighter] {
+            editor.setTool(t)
+            XCTAssertFalse(editor.subBarStack.arrangedSubviews.contains { $0.accessibilityLabel == "筆型" }, "\(t)：工具列沒有筆型")
+            XCTAssertTrue(editor.subBarStack.arrangedSubviews.first is UIScrollView, "\(t)：最左邊就是常用筆刷")
+        }
+    }
 
-    func testThePenStylePickerIsLeftmost() throws {
+    /// 在筆刷設定換筆型：粗細留在同一格，顏色不變；螢光筆不能換成筆
+    func testChangingThePenTypeKeepsTheWidthSlotAndColor() {
+        let store = BrushStore.shared
+        for slot in 0..<3 {
+            let p = BrushPreset(style: .pencil, colorHex: "#1E5BD8FF", width: store.styleWidths(.pencil)[slot])
+            let q = store.restyled(p, to: .watercolor)
+            XCTAssertEqual(q.id, p.id, "同一支筆")
+            XCTAssertEqual(q.style, .watercolor)
+            XCTAssertEqual(q.colorHex, p.colorHex, "顏色不變")
+            XCTAssertEqual(q.width, store.styleWidths(.watercolor)[slot], accuracy: 0.001, "第 \(slot) 格的粗細留在同一格")
+        }
+        let marker = BrushPreset(style: .marker, colorHex: "#FFE14DFF", width: 12)
+        XCTAssertEqual(store.restyled(marker, to: .pencil), marker)
+        let pen = BrushPreset(style: .pen, colorHex: "#1A1A1AFF", width: 2)
+        XCTAssertEqual(store.restyled(pen, to: .marker), pen)
+    }
+
+    /// 在顏色選單換了筆型，工具列那支筆的名稱跟著換（VoiceOver、UI 測試靠名稱找）
+    func testThePresetButtonIsRenamedWithItsPenType() throws {
         let original = BrushStore.shared.current
         defer { BrushStore.shared.update(original); editor.applyTool() }
         editor.setTool(.pen)
-        let picker = try XCTUnwrap(penStyleButton, "筆工具列最左邊是筆型")
-        XCTAssertEqual(picker.accessibilityLabel, "筆型")
-        XCTAssertEqual(picker.accessibilityValue, original.style.title)
-        XCTAssertNotNil(picker.configuration?.image, "有用目前顏色畫的預覽")
-        let actions = try XCTUnwrap(picker.menu?.children.compactMap { $0 as? UIAction })
-        XCTAssertEqual(actions.map(\.title), InkStyle.allCases.filter { $0 != .marker }.map(\.title), "每種筆型都可以選（螢光筆不在這裡）")
-        XCTAssertTrue(actions.allSatisfy { $0.image != nil }, "每種筆型都有預覽")
-        XCTAssertEqual(actions.filter { $0.state == .on }.map(\.title), [original.style.title], "勾著目前的筆型")
-
-        let slot = BrushStore.shared.styleWidths(original.style).firstIndex { abs($0 - original.width) < 0.01 }
         let target: InkStyle = original.style == .watercolor ? .pencil : .watercolor
-        editor.setPenStyle(target)
-        let now = BrushStore.shared.current
-        XCTAssertEqual(now.id, original.id, "改的是目前這支筆")
-        XCTAssertEqual(now.style, target)
-        XCTAssertEqual(now.colorHex, original.colorHex, "顏色不變")
-        if let slot { XCTAssertEqual(now.width, BrushStore.shared.styleWidths(target)[slot], accuracy: 0.01, "粗細留在同一格") }
-        XCTAssertEqual(penStyleButton?.accessibilityValue, target.title, "工具列的筆型跟著換")
-        XCTAssertEqual(penStyleButton?.menu?.children.compactMap { ($0 as? UIAction)?.state == .on ? $0.title : nil }, [target.title])
+        BrushStore.shared.update(BrushStore.shared.restyled(original, to: target))
+        editor.refreshPresetButtons()
+        let button = try XCTUnwrap(editor.presetButtons[original.id])
+        XCTAssertEqual(button.accessibilityLabel, target.title)
     }
 
-    func testTheHighlighterHasNoPenStylePicker() {
-        editor.setTool(.highlighter)
-        XCTAssertFalse(editor.subBarStack.arrangedSubviews.contains { $0.accessibilityLabel == "筆型" })
+    /// 每種筆型的格子都有用目前顏色畫的預覽
+    func testEveryPenTypeHasAPreview() {
+        for s in InkStyle.allCases where s != .marker {
+            let image = s.previewImage(color: "#D32F2FFF", size: CGSize(width: 64, height: 22))
+            XCTAssertEqual(image.size, CGSize(width: 64, height: 22), "\(s)")
+        }
     }
 
     // MARK: 螢光筆不蓋住筆跡

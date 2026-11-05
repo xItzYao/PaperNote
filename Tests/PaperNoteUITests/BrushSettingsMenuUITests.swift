@@ -12,20 +12,15 @@ final class BrushSettingsMenuUITests: XCTestCase {
         app.launch()
     }
 
-    /// 選這支筆，再打開工具列最左邊的「筆型」選單
-    private func openStyleMenu(_ pen: String = "鉛筆") {
+    /// 選這支筆，再點一下打開它的顏色選單（筆型在最上面）
+    private func openBrushSettings(_ pen: String = "鉛筆") {
         let button = app.buttons[pen].firstMatch
         XCTAssertTrue(button.waitForExistence(timeout: 20), "要打開測試用的筆記本")
         button.tap()
-        // 已經是目前的筆：點一下會打開筆刷設定，點旁邊的頁面關掉它
-        if app.buttons["把這個顏色加進色票"].waitForExistence(timeout: 1.5) {
-            app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.8)).tap()
-            XCTAssertTrue(app.buttons["把這個顏色加進色票"].waitForNonExistence(timeout: 5), "點旁邊關掉筆刷設定")
-        }
-        let picker = app.buttons["筆型"].firstMatch
-        XCTAssertTrue(picker.waitForExistence(timeout: 5), "筆工具列最左邊是筆型")
-        picker.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["水彩"].waitForExistence(timeout: 5), "筆型選單要打開")
+        // 還不是目前的筆：第一下只選筆，再點一下才打開
+        if !app.buttons["把這個顏色加進色票"].waitForExistence(timeout: 1.5) { button.tap() }
+        XCTAssertTrue(app.buttons["把這個顏色加進色票"].waitForExistence(timeout: 5), "顏色選單要打開")
+        XCTAssertTrue(app.buttons["penStyle.watercolor"].waitForExistence(timeout: 5), "筆型在顏色選單裡")
     }
 
     private func draw(y: CGFloat) {
@@ -37,40 +32,34 @@ final class BrushSettingsMenuUITests: XCTestCase {
 
     /// 設定一樣的情況在同一次啟動裡依序做，省下重開 App 的時間
     func testTheStyleMenu() {
-        // 筆型選單開著，直接在畫布上寫：選單收起，App 不能閃退
-        openStyleMenu()
+        // 工具列沒有另外的筆型按鈕
+        XCTAssertTrue(app.buttons["鉛筆"].firstMatch.waitForExistence(timeout: 20), "要打開測試用的筆記本")
+        XCTAssertFalse(app.buttons["筆型"].exists, "筆型併回顏色選單")
+
+        // 在顏色選單換筆型：選單還開著，筆換成水彩
+        openBrushSettings()
+        app.buttons["penStyle.watercolor"].tap()
+        sleep(1)
+        XCTAssertEqual(app.state, .runningForeground, "選筆型：不能閃退")
+        XCTAssertTrue(app.buttons["penStyle.watercolor"].isSelected, "勾著水彩")
+        XCTAssertTrue(app.buttons["把這個顏色加進色票"].exists, "選單還開著，可以接著改顏色")
+
+        // 選單開著直接在頁面上寫：選單收起（這一筆不寫），App 不能閃退
         draw(y: 0.6)
         sleep(2)
         XCTAssertEqual(app.state, .runningForeground, "不能閃退")
-        XCTAssertTrue(app.buttons["鉛筆"].exists, "還在筆記本裡")
+        XCTAssertTrue(app.buttons["把這個顏色加進色票"].waitForNonExistence(timeout: 5), "碰到頁面就關掉選單")
         draw(y: 0.75)
         sleep(1)
         XCTAssertEqual(app.state, .runningForeground, "之後照常寫")
 
-        // 回報的版本每支筆都用自製筆刷：選單開著時用自製筆刷寫
-        openStyleMenu("原子筆")
+        // 改回鉛筆（筆刷存在 App 裡，之後的測試還要用「鉛筆」；工具列那支現在叫「水彩」）
+        openBrushSettings("水彩")
+        app.buttons["penStyle.pencil"].tap()
+        sleep(1)
+        XCTAssertTrue(app.buttons["penStyle.pencil"].isSelected)
         draw(y: 0.6)
-        sleep(2)
-        XCTAssertEqual(app.state, .runningForeground, "自製筆刷：不能閃退")
-        XCTAssertTrue(app.buttons["原子筆"].firstMatch.exists, "自製筆刷：還在筆記本裡")
-        draw(y: 0.75)
-        sleep(1)
-        XCTAssertEqual(app.state, .runningForeground, "自製筆刷：之後照常寫")
-
-        // 選一個筆型：選單收起，工具列的筆型跟著換
-        openStyleMenu()
-        app.descendants(matching: .any)["水彩"].firstMatch.tap()
-        sleep(2)
-        XCTAssertEqual(app.state, .runningForeground, "選筆型：不能閃退")
-        let picker = app.buttons["筆型"].firstMatch
-        XCTAssertEqual(picker.value as? String, "水彩", "工具列的筆型換成水彩")
-        // 改回鉛筆（筆刷存在 App 裡，之後的測試還要用「鉛筆」；工具列那支現在叫「水彩」，選單裡的才是「鉛筆」）
-        picker.tap()
-        let pencil = app.descendants(matching: .any)["鉛筆"].firstMatch
-        XCTAssertTrue(pencil.waitForExistence(timeout: 5))
-        pencil.tap()
-        sleep(1)
+        XCTAssertTrue(app.buttons["鉛筆"].firstMatch.waitForExistence(timeout: 5), "工具列的筆換回鉛筆")
         XCTAssertEqual(app.state, .runningForeground)
-        XCTAssertEqual(picker.value as? String, "鉛筆")
     }
 }
