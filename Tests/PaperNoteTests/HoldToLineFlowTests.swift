@@ -9,6 +9,7 @@ final class HoldToLineFlowTests: XCTestCase {
     private var window: UIWindow!
     private var editor: NotebookViewController!
     private var notebookID: UUID!
+    private var originalPreset: BrushPreset!
 
     override func setUpWithError() throws {
         let meta = LibraryStore.shared.createNotebook(title: "HoldToLineTest", folder: nil, paper: .blank, landscape: false)
@@ -21,12 +22,14 @@ final class HoldToLineFlowTests: XCTestCase {
         editor.view.layoutIfNeeded()
         spin(0.3)
         editor.setTool(.pen)
+        originalPreset = BrushStore.shared.current
         var p = BrushStore.shared.current
         p.dashed = false
         BrushStore.shared.update(p)
     }
 
     override func tearDown() {
+        BrushStore.shared.update(originalPreset)
         window.isHidden = true
         window = nil
         editor = nil
@@ -94,6 +97,108 @@ final class HoldToLineFlowTests: XCTestCase {
         editor.holdToShape.move(docPoint(500, 300))
         let moved = try XCTUnwrap(editor.holdToShape.live?.points.last)
         XCTAssertEqual(moved.x, docPoint(500, 300).x, accuracy: 3, "終點跟著筆尖")
+    }
+
+    // MARK: 圖形（回報的問題：PencilKit 筆刷停住變完美圖形會消失）
+
+    /// 圓角、有點抖的手畫矩形（每 3pt 一點），頭尾接起來
+    private func roughRectangle(_ r: CGRect) -> [CGPoint] {
+        let corners = [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY),
+                       CGPoint(x: r.maxX, y: r.maxY), CGPoint(x: r.minX, y: r.maxY), CGPoint(x: r.minX, y: r.minY)]
+        var pts: [CGPoint] = []
+        for (a, b) in zip(corners, corners.dropFirst()) {
+            let n = max(2, Int(a.distance(to: b) / 3))
+            for i in 0..<n {
+                let t = CGFloat(i) / CGFloat(n)
+                pts.append(CGPoint(x: a.x + (b.x - a.x) * t + sin(CGFloat(pts.count)) * 1.5,
+                                   y: a.y + (b.y - a.y) * t + cos(CGFloat(pts.count) * 1.3) * 1.5))
+            }
+        }
+        pts.append(CGPoint(x: r.minX + 4, y: r.minY + 2))
+        return pts
+    }
+
+    private func roughCircle(center c: CGPoint, radius r: CGFloat) -> [CGPoint] {
+        (0...120).map { i in
+            let a = CGFloat(i) / 120 * 2 * .pi * 1.02
+            let rr = r + sin(CGFloat(i) * 0.9) * 2
+            return CGPoint(x: c.x + cos(a) * rr, y: c.y + sin(a) * rr)
+        }
+    }
+
+    /// 這一筆畫在頁面上實際有幾個不透明的點
+    private func inkedPixels(_ s: PKStroke) -> Int {
+        let bounds = s.renderBounds.insetBy(dx: -4, dy: -4)
+        guard bounds.width > 0, bounds.height > 0, bounds.width < 4000, bounds.height < 4000,
+              let cg = PKDrawing(strokes: [s]).image(from: bounds, scale: 1).cgImage else { return 0 }
+        let w = cg.width, h = cg.height
+        var data = [UInt8](repeating: 0, count: w * h * 4)
+        guard let ctx = CGContext(data: &data, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return 0 }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return stride(from: 3, to: data.count, by: 4).filter { data[$0] > 40 }.count
+    }
+
+    /// 換成這種筆型畫一個圖形：手畫 → 停住 → （拖一段）→ 放開，PencilKit 照它自己的時間把手繪那一筆放進筆跡
+    private func drawHoldShape(_ hand: [CGPoint], style: InkStyle, dragTo: CGPoint?, pencilKitEndsFirst: Bool,
+                               file: StaticString = #filePath, line: UInt = #line) -> (before: Int, after: [PKStroke], live: LiveShape?) {
+        var p = BrushStore.shared.current
+        p.style = style
+        p.dashed = false
+        BrushStore.shared.update(p)
+        editor.setTool(.pen)
+        XCTAssertFalse(editor.customInkActive, "\(style) 是 PencilKit 畫的", file: file, line: line)
+        let before = editor.canvas.drawing.strokes.count
+        editor.canvasViewDidBeginUsingTool(editor.canvas)
+        editor.holdToShape.hold(hand)
+        var path = hand
+        if let q = dragTo {
+            let last = hand.last!
+            for i in 1...10 {
+                let t = CGFloat(i) / 10
+                let m = CGPoint(x: last.x + (q.x - last.x) * t, y: last.y + (q.y - last.y) * t)
+                editor.holdToShape.move(m)
+                path.append(m)
+            }
+        }
+        let live = editor.holdToShape.live
+        var d = editor.canvas.drawing
+        d.strokes.append(ShapeRecognizer.makeStroke(points: path, preset: BrushStore.shared.current))
+        editor.canvas.drawing = d
+        if pencilKitEndsFirst {
+            editor.canvasViewDidEndUsingTool(editor.canvas)
+            editor.holdToShape.end(path.last!, cancelled: false)
+        } else {
+            editor.holdToShape.end(path.last!, cancelled: false)
+            editor.canvasViewDidEndUsingTool(editor.canvas)
+        }
+        spin(2.0)
+        return (before, editor.canvas.drawing.strokes, live)
+    }
+
+    private func assertShapeStays(_ r: (before: Int, after: [PKStroke], live: LiveShape?), _ name: String,
+                                  file: StaticString = #filePath, line: UInt = #line) {
+        guard let live = r.live, let shape = live.shape else { return XCTFail("\(name)：停住要認出圖形", file: file, line: line) }
+        XCTAssertEqual(r.after.count, r.before + 1, "\(name)：手繪那一筆換成一個圖形", file: file, line: line)
+        guard let last = r.after.last else { return XCTFail("\(name)：圖形不見了", file: file, line: line) }
+        let want = InkShapes.bounds(shape.points)
+        let got = last.renderBounds
+        XCTAssertEqual(got.midX, want.midX, accuracy: 6, "\(name)：留下的是預覽的那個圖形", file: file, line: line)
+        XCTAssertEqual(got.midY, want.midY, accuracy: 6, "\(name)：留下的是預覽的那個圖形", file: file, line: line)
+        XCTAssertEqual(got.width, want.width, accuracy: 20, "\(name)：大小和預覽一樣", file: file, line: line)
+        XCTAssertGreaterThan(inkedPixels(last), Int(want.width + want.height), "\(name)：真的畫得出來", file: file, line: line)
+    }
+
+    func testPencilKitShapesStayAfterLifting() {
+        let rect = roughRectangle(CGRect(origin: docPoint(80, 120), size: CGSize(width: 220, height: 140)))
+        let circle = roughCircle(center: docPoint(250, 450), radius: 80)
+        for style in [InkStyle.pen, .pencil, .fountainPen] {
+            for first in [false, true] {
+                assertShapeStays(drawHoldShape(rect, style: style, dragTo: nil, pencilKitEndsFirst: first), "\(style) 矩形 pkFirst=\(first)")
+                assertShapeStays(drawHoldShape(rect, style: style, dragTo: docPoint(60, 90), pencilKitEndsFirst: first), "\(style) 矩形拖大 pkFirst=\(first)")
+                assertShapeStays(drawHoldShape(circle, style: style, dragTo: docPoint(150, 340), pencilKitEndsFirst: first), "\(style) 圓拖大 pkFirst=\(first)")
+            }
+        }
     }
 
     func testLineIsPlacedWhenPenLiftsBeforePencilKitFinishes() {
