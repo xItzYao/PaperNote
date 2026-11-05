@@ -199,10 +199,13 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         g === tapGesture && other === doubleTapGesture && tool == .select && tapWaitsForDoubleTap(at: g.location(in: pagesContainer))
     }
 
-    /// 選取工具點一下要不要先等「點兩下」失敗（大約 0.3 秒）：點兩下只對物件有用（編輯文字、表格、電路圖），
-    /// 點在筆跡或空白處就馬上選
+    /// 選取工具點一下要不要先等「點兩下」失敗（大約 0.3～0.5 秒）。只有點一下會打開選單時要等：
+    /// 點在選起來的物件上（表格是選起來的格子上），不等的話點兩下會先閃出選單。
+    /// 選物件、選格子本來就是點兩下（打字、編輯）的第一步，馬上做；筆跡、空白處也馬上
     func tapWaitsForDoubleTap(at p: CGPoint) -> Bool {
-        hitElement(at: p) != nil
+        guard let hit = hitElement(at: p), hit == selected, case let (pi, ei)? = locate(hit) else { return false }
+        guard pages[pi].elements[ei].isTable else { return true }
+        return tableCellSel != nil && tableSelectionDocRect()?.contains(p) == true
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {

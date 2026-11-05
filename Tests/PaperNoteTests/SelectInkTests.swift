@@ -110,7 +110,27 @@ final class SelectInkTests: XCTestCase {
         let ref = try XCTUnwrap(editor.insertElement(.circuit(CircuitData()), size: CGSize(width: 200, height: 150), at: doc(300, 850)))
         let info = try XCTUnwrap(editor.circuitInfo(ref))
         let center = editor.docFrame(of: info.element, pageIndex: info.pi).center
-        XCTAssertTrue(editor.tapWaitsForDoubleTap(at: center), "物件上點兩下有用（編輯電路圖、文字），要等")
+        XCTAssertEqual(editor.selected, ref)
+        XCTAssertTrue(editor.tapWaitsForDoubleTap(at: center), "點選起來的物件會打開選單：要等，點兩下才不會先閃出選單")
+        editor.select(nil)
+        XCTAssertFalse(editor.tapWaitsForDoubleTap(at: center), "選物件是點兩下的第一步：馬上選")
+    }
+
+    /// 回報的問題：點儲存格要慢一秒才選到（一直在等「點兩下」）
+    func testTappingACellSelectsItRightAway() throws {
+        let t = TableData.make(rows: 3, cols: 3, cellWidth: 100, cellHeight: 40)
+        let ref = try XCTUnwrap(editor.insertElement(.table(t), size: t.size, at: doc(300, 850)))
+        let r = try XCTUnwrap(editor.selectedTable()).docRect
+        func cell(_ row: Int, _ col: Int) -> CGPoint { CGPoint(x: r.minX + CGFloat(col) * 100 + 50, y: r.minY + CGFloat(row) * 40 + 20) }
+        editor.select(nil)
+        XCTAssertFalse(editor.tapWaitsForDoubleTap(at: cell(1, 1)), "還沒選表格：點格子馬上選")
+        tap(cell(1, 1))
+        XCTAssertEqual(editor.selected, ref)
+        XCTAssertEqual(editor.tableCellSel, CellRange((1, 1), (1, 1)), "點一下就選到這一格")
+        XCTAssertFalse(editor.tapWaitsForDoubleTap(at: cell(2, 0)), "點別格：馬上改選")
+        XCTAssertTrue(editor.tapWaitsForDoubleTap(at: cell(1, 1)), "點選起來的格子會打開選單：要等")
+        tap(cell(2, 0))
+        XCTAssertEqual(editor.tableCellSel, CellRange((2, 0), (2, 0)))
     }
 
     /// 回報的問題：電路圖右下角的縮放把手拉了沒反應
