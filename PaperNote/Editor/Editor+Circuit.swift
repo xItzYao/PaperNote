@@ -893,10 +893,10 @@ extension NotebookViewController {
     /// 導線旁邊沒有按鈕：命名、刪除放在選單裡
     private func presentWireMenu(_ ref: ElementRef, wire id: UUID, at p: CGPoint) {
         let local = circuitLocal(p, ref)
-        let name = UIAction(title: "導線名稱", image: UIImage(systemName: "character.textbox")) { [weak self] _ in
+        let name = UIAction(title: L("導線名稱"), image: UIImage(systemName: "character.textbox")) { [weak self] _ in
             self?.promptWireLabel(ref, wire: id, near: local)
         }
-        let delete = UIAction(title: "刪除", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
+        let delete = UIAction(title: L("刪除"), image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
             self?.deleteCircuitSelection()
         }
         presentMenu(UIMenu(children: [name, delete]), atDocPoint: p)
@@ -930,18 +930,18 @@ extension NotebookViewController {
     /// 把選取的東西存進元件庫的「自訂電路圖」
     func addSelectionToCustomCircuits() {
         guard let ref = circuitTarget, let sel = circuitSel, let data = circuitInfo(ref)?.data else {
-            showToast("先用 Pencil 圈起要存的電路（或選一個元件）")
+            showToast(L("先用 Pencil 圈起要存的電路（或選一個元件）"))
             return
         }
         let ids: Set<UUID>
         if case let .items(all) = sel { ids = all } else if let id = sel.itemID { ids = [id] } else { return }
-        let a = UIAlertController(title: "加入自訂電路圖", message: "例如 OTA、電流鏡", preferredStyle: .alert)
+        let a = UIAlertController(title: L("加入自訂電路圖"), message: L("例如 OTA、電流鏡"), preferredStyle: .alert)
         a.addTextField { tf in
             tf.placeholder = "OTA"
             tf.clearButtonMode = .whileEditing
         }
-        a.addAction(UIAlertAction(title: "取消", style: .cancel))
-        a.addAction(UIAlertAction(title: "加入", style: .default) { [weak self, weak a] _ in
+        a.addAction(UIAlertAction(title: L("取消"), style: .cancel))
+        a.addAction(UIAlertAction(title: L("加入"), style: .default) { [weak self, weak a] _ in
             self?.saveCustomCircuit(name: a?.textFields?.first?.text ?? "", data: data.extracted(ids))
         })
         present(a, animated: true)
@@ -951,8 +951,8 @@ extension NotebookViewController {
     func saveCustomCircuit(name: String, data: CircuitData) {
         let store = CustomCircuitStore.shared
         let t = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let c = store.add(name: t.isEmpty ? "自訂電路 \(store.circuits.count + 1)" : t, data: data)
-        showToast("已加入「\(c.name)」")
+        let c = store.add(name: t.isEmpty ? L("自訂電路 \(store.circuits.count + 1)") : t, data: data)
+        showToast(L("已加入「\(c.name)」"))
     }
 
     /// 畫新的自訂元件，或改元件庫裡已經有的（頁面上已經放好的不受影響）
@@ -973,22 +973,22 @@ extension NotebookViewController {
         let t = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let data = CustomCircuit.symbolData(symbol)
         if let id {
-            store.update(id, name: t.isEmpty ? store.circuit(id)?.name ?? "自訂元件" : t, data: data)
+            store.update(id, name: t.isEmpty ? store.circuit(id)?.name ?? L("自訂元件") : t, data: data)
         } else {
-            let c = store.add(name: t.isEmpty ? "自訂元件 \(store.circuits.count + 1)" : t, data: data)
-            showToast("已加入「\(c.name)」")
+            let c = store.add(name: t.isEmpty ? L("自訂元件 \(store.circuits.count + 1)") : t, data: data)
+            showToast(L("已加入「\(c.name)」"))
         }
     }
 
     func promptRenameCustomCircuit(_ id: UUID) {
         guard let c = CustomCircuitStore.shared.circuit(id) else { return }
-        let a = UIAlertController(title: "自訂電路名稱", message: nil, preferredStyle: .alert)
+        let a = UIAlertController(title: L("自訂電路名稱"), message: nil, preferredStyle: .alert)
         a.addTextField { tf in
             tf.text = c.name
             tf.clearButtonMode = .whileEditing
         }
-        a.addAction(UIAlertAction(title: "取消", style: .cancel))
-        a.addAction(UIAlertAction(title: "完成", style: .default) { [weak a] _ in
+        a.addAction(UIAlertAction(title: L("取消"), style: .cancel))
+        a.addAction(UIAlertAction(title: L("完成"), style: .default) { [weak a] _ in
             let t = (a?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             if !t.isEmpty { CustomCircuitStore.shared.rename(id, to: t) }
         })
@@ -1046,7 +1046,7 @@ extension NotebookViewController {
     /// 輸入元件名稱（例如 R1、U2）：選取中的元件再點一下（見 handleCircuitTap）、或工具列的「元件名稱」
     func promptComponentName(_ ref: ElementRef, component id: UUID) {
         guard let c = circuitInfo(ref)?.data.components.first(where: { $0.id == id }) else { return }
-        let a = UIAlertController(title: "元件名稱", message: "例如 R_1 會變成下標、x^2 會變成上標；留空就拿掉名稱", preferredStyle: .alert)
+        let a = UIAlertController(title: L("元件名稱"), message: L("例如 R_1 會變成下標、x^2 會變成上標；留空就拿掉名稱"), preferredStyle: .alert)
         a.addTextField { tf in
             tf.text = c.name
             tf.placeholder = "R1"
@@ -1054,8 +1054,8 @@ extension NotebookViewController {
             tf.autocapitalizationType = .none
             tf.autocorrectionType = .no
         }
-        a.addAction(UIAlertAction(title: "取消", style: .cancel))
-        a.addAction(UIAlertAction(title: "完成", style: .default) { [weak self, weak a] _ in
+        a.addAction(UIAlertAction(title: L("取消"), style: .cancel))
+        a.addAction(UIAlertAction(title: L("完成"), style: .default) { [weak self, weak a] _ in
             self?.setComponentName(ref, component: id, to: a?.textFields?.first?.text ?? "")
         })
         present(a, animated: true)
@@ -1081,7 +1081,7 @@ extension NotebookViewController {
 
     func promptWireLabel(_ ref: ElementRef, wire id: UUID, near local: CGPoint) {
         guard let w = circuitInfo(ref)?.data.wires.first(where: { $0.id == id }) else { return }
-        let a = UIAlertController(title: "導線名稱", message: "例如 V_in 會變成下標、x^2 會變成上標；留空就拿掉名稱", preferredStyle: .alert)
+        let a = UIAlertController(title: L("導線名稱"), message: L("例如 V_in 會變成下標、x^2 會變成上標；留空就拿掉名稱"), preferredStyle: .alert)
         a.addTextField { tf in
             tf.text = w.label
             tf.placeholder = "Vout"
@@ -1089,8 +1089,8 @@ extension NotebookViewController {
             tf.autocapitalizationType = .none
             tf.autocorrectionType = .no
         }
-        a.addAction(UIAlertAction(title: "取消", style: .cancel))
-        a.addAction(UIAlertAction(title: "完成", style: .default) { [weak self, weak a] _ in
+        a.addAction(UIAlertAction(title: L("取消"), style: .cancel))
+        a.addAction(UIAlertAction(title: L("完成"), style: .default) { [weak self, weak a] _ in
             self?.setWireLabel(ref, wire: id, to: a?.textFields?.first?.text ?? "", near: local)
         })
         present(a, animated: true)
@@ -1120,11 +1120,11 @@ extension NotebookViewController {
     /// 電路圖存成 SVG 分享（存到檔案、AirDrop、傳給別的 App）
     func exportCircuitSVG(_ ref: ElementRef, from source: UIView? = nil) {
         guard let info = circuitInfo(ref) else { return }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("電路圖.svg")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(L("電路圖.svg"))
         do {
             try CircuitRenderer.svg(info.data).write(to: url, atomically: true, encoding: .utf8)
         } catch {
-            showMessage("匯出失敗", error.localizedDescription)
+            showMessage(L("匯出失敗"), error.localizedDescription)
             return
         }
         let vc = UIActivityViewController(activityItems: [url], applicationActivities: nil)
@@ -1211,8 +1211,8 @@ extension NotebookViewController {
     func buildCircuitRibbon() -> [UIView] {
         circuitLibrary.currentMode = circuitMode
         // 選取、接線、橡皮擦（從元件庫點的元件也是一種模式：都不亮）
-        var views: [UIView] = [circuitModeButton("cursorarrow", "選取", .select), circuitModeButton("line.diagonal", "接線", .wire),
-                               circuitModeButton("eraser", "橡皮擦", .erase)]
+        var views: [UIView] = [circuitModeButton("cursorarrow", L("選取"), .select), circuitModeButton("line.diagonal", L("接線"), .wire),
+                               circuitModeButton("eraser", L("橡皮擦"), .erase)]
         func action(_ symbol: String, _ label: String, _ handler: @escaping () -> Void) -> UIButton {
             let b = makeButton(symbol: symbol, title: nil, action: nil)
             b.accessibilityLabel = label
@@ -1221,17 +1221,17 @@ extension NotebookViewController {
         }
         if case let .items(ids)? = circuitSel, let ref = circuitTarget, let data = circuitInfo(ref)?.data {
             views.append(toolbarSeparator())
-            views.append(action("rotate.right", "旋轉 90°") { [weak self] in self?.transformCircuitSelection(.rotate) })
-            views.append(action("arrow.left.and.right.righttriangle.left.righttriangle.right", "水平翻轉") { [weak self] in
+            views.append(action("rotate.right", L("旋轉 90°")) { [weak self] in self?.transformCircuitSelection(.rotate) })
+            views.append(action("arrow.left.and.right.righttriangle.left.righttriangle.right", L("水平翻轉")) { [weak self] in
                 self?.transformCircuitSelection(.flipH)
             })
-            views.append(action("arrow.up.and.down.righttriangle.up.righttriangle.down", "垂直翻轉") { [weak self] in
+            views.append(action("arrow.up.and.down.righttriangle.up.righttriangle.down", L("垂直翻轉")) { [weak self] in
                 self?.transformCircuitSelection(.flipV)
             })
             views.append(toolbarSeparator())
             let grouped = data.isOneGroup(ids)
-            let group = makeButton(symbol: grouped ? "rectangle.3.group" : "rectangle.3.group.fill", title: grouped ? "解散群組" : "群組", action: nil)
-            group.accessibilityLabel = grouped ? "解散群組" : "群組"
+            let group = makeButton(symbol: grouped ? "rectangle.3.group" : "rectangle.3.group.fill", title: grouped ? L("解散群組") : L("群組"), action: nil)
+            group.accessibilityLabel = grouped ? L("解散群組") : L("群組")
             group.addAction(UIAction { [weak self] _ in
                 if grouped { self?.ungroupCircuitSelection() } else { self?.groupCircuitSelection() }
             }, for: .touchUpInside)
@@ -1240,23 +1240,23 @@ extension NotebookViewController {
         }
         if let c = selectedCircuitComponent {
             views.append(toolbarSeparator())
-            views.append(action("rotate.right", "旋轉 90°") { [weak self] in
+            views.append(action("rotate.right", L("旋轉 90°")) { [weak self] in
                 self?.modifySelectedComponent { $0.rotation = ($0.rotation + 90) % 360 }
             })
-            views.append(action("arrow.left.and.right.righttriangle.left.righttriangle.right", "水平翻轉") { [weak self] in
+            views.append(action("arrow.left.and.right.righttriangle.left.righttriangle.right", L("水平翻轉")) { [weak self] in
                 self?.modifySelectedComponent { $0.flipH.toggle() }
             })
-            views.append(action("arrow.up.and.down.righttriangle.up.righttriangle.down", "垂直翻轉") { [weak self] in
+            views.append(action("arrow.up.and.down.righttriangle.up.righttriangle.down", L("垂直翻轉")) { [weak self] in
                 self?.modifySelectedComponent { $0.flipV.toggle() }
             })
             if let ref = circuitTarget {
-                views.append(action("character.textbox", "元件名稱") { [weak self] in
+                views.append(action("character.textbox", L("元件名稱")) { [weak self] in
                     self?.promptComponentName(ref, component: c.id)
                 })
             }
             if c.part.hasVariableInputs {
                 let range = c.part.sizeRange
-                views.append(action("minus.circle", "減少") { [weak self] in
+                views.append(action("minus.circle", L("減少")) { [weak self] in
                     self?.modifySelectedComponent { $0.inputs = max(range.lowerBound, $0.inputs - 1) }
                     if let n = self?.selectedCircuitComponent?.inputs { self?.circuitGateInputs[c.part] = n }
                     self?.rebuildSubBar()
@@ -1265,7 +1265,7 @@ extension NotebookViewController {
                 label.text = c.part.sizeLabel(c.inputs)
                 label.font = .monospacedDigitSystemFont(ofSize: 14, weight: .medium)
                 views.append(label)
-                views.append(action("plus.circle", "增加") { [weak self] in
+                views.append(action("plus.circle", L("增加")) { [weak self] in
                     self?.modifySelectedComponent { $0.inputs = min(range.upperBound, $0.inputs + 1) }
                     if let n = self?.selectedCircuitComponent?.inputs { self?.circuitGateInputs[c.part] = n }
                     self?.rebuildSubBar()
@@ -1275,8 +1275,8 @@ extension NotebookViewController {
         }
         if let ref = circuitTarget, circuitInfo(ref) != nil {
             views.append(toolbarSeparator())
-            let b = makeButton(symbol: "square.and.arrow.up", title: "匯出 SVG", action: nil)
-            b.accessibilityLabel = "匯出 SVG"
+            let b = makeButton(symbol: "square.and.arrow.up", title: L("匯出 SVG"), action: nil)
+            b.accessibilityLabel = L("匯出 SVG")
             b.addAction(UIAction { [weak self, weak b] _ in self?.exportCircuitSVG(ref, from: b) }, for: .touchUpInside)
             views.append(b)
         }
@@ -1284,8 +1284,8 @@ extension NotebookViewController {
     }
 
     private func customCircuitButton() -> UIButton {
-        let b = makeButton(symbol: "square.and.arrow.down.on.square", title: "自訂電路", action: nil)
-        b.accessibilityLabel = "加入自訂電路圖"
+        let b = makeButton(symbol: "square.and.arrow.down.on.square", title: L("自訂電路"), action: nil)
+        b.accessibilityLabel = L("加入自訂電路圖")
         b.addAction(UIAction { [weak self] _ in self?.addSelectionToCustomCircuits() }, for: .touchUpInside)
         return b
     }
@@ -1314,12 +1314,12 @@ extension NotebookViewController {
         circuitMode = mode
         if case let .place(part) = mode {
             circuitSel = nil
-            showToast(settings.circuitContinuousPlace ? "連續點頁面放置\(part.title)，按「選取」結束" : "點頁面放置\(part.title)")
+            showToast(settings.circuitContinuousPlace ? L("連續點頁面放置\(part.title)，按「選取」結束") : L("點頁面放置\(part.title)"))
         }
         if case let .placeCustom(id) = mode {
             circuitSel = nil
-            let name = CustomCircuitStore.shared.circuit(id)?.name ?? "自訂電路"
-            showToast(settings.circuitContinuousPlace ? "連續點頁面放置\(name)，按「選取」結束" : "點頁面放置\(name)")
+            let name = CustomCircuitStore.shared.circuit(id)?.name ?? L("自訂電路")
+            showToast(settings.circuitContinuousPlace ? L("連續點頁面放置\(name)，按「選取」結束") : L("點頁面放置\(name)"))
         }
         if mode == .erase { circuitSel = nil }
         rebuildSubBar()

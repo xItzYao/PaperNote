@@ -237,7 +237,7 @@ extension NotebookViewController {
         let hintKey = "lasso.tapForMenuHintShown"
         if !UserDefaults.standard.bool(forKey: hintKey) {
             UserDefaults.standard.set(true, forKey: hintKey)
-            showToast("拖曳可以移動，只圈到筆跡時拉右下角可以縮放；點一下選取範圍打開選單")
+            showToast(L("拖曳可以移動，只圈到筆跡時拉右下角可以縮放；點一下選取範圍打開選單"))
         }
     }
 
@@ -448,23 +448,23 @@ extension NotebookViewController {
     func presentLassoMenu() {
         guard let sel = lassoSel else { return }
         var children: [UIMenuElement] = [
-            UIAction(title: "拷貝", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in self?.copyLasso() },
-            UIAction(title: "剪下", image: UIImage(systemName: "scissors")) { [weak self] _ in
+            UIAction(title: L("拷貝"), image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in self?.copyLasso() },
+            UIAction(title: L("剪下"), image: UIImage(systemName: "scissors")) { [weak self] _ in
                 self?.copyLasso()
                 self?.deleteLasso()
             },
-            UIAction(title: "複製一份", image: UIImage(systemName: "plus.square.on.square")) { [weak self] _ in self?.duplicateLasso() },
-            UIAction(title: "刪除", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in self?.deleteLasso() },
+            UIAction(title: L("複製一份"), image: UIImage(systemName: "plus.square.on.square")) { [weak self] _ in self?.duplicateLasso() },
+            UIAction(title: L("刪除"), image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in self?.deleteLasso() },
         ]
         // 圈到筆跡：可以直接改顏色
         if sel.hasInk { children.insert(lassoColorMenu(), at: 0) }
         // 圈到一個物件（可以連上面的字一起）：換到選取工具編輯它
         if lassoEditTarget != nil {
-            children.insert(UIAction(title: "編輯", image: UIImage(systemName: "pencil")) { [weak self] _ in self?.editLassoTarget() }, at: 0)
+            children.insert(UIAction(title: L("編輯"), image: UIImage(systemName: "pencil")) { [weak self] _ in self?.editLassoTarget() }, at: 0)
         }
         // 圈到電路圖：可以直接回到電路工具編輯
         if let circuit = sel.elements.first(where: { ref in locate(ref).map { pages[$0.0].elements[$0.1].isCircuit } ?? false }) {
-            children.insert(UIAction(title: "編輯電路圖", image: UIImage(systemName: "bolt")) { [weak self] _ in
+            children.insert(UIAction(title: L("編輯電路圖"), image: UIImage(systemName: "bolt")) { [weak self] _ in
                 self?.clearLassoSelection()
                 self?.editCircuit(circuit)
             }, at: 0)
@@ -499,10 +499,10 @@ extension NotebookViewController {
         var items: [UIMenuElement] = colors.map { hex in
             UIAction(title: hex, image: Self.colorSwatch(UIColor(hex: hex))) { [weak self] _ in self?.recolorLasso(UIColor(hex: hex)) }
         }
-        items.append(UIAction(title: "其他顏色…", image: UIImage(systemName: "eyedropper")) { [weak self] _ in self?.presentLassoColorPicker() })
+        items.append(UIAction(title: L("其他顏色…"), image: UIImage(systemName: "eyedropper")) { [weak self] _ in self?.presentLassoColorPicker() })
         let grid = UIMenu(title: "", options: .displayInline, children: items)
         grid.preferredElementSize = .small
-        return UIMenu(title: "顏色", image: UIImage(systemName: "paintpalette"), children: [grid])
+        return UIMenu(title: L("顏色"), image: UIImage(systemName: "paintpalette"), children: [grid])
     }
 
     static func colorSwatch(_ color: UIColor) -> UIImage {
@@ -735,7 +735,7 @@ extension NotebookViewController {
     func handleImageDeleteTap(at p: CGPoint) -> Bool {
         guard let t = imageDeleteTarget(), t.point.distance(to: p) < 20 / canvas.zoomScale else { return false }
         deleteElement(t.ref)
-        showToast("已刪除圖片（可以按復原）")
+        showToast(L("已刪除圖片（可以按復原）"))
         return true
     }
 
@@ -749,7 +749,7 @@ extension NotebookViewController {
         if case let (pi, ei)? = locate(ref) {
             let e = pages[pi].elements[ei]
             if e.isCircuit {
-                showToast(e.locked ? "已鎖定：不能編輯、移動，也不會被套索圈到" : "已解除鎖定：可以編輯、移動，也能被套索圈到")
+                showToast(e.locked ? L("已鎖定：不能編輯、移動，也不會被套索圈到") : L("已解除鎖定：可以編輯、移動，也能被套索圈到"))
                 // 鎖住正在編輯的電路圖：不能再編輯了
                 if e.locked, circuitTarget == ref {
                     circuitTarget = nil
@@ -758,7 +758,7 @@ extension NotebookViewController {
                 }
                 updateCircuitChrome()
             } else {
-                showToast(e.locked ? "已鎖定：不能移動，也不會被套索圈到" : "已解除鎖定：可以移動，也能被套索圈到")
+                showToast(e.locked ? L("已鎖定：不能移動，也不會被套索圈到") : L("已解除鎖定：可以移動，也能被套索圈到"))
             }
         }
         clearLassoSelection()

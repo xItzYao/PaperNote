@@ -13,12 +13,12 @@ enum BackupError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .noClientID: return "還沒有設定 Google OAuth 用戶端 ID。"
-        case .notSignedIn: return "還沒有連結 Google Drive。"
-        case let .authFailed(msg): return "Google 登入失敗：\(msg)"
-        case let .http(code, body): return "Google Drive 回應錯誤（\(code)）：\(body.prefix(200))"
-        case .newerManifest: return "雲端備份是比較新的 PaperNote 建立的，請先更新 App。"
-        case .badManifest: return "雲端的備份清單無法讀取，這次沒有備份，雲端的資料也沒有變動。"
+        case .noClientID: return L("還沒有設定 Google OAuth 用戶端 ID。")
+        case .notSignedIn: return L("還沒有連結 Google Drive。")
+        case let .authFailed(msg): return L("Google 登入失敗：\(msg)")
+        case let .http(code, body): return L("Google Drive 回應錯誤（\(code)）：\(body.prefix(200))")
+        case .newerManifest: return L("雲端備份是比較新的 PaperNote 建立的，請先更新 App。")
+        case .badManifest: return L("雲端的備份清單無法讀取，這次沒有備份，雲端的資料也沒有變動。")
         }
     }
 }
@@ -109,7 +109,7 @@ final class GoogleAuth: NSObject, ASWebAuthenticationPresentationContextProvidin
             }
             guard let url, let code = URLComponents(url: url, resolvingAgainstBaseURL: false)?
                 .queryItems?.first(where: { $0.name == "code" })?.value else {
-                DispatchQueue.main.async { completion(.failure(BackupError.authFailed("沒有取得授權碼"))) }
+                DispatchQueue.main.async { completion(.failure(BackupError.authFailed(L("沒有取得授權碼")))) }
                 return
             }
             Task {
@@ -138,7 +138,7 @@ final class GoogleAuth: NSObject, ASWebAuthenticationPresentationContextProvidin
             "code": code, "client_id": clientID, "redirect_uri": redirectURI,
             "grant_type": "authorization_code", "code_verifier": verifier,
         ])
-        guard let refresh = json["refresh_token"] as? String else { throw BackupError.authFailed("沒有取得 refresh token") }
+        guard let refresh = json["refresh_token"] as? String else { throw BackupError.authFailed(L("沒有取得 refresh token")) }
         Keychain.set("refreshToken", refresh)
         UserDefaults.standard.set(clientID, forKey: "google.signedInClientID")
         store(json)
@@ -152,7 +152,7 @@ final class GoogleAuth: NSObject, ASWebAuthenticationPresentationContextProvidin
             "refresh_token": refresh, "client_id": clientID, "grant_type": "refresh_token",
         ])
         store(json)
-        guard let t = accessToken else { throw BackupError.authFailed("無法更新登入狀態") }
+        guard let t = accessToken else { throw BackupError.authFailed(L("無法更新登入狀態")) }
         return t
     }
 

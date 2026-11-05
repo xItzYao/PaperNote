@@ -5,7 +5,7 @@ final class PageOverviewController: UIViewController, UICollectionViewDataSource
     private weak var editor: NotebookViewController?
     private var collection: UICollectionView!
     private let layout = UICollectionViewFlowLayout()
-    private let filter = UISegmentedControl(items: ["全部頁面", "我的最愛"])
+    private let filter = UISegmentedControl(items: [L("全部頁面"), L("我的最愛")])
     private var selecting = false
     private var selectedIDs = Set<UUID>()
     private let currentID: UUID?
@@ -49,7 +49,7 @@ final class PageOverviewController: UIViewController, UICollectionViewDataSource
         filter.selectedSegmentIndex = 0
         filter.addAction(UIAction { [weak self] _ in self?.reload() }, for: .valueChanged)
         navigationItem.titleView = filter
-        navigationItem.leftBarButtonItem = UIBarButtonItem(title: "關閉", primaryAction: UIAction { [weak self] _ in
+        navigationItem.leftBarButtonItem = UIBarButtonItem(title: L("關閉"), primaryAction: UIAction { [weak self] _ in
             self?.dismiss(animated: true)
         })
         updateBars()
@@ -82,7 +82,7 @@ final class PageOverviewController: UIViewController, UICollectionViewDataSource
         selectedIDs.formIntersection(items.map(\.page.id))
         collection.reloadData()
         updateBars()
-        collection.backgroundView = items.isEmpty ? emptyLabel(favOnly ? "還沒有我的最愛頁面" : "沒有頁面") : nil
+        collection.backgroundView = items.isEmpty ? emptyLabel(favOnly ? L("還沒有我的最愛頁面") : L("沒有頁面")) : nil
     }
 
     private func emptyLabel(_ text: String) -> UIView {
@@ -96,7 +96,7 @@ final class PageOverviewController: UIViewController, UICollectionViewDataSource
     // MARK: 工具列
 
     private func updateBars() {
-        navigationItem.rightBarButtonItem = UIBarButtonItem(title: selecting ? "完成" : "選取", primaryAction: UIAction { [weak self] _ in
+        navigationItem.rightBarButtonItem = UIBarButtonItem(title: selecting ? L("完成") : L("選取"), primaryAction: UIAction { [weak self] _ in
             guard let self else { return }
             self.selecting.toggle()
             self.selectedIDs.removeAll()
@@ -107,18 +107,18 @@ final class PageOverviewController: UIViewController, UICollectionViewDataSource
         guard selecting else { return }
         let n = selectedIDs.count
         let allSelected = !items.isEmpty && n == items.count
-        let selectAll = UIBarButtonItem(title: allSelected ? "全部取消" : "全選", primaryAction: UIAction { [weak self] _ in
+        let selectAll = UIBarButtonItem(title: allSelected ? L("全部取消") : L("全選"), primaryAction: UIAction { [weak self] _ in
             guard let self else { return }
             self.selectedIDs = allSelected ? [] : Set(self.items.map(\.page.id))
             self.collection.reloadData()
             self.updateBars()
         })
-        let count = UIBarButtonItem(title: n == 0 ? "選擇頁面" : "已選 \(n) 頁", style: .plain, target: nil, action: nil)
+        let count = UIBarButtonItem(title: n == 0 ? L("選擇頁面") : L("已選 \(n) 頁"), style: .plain, target: nil, action: nil)
         count.isEnabled = false
-        let duplicate = UIBarButtonItem(title: "複製", image: UIImage(systemName: "plus.square.on.square"), primaryAction: UIAction { [weak self] _ in
+        let duplicate = UIBarButtonItem(title: L("複製"), image: UIImage(systemName: "plus.square.on.square"), primaryAction: UIAction { [weak self] _ in
             self?.duplicateSelected()
         })
-        let delete = UIBarButtonItem(title: "刪除", image: UIImage(systemName: "trash"), primaryAction: UIAction { [weak self] _ in
+        let delete = UIBarButtonItem(title: L("刪除"), image: UIImage(systemName: "trash"), primaryAction: UIAction { [weak self] _ in
             self?.deleteSelected()
         })
         delete.tintColor = .systemRed
@@ -134,19 +134,19 @@ final class PageOverviewController: UIViewController, UICollectionViewDataSource
         editor.duplicatePages(selectedIDs)
         selectedIDs.removeAll()
         reload()
-        editor.showToast("已複製 \(n) 頁")
+        editor.showToast(L("已複製 \(n) 頁"))
     }
 
     private func deleteSelected() {
         guard let editor, !selectedIDs.isEmpty else { return }
         let n = selectedIDs.count
         guard n < editor.pages.count else {
-            editor.showMessage("至少要保留一頁")
+            editor.showMessage(L("至少要保留一頁"))
             return
         }
-        let a = UIAlertController(title: "刪除 \(n) 頁？", message: "會移到「最近刪除的頁面」，30 天內可以還原。", preferredStyle: .alert)
-        a.addAction(UIAlertAction(title: "取消", style: .cancel))
-        a.addAction(UIAlertAction(title: "刪除", style: .destructive) { [weak self] _ in
+        let a = UIAlertController(title: L("刪除 \(n) 頁？"), message: L("會移到「最近刪除的頁面」，30 天內可以還原。"), preferredStyle: .alert)
+        a.addAction(UIAlertAction(title: L("取消"), style: .cancel))
+        a.addAction(UIAlertAction(title: L("刪除"), style: .destructive) { [weak self] _ in
             guard let self, let editor = self.editor else { return }
             editor.trashPages(self.selectedIDs)
             self.selectedIDs.removeAll()
@@ -409,6 +409,6 @@ extension NotebookViewController {
                 session.trashPage(at: i)
             }
         }
-        showToast("\(n) 頁已移到「頁面 → 最近刪除的頁面」，30 天內可以還原")
+        showToast(L("\(n) 頁已移到「頁面 → 最近刪除的頁面」，30 天內可以還原"))
     }
 }

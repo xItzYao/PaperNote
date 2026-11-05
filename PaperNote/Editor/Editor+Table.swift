@@ -107,23 +107,23 @@ extension NotebookViewController {
         let a = tableSelectionAnchor()
         var row: [UIView] = actions.edit.map(ribbonButton)
         row.append(toolbarSeparator())
-        row.append(ribbonMenuButton("平均分配", symbol: "arrow.left.and.right.square") { [weak self] in self?.tableDistributeItems() ?? [] })
-        row.append(ribbonMenuButton("鎖定", symbol: "lock.rectangle") { [weak self] in self?.tableLockItems() ?? [] })
+        row.append(ribbonMenuButton(L("平均分配"), symbol: "arrow.left.and.right.square") { [weak self] in self?.tableDistributeItems() ?? [] })
+        row.append(ribbonMenuButton(L("鎖定"), symbol: "lock.rectangle") { [weak self] in self?.tableLockItems() ?? [] })
         row.append(toolbarSeparator())
-        row.append(ribbonColorButton("底色", hex: s.table.fill(a.row, a.col), clear: "無底色") { [weak self] hex in
+        row.append(ribbonColorButton(L("底色"), hex: s.table.fill(a.row, a.col), clear: L("無底色")) { [weak self] hex in
             self?.tableAction { t, r in t.setFill(r, hex: hex) }
         })
-        row.append(ribbonColorButton("字色", hex: s.table.textColor(a.row, a.col) ?? TableData.defaultTextColor, clear: nil) { [weak self] hex in
+        row.append(ribbonColorButton(L("字色"), hex: s.table.textColor(a.row, a.col) ?? TableData.defaultTextColor, clear: nil) { [weak self] hex in
             self?.tableAction { t, r in t.setTextColor(r, hex: hex) }
         })
-        row.append(ribbonStepper("字級", value: \.fontSize, minus: { $0.fontSize = max($0.fontSize - 2, 8) },
+        row.append(ribbonStepper(L("字級"), value: \.fontSize, minus: { $0.fontSize = max($0.fontSize - 2, 8) },
                                  plus: { $0.fontSize = min($0.fontSize + 2, 48) }))
         row.append(toolbarSeparator())
-        row.append(ribbonColorButton("格線", hex: s.table.lineColorHex, clear: nil) { [weak self] hex in
+        row.append(ribbonColorButton(L("格線"), hex: s.table.lineColorHex, clear: nil) { [weak self] hex in
             guard let self, let s = self.selectedTable(), let hex else { return }
             self.modifyTable(s.ref) { $0.lineColorHex = hex }
         })
-        row.append(ribbonStepper("線寬", value: \.lineWidth, minus: { $0.lineWidth = max($0.lineWidth - 0.5, 0.5) },
+        row.append(ribbonStepper(L("線寬"), value: \.lineWidth, minus: { $0.lineWidth = max($0.lineWidth - 0.5, 0.5) },
                                  plus: { $0.lineWidth = min($0.lineWidth + 0.5, 5) }))
         row.append(toolbarSeparator())
         row.append(ribbonButton(actions.deleteTable))
@@ -219,7 +219,7 @@ extension NotebookViewController {
             }, for: .touchUpInside)
             return b
         }
-        let stack = UIStackView(arrangedSubviews: [button("minus.circle", "減少\(title)", minus), l, button("plus.circle", "增加\(title)", plus)])
+        let stack = UIStackView(arrangedSubviews: [button("minus.circle", L("減少\(title)"), minus), l, button("plus.circle", L("增加\(title)"), plus)])
         stack.axis = .horizontal
         stack.alignment = .center
         return stack
@@ -312,7 +312,7 @@ extension NotebookViewController {
             r = CGRect(x: left, y: 0, width: w * CGFloat(plan.count + 1), height: t.size.height)
         }
         overlay.showFillPreview(r.offsetBy(dx: s.docRect.minX, dy: s.docRect.minY))
-        tableCellLabel?.text = "重複 \(plan.count) 組"
+        tableCellLabel?.text = L("重複 \(plan.count) 組")
     }
 
     func finishFillDrag(from a: CGPoint, to b: CGPoint) {
@@ -324,7 +324,7 @@ extension NotebookViewController {
         let before = s.table.repeatGroup?.count ?? 0
         modifyTable(s.ref) { $0.setRepeat(axis: plan.axis, start: plan.start, length: plan.length, before: false, count: plan.count) }
         if plan.count != before || plan.count > 0 {
-            showToast(plan.count > 0 ? "已重複 \(plan.count) 組（可以再拖藍點，或用「重複」改組數）" : "已移除重複的組")
+            showToast(plan.count > 0 ? L("已重複 \(plan.count) 組（可以再拖藍點，或用「重複」改組數）") : L("已移除重複的組"))
         }
         updateTableCellChrome()
     }
@@ -344,9 +344,9 @@ extension NotebookViewController {
         let label: (Int) -> String = { [weak self] d in
             guard let self else { return "" }
             if let g = editing, (g.axis == .rows) == (d < 2), g.before == (d % 2 == 0) {
-                return g.axis == .rows ? "第 \(g.start + 1)–\(g.start + g.length) 列" : "\(self.columnName(g.start))–\(self.columnName(g.start + g.length - 1)) 欄"
+                return g.axis == .rows ? L("第 \(g.start + 1)–\(g.start + g.length) 列") : L("\(self.columnName(g.start))–\(self.columnName(g.start + g.length - 1)) 欄")
             }
-            return d < 2 ? "第 \(sel.r0 + 1)–\(sel.r1 + 1) 列" : "\(self.columnName(sel.c0))–\(self.columnName(sel.c1)) 欄"
+            return d < 2 ? L("第 \(sel.r0 + 1)–\(sel.r1 + 1) 列") : L("\(self.columnName(sel.c0))–\(self.columnName(sel.c1)) 欄")
         }
         let panel = TableRepeatPanel(direction: direction, count: editing?.count ?? 1, editing: editing != nil, blockLabel: label,
                                      onApply: { [weak self] d, n in self?.applyTableRepeat(direction: d, count: n, editing: editing, selection: sel) })
@@ -366,7 +366,7 @@ extension NotebookViewController {
         }
         modifyTable(s.ref) { $0.setRepeat(axis: axis, start: start, length: length, before: before, count: count) }
         dismissToolPopover()
-        showToast(count > 0 ? "已重複 \(count) 組" : "已移除重複的組")
+        showToast(count > 0 ? L("已重複 \(count) 組") : L("已移除重複的組"))
         updateTableCellChrome()
     }
 
@@ -467,7 +467,7 @@ extension NotebookViewController {
         let lb = CGPoint(x: b.x - r.minX, y: b.y - r.minY)
         let dx = lb.x - la.x, dy = lb.y - la.y
         guard hypot(dx, dy) > 12 else {
-            showToast("線太短了")
+            showToast(L("線太短了"))
             return
         }
         let before = t
@@ -482,7 +482,7 @@ extension NotebookViewController {
                 // 往右上畫（dx、dy 異號）＝右上到左下的斜線
                 let reverse = (dx * dy) < 0
                 if let existing = t.diagonal(cell.row, cell.col), existing.reverse == reverse {
-                    showToast("這格已經有斜線了（要移除請用表格工具列的斜線選單）")
+                    showToast(L("這格已經有斜線了（要移除請用表格工具列的斜線選單）"))
                     return
                 }
                 modifyTable(ref) { $0.setDiagonal(cell.row, cell.col, reverse: reverse) }
@@ -493,7 +493,7 @@ extension NotebookViewController {
         if abs(dx) >= abs(dy) {
             let y = (la.y + lb.y) / 2
             guard y > 0, y < size.height, let row = t.rowIndex(at: y) else {
-                showToast("橫線要畫在表格裡面")
+                showToast(L("橫線要畫在表格裡面"))
                 return
             }
             let x0 = max(0, min(la.x, lb.x)), x1 = min(size.width, max(la.x, lb.x))
@@ -502,7 +502,7 @@ extension NotebookViewController {
                 return overlap >= t.colWidths[c] * 0.5
             })
             guard !cols.isEmpty else {
-                showToast("橫線要至少橫跨一格的一半")
+                showToast(L("橫線要至少橫跨一格的一半"))
                 return
             }
             // 畫在原本被合併蓋住的格線上：把那條線接回去，不是再切一條新的
@@ -517,7 +517,7 @@ extension NotebookViewController {
         } else {
             let x = (la.x + lb.x) / 2
             guard x > 0, x < size.width, let col = t.colIndex(at: x) else {
-                showToast("直線要畫在表格裡面")
+                showToast(L("直線要畫在表格裡面"))
                 return
             }
             let y0 = max(0, min(la.y, lb.y)), y1 = min(size.height, max(la.y, lb.y))
@@ -526,7 +526,7 @@ extension NotebookViewController {
                 return overlap >= t.rowHeights[rr] * 0.5
             })
             guard !rows.isEmpty else {
-                showToast("直線要至少縱跨一格的一半")
+                showToast(L("直線要至少縱跨一格的一半"))
                 return
             }
             if let line = t.nearestColLine(to: x, within: 12) {
@@ -540,7 +540,7 @@ extension NotebookViewController {
         }
         // 沒有任何變化（例如太靠近既有格線）
         if case let (pi2, ei2)? = locate(ref), case let .table(after) = pages[pi2].elements[ei2].content, after == before {
-            showToast("這條線太靠近既有的格線，沒有切出新的格子")
+            showToast(L("這條線太靠近既有的格線，沒有切出新的格子"))
         }
     }
 

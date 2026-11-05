@@ -28,13 +28,13 @@ enum CircuitPart: String, Codable, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .customSymbol: return "自訂元件"
-        case .resistor: return "電阻"
-        case .capacitor: return "電容"
-        case .inductor: return "電感"
-        case .voltageSource: return "電壓源"
-        case .currentSource: return "電流源"
-        case .ground: return "接地"
+        case .customSymbol: return L("自訂元件")
+        case .resistor: return L("電阻")
+        case .capacitor: return L("電容")
+        case .inductor: return L("電感")
+        case .voltageSource: return L("電壓源")
+        case .currentSource: return L("電流源")
+        case .ground: return L("接地")
         case .vdd: return "VDD"
         case .nmos: return "NMOS"
         case .pmos: return "PMOS"
@@ -46,56 +46,56 @@ enum CircuitPart: String, Codable, CaseIterable, Identifiable {
         case .xnorGate: return "XNOR"
         case .notGate: return "NOT"
         case .bufferGate: return "Buffer"
-        case .dFlipFlop: return "D 正反器"
-        case .dLatch: return "D 閂鎖"
-        case .mux: return "多工器"
-        case .decoder: return "解碼器"
-        case .encoder: return "編碼器"
+        case .dFlipFlop: return L("D 正反器")
+        case .dLatch: return L("D 閂鎖")
+        case .mux: return L("多工器")
+        case .decoder: return L("解碼器")
+        case .encoder: return L("編碼器")
         case .alu: return "ALU"
-        case .signalGround: return "信號接地"
-        case .chassisGround: return "機殼接地"
+        case .signalGround: return L("信號接地")
+        case .chassisGround: return L("機殼接地")
         case .vss: return "VSS"
-        case .potentiometer: return "電位器"
-        case .variableResistor: return "可變電阻"
-        case .fuse: return "保險絲"
-        case .polarCapacitor: return "極性電容"
-        case .variableCapacitor: return "可變電容"
-        case .transformer: return "變壓器"
-        case .diode: return "二極體"
-        case .schottky: return "蕭特基"
-        case .zener: return "齊納"
-        case .tunnelDiode: return "穿隧"
+        case .potentiometer: return L("電位器")
+        case .variableResistor: return L("可變電阻")
+        case .fuse: return L("保險絲")
+        case .polarCapacitor: return L("極性電容")
+        case .variableCapacitor: return L("可變電容")
+        case .transformer: return L("變壓器")
+        case .diode: return L("二極體")
+        case .schottky: return L("蕭特基")
+        case .zener: return L("齊納")
+        case .tunnelDiode: return L("穿隧")
         case .led: return "LED"
-        case .photodiode: return "光二極體"
-        case .varicap: return "變容"
-        case .battery: return "電池"
-        case .sineSource: return "弦波源"
-        case .squareSource: return "方波源"
-        case .controlledVoltageSource: return "受控電壓"
-        case .controlledCurrentSource: return "受控電流"
-        case .ammeter: return "電流表"
-        case .voltmeter: return "電壓表"
-        case .ohmmeter: return "歐姆表"
-        case .lamp: return "燈泡"
-        case .switchOpen: return "開關"
-        case .switchClosed: return "閉合開關"
-        case .pushButton: return "按鈕"
-        case .spdt: return "單刀雙擲"
-        case .nmos4: return "NMOS 4端"
-        case .pmos4: return "PMOS 4端"
+        case .photodiode: return L("光二極體")
+        case .varicap: return L("變容")
+        case .battery: return L("電池")
+        case .sineSource: return L("弦波源")
+        case .squareSource: return L("方波源")
+        case .controlledVoltageSource: return L("受控電壓")
+        case .controlledCurrentSource: return L("受控電流")
+        case .ammeter: return L("電流表")
+        case .voltmeter: return L("電壓表")
+        case .ohmmeter: return L("歐姆表")
+        case .lamp: return L("燈泡")
+        case .switchOpen: return L("開關")
+        case .switchClosed: return L("閉合開關")
+        case .pushButton: return L("按鈕")
+        case .spdt: return L("單刀雙擲")
+        case .nmos4: return L("NMOS 4端")
+        case .pmos4: return L("PMOS 4端")
         case .npn: return "NPN"
         case .pnp: return "PNP"
         case .njfet: return "N-JFET"
         case .pjfet: return "P-JFET"
         case .nigbt: return "N-IGBT"
         case .pigbt: return "P-IGBT"
-        case .opAmp: return "運算放大"
-        case .fdOpAmp: return "全差動"
+        case .opAmp: return L("運算放大")
+        case .fdOpAmp: return L("全差動")
         case .ota: return "OTA"
         case .adc: return "ADC"
         case .dac: return "DAC"
-        case .mixer: return "混頻器"
-        case .antenna: return "天線"
+        case .mixer: return L("混頻器")
+        case .antenna: return L("天線")
         }
     }
 
@@ -137,7 +137,7 @@ enum CircuitPart: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .decoder: return "\(n) → \(1 << n)"
         case .encoder: return "\(1 << n) → \(n)"
-        default: return "\(n) 輸入"
+        default: return L("\(n) 輸入")
         }
     }
 

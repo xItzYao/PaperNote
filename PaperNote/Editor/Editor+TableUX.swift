@@ -32,7 +32,7 @@ extension NotebookViewController {
         switch g {
         case let .merge(ranges):
             modifyTable(ref) { for r in ranges { $0.mergeCells(r) } }
-            showToast(ranges.count > 1 ? "已合併 \(ranges.count) 組格子" : "已合併格子")
+            showToast(ranges.count > 1 ? L("已合併 \(ranges.count) 組格子") : L("已合併格子"))
         case let .addRow(at, height):
             modifyElement(ref) { e in
                 guard case var .table(t) = e.content else { return }
@@ -43,7 +43,7 @@ extension NotebookViewController {
                 e.content = .table(t)
                 e.frame.size = t.size
             }
-            showToast(at == 0 ? "已在上面加一列" : "已在下面加一列")
+            showToast(at == 0 ? L("已在上面加一列") : L("已在下面加一列"))
         case let .addColumn(at, width):
             modifyElement(ref) { e in
                 guard case var .table(t) = e.content else { return }
@@ -53,7 +53,7 @@ extension NotebookViewController {
                 e.content = .table(t)
                 e.frame.size = t.size
             }
-            showToast(at == 0 ? "已在左邊加一欄" : "已在右邊加一欄")
+            showToast(at == 0 ? L("已在左邊加一欄") : L("已在右邊加一欄"))
         }
         updateTableDraftChrome()
     }
@@ -72,7 +72,7 @@ extension NotebookViewController {
     func toggleTableEraseLines() {
         tableEraseLines.toggle()
         rebuildSubBar()
-        showToast(tableEraseLines ? "擦線：沿著格線擦，放開就合併兩邊的格子；沿著斜線擦就拿掉斜線" : "畫線：切開格子、畫斜線、在表格旁邊加列欄")
+        showToast(tableEraseLines ? L("擦線：沿著格線擦，放開就合併兩邊的格子；沿著斜線擦就拿掉斜線") : L("畫線：切開格子、畫斜線、在表格旁邊加列欄"))
     }
 
     /// 擦線：p 是到目前為止擦過的路徑（文件座標）。會被擦掉的線先變半透明
@@ -223,21 +223,21 @@ extension NotebookViewController {
     /// edit＝重複、合併、分割、手繪格線、刪除列、刪除欄；deleteTable 放在最右邊（取消合併：用手繪格線把線畫回去）
     func tableRibbonActions() -> (edit: [UIAction], deleteTable: UIAction) {
         let edit = [
-            UIAction(title: "重複…", image: UIImage(systemName: "square.stack.3d.down.right")) { [weak self] _ in
+            UIAction(title: L("重複…"), image: UIImage(systemName: "square.stack.3d.down.right")) { [weak self] _ in
                 self?.presentRepeatPanel(anchor: .selection)
             },
-            UIAction(title: "合併", image: TableIcons.merge) { [weak self] _ in self?.tableAction { t, r in t.mergeCells(r) } },
-            UIAction(title: "分割…", image: TableIcons.split) { [weak self] _ in self?.presentSplitPanel(anchor: .selection) },
-            UIAction(title: "手繪格線", image: UIImage(systemName: "pencil.and.outline")) { [weak self] _ in
+            UIAction(title: L("合併"), image: TableIcons.merge) { [weak self] _ in self?.tableAction { t, r in t.mergeCells(r) } },
+            UIAction(title: L("分割…"), image: TableIcons.split) { [weak self] _ in self?.presentSplitPanel(anchor: .selection) },
+            UIAction(title: L("手繪格線"), image: UIImage(systemName: "pencil.and.outline")) { [weak self] _ in
                 self?.beginTableHandDraw()
             },
-            tableAct("刪除列", "minus.rectangle", attributes: .destructive) { t, r in for row in (r.r0...r.r1).reversed() { t.removeRow(row) } },
-            tableAct("刪除欄", "minus.rectangle.portrait", attributes: .destructive) { t, r in for col in (r.c0...r.c1).reversed() { t.removeColumn(col) } },
+            tableAct(L("刪除列"), "minus.rectangle", attributes: .destructive) { t, r in for row in (r.r0...r.r1).reversed() { t.removeRow(row) } },
+            tableAct(L("刪除欄"), "minus.rectangle.portrait", attributes: .destructive) { t, r in for col in (r.c0...r.c1).reversed() { t.removeColumn(col) } },
         ]
-        let deleteTable = UIAction(title: "刪除表格", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
+        let deleteTable = UIAction(title: L("刪除表格"), image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
             guard let self, let s = self.selectedTable() else { return }
             self.deleteElement(s.ref)
-            self.showToast("已刪除表格（可以按復原）")
+            self.showToast(L("已刪除表格（可以按復原）"))
         }
         return (edit, deleteTable)
     }
@@ -245,8 +245,8 @@ extension NotebookViewController {
     /// 工具列「平均分配」的選單：選取範圍的欄寬或列高（只選一欄、一列時是整個表格）
     func tableDistributeItems() -> [UIMenuElement] {
         [
-            tableAct("平均分配欄寬", "arrow.left.and.right") { t, r in t.distributeColumns(r.c1 > r.c0 ? r.c0...r.c1 : nil) },
-            tableAct("平均分配列高", "arrow.up.and.down") { t, r in t.distributeRows(r.r1 > r.r0 ? r.r0...r.r1 : nil) },
+            tableAct(L("平均分配欄寬"), "arrow.left.and.right") { t, r in t.distributeColumns(r.c1 > r.c0 ? r.c0...r.c1 : nil) },
+            tableAct(L("平均分配列高"), "arrow.up.and.down") { t, r in t.distributeRows(r.r1 > r.r0 ? r.r0...r.r1 : nil) },
         ]
     }
 
@@ -257,10 +257,10 @@ extension NotebookViewController {
         let cols = (r.c0...r.c1).allSatisfy(s.table.lockedCols.contains)
         let rows = (r.r0...r.r1).allSatisfy(s.table.lockedRows.contains)
         return [
-            UIAction(title: "鎖定欄寬", image: UIImage(systemName: "arrow.left.and.right"), state: cols ? .on : .off) { [weak self] _ in
+            UIAction(title: L("鎖定欄寬"), image: UIImage(systemName: "arrow.left.and.right"), state: cols ? .on : .off) { [weak self] _ in
                 self?.toggleTableLock(columns: true)
             },
-            UIAction(title: "鎖定列高", image: UIImage(systemName: "arrow.up.and.down"), state: rows ? .on : .off) { [weak self] _ in
+            UIAction(title: L("鎖定列高"), image: UIImage(systemName: "arrow.up.and.down"), state: rows ? .on : .off) { [weak self] _ in
                 self?.toggleTableLock(columns: false)
             },
         ]
@@ -281,18 +281,18 @@ extension NotebookViewController {
     func tableRowColItems() -> [UIMenuElement] {
         guard selectedTable() != nil else { return [] }
         let r = tableCellSel ?? CellRange((0, 0), (0, 0))
-        let colsName = r.c1 > r.c0 ? "\(columnName(r.c0))–\(columnName(r.c1)) 欄" : "\(columnName(r.c0)) 欄"
-        let rowsName = r.r1 > r.r0 ? "第 \(r.r0 + 1)–\(r.r1 + 1) 列" : "第 \(r.r0 + 1) 列"
+        let colsName = r.c1 > r.c0 ? L("\(columnName(r.c0))–\(columnName(r.c1)) 欄") : L("\(columnName(r.c0)) 欄")
+        let rowsName = r.r1 > r.r0 ? L("第 \(r.r0 + 1)–\(r.r1 + 1) 列") : L("第 \(r.r0 + 1) 列")
         return [
-            UIMenu(title: "插入", image: UIImage(systemName: "plus.rectangle.on.rectangle"), children: [
-                tableAct("在上方插入列", "arrow.up.to.line") { t, r in t.insertRow(at: r.r0) },
-                tableAct("在下方插入列", "arrow.down.to.line") { t, r in t.insertRow(at: r.r1 + 1) },
-                tableAct("在左側插入欄", "arrow.left.to.line") { t, r in t.insertColumn(at: r.c0) },
-                tableAct("在右側插入欄", "arrow.right.to.line") { t, r in t.insertColumn(at: r.c1 + 1) },
+            UIMenu(title: L("插入"), image: UIImage(systemName: "plus.rectangle.on.rectangle"), children: [
+                tableAct(L("在上方插入列"), "arrow.up.to.line") { t, r in t.insertRow(at: r.r0) },
+                tableAct(L("在下方插入列"), "arrow.down.to.line") { t, r in t.insertRow(at: r.r1 + 1) },
+                tableAct(L("在左側插入欄"), "arrow.left.to.line") { t, r in t.insertColumn(at: r.c0) },
+                tableAct(L("在右側插入欄"), "arrow.right.to.line") { t, r in t.insertColumn(at: r.c1 + 1) },
             ]),
-            UIMenu(title: "刪除", image: UIImage(systemName: "minus.rectangle"), children: [
-                tableAct("刪除\(rowsName)", "minus.rectangle", attributes: .destructive) { t, r in for row in (r.r0...r.r1).reversed() { t.removeRow(row) } },
-                tableAct("刪除\(colsName)", "minus.rectangle", attributes: .destructive) { t, r in for col in (r.c0...r.c1).reversed() { t.removeColumn(col) } },
+            UIMenu(title: L("刪除"), image: UIImage(systemName: "minus.rectangle"), children: [
+                tableAct(L("刪除\(rowsName)"), "minus.rectangle", attributes: .destructive) { t, r in for row in (r.r0...r.r1).reversed() { t.removeRow(row) } },
+                tableAct(L("刪除\(colsName)"), "minus.rectangle", attributes: .destructive) { t, r in for col in (r.c0...r.c1).reversed() { t.removeColumn(col) } },
             ]),
         ]
     }
@@ -302,17 +302,17 @@ extension NotebookViewController {
     func tableCellMenuItems(_ ref: ElementRef, cell: (row: Int, col: Int)?) -> [UIMenuElement] {
         var items: [UIMenuElement] = []
         if let cell {
-            items.append(UIAction(title: "編輯文字", image: UIImage(systemName: "keyboard")) { [weak self] _ in
+            items.append(UIAction(title: L("編輯文字"), image: UIImage(systemName: "keyboard")) { [weak self] _ in
                 self?.beginTextEditing(ref, cell: cell)
             })
         }
         let canPaste = tableCellClipboard.map { $0.changeCount == UIPasteboard.general.changeCount } == true || UIPasteboard.general.hasStrings
         items += [
-            UIAction(title: "刪除文字", image: UIImage(systemName: "delete.left"), attributes: .destructive) { [weak self] _ in self?.clearTableCellText() },
-            UIAction(title: "複製一份", image: UIImage(systemName: "plus.square.on.square")) { [weak self] _ in self?.duplicateElement(ref) },
-            UIAction(title: "拷貝", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in self?.copyTableCells() },
-            UIAction(title: "剪下", image: UIImage(systemName: "scissors")) { [weak self] _ in self?.cutTableCells() },
-            UIAction(title: "貼上", image: UIImage(systemName: "doc.on.clipboard"), attributes: canPaste ? [] : .disabled) { [weak self] _ in
+            UIAction(title: L("刪除文字"), image: UIImage(systemName: "delete.left"), attributes: .destructive) { [weak self] _ in self?.clearTableCellText() },
+            UIAction(title: L("複製一份"), image: UIImage(systemName: "plus.square.on.square")) { [weak self] _ in self?.duplicateElement(ref) },
+            UIAction(title: L("拷貝"), image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in self?.copyTableCells() },
+            UIAction(title: L("剪下"), image: UIImage(systemName: "scissors")) { [weak self] _ in self?.cutTableCells() },
+            UIAction(title: L("貼上"), image: UIImage(systemName: "doc.on.clipboard"), attributes: canPaste ? [] : .disabled) { [weak self] _ in
                 self?.pasteTableCells()
             },
         ]
@@ -388,7 +388,7 @@ extension NotebookViewController {
         let span = s.table.span(range.r0, range.c0)
         let single = span.rowSpan == range.r1 - range.r0 + 1 && span.colSpan == range.c1 - range.c0 + 1
         let merged = single && span.rowSpan * span.colSpan > 1
-        let panel = TableSplitPanel(title: single ? "分割 \(cellLabel(range))" : "分割選取的每一格（\(cellLabel(range))）",
+        let panel = TableSplitPanel(title: single ? L("分割 \(cellLabel(range))") : L("分割選取的每一格（\(cellLabel(range))）"),
                                     cols: single ? max(2, span.colSpan) : 2, rows: single ? span.rowSpan : 1, canUnmerge: merged,
                                     onSplit: { [weak self] c, r in
                                         self?.dismissToolPopover()
@@ -443,12 +443,12 @@ struct TableSplitPanel: View {
                 ctx.stroke(p, with: .color(.accentColor), lineWidth: 1.5)
             }
             .frame(width: 160, height: 90)
-            Stepper("左右分成 \(cols) 欄", value: $cols, in: 1...20)
-            Stepper("上下分成 \(rows) 列", value: $rows, in: 1...20)
+            Stepper(L("左右分成 \(cols) 欄"), value: $cols, in: 1...20)
+            Stepper(L("上下分成 \(rows) 列"), value: $rows, in: 1...20)
             HStack {
-                if canUnmerge { Button("取消合併", action: onUnmerge) }
+                if canUnmerge { Button(L("取消合併"), action: onUnmerge) }
                 Spacer()
-                Button("分割") { onSplit(cols, rows) }
+                Button(L("分割")) { onSplit(cols, rows) }
                     .buttonStyle(.borderedProminent)
                     .disabled(cols * rows <= 1)
             }
@@ -468,7 +468,7 @@ struct TableInsertPanel: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            Text("插入表格").font(.headline)
+            Text(L("插入表格")).font(.headline)
             VStack(spacing: gap) {
                 ForEach(0..<gridRows, id: \.self) { r in
                     HStack(spacing: gap) {
@@ -485,9 +485,9 @@ struct TableInsertPanel: View {
                 cols = min(max(Int(v.location.x / (cell + gap)) + 1, 1), gridCols)
                 rows = min(max(Int(v.location.y / (cell + gap)) + 1, 1), gridRows)
             })
-            CountField(label: "欄", value: $cols, range: 1...Self.maxCount)
-            CountField(label: "列", value: $rows, range: 1...Self.maxCount)
-            Button("插入 \(cols) × \(rows) 表格") { onInsert(cols, rows) }
+            CountField(label: L("欄"), value: $cols, range: 1...Self.maxCount)
+            CountField(label: L("列"), value: $rows, range: 1...Self.maxCount)
+            Button(L("插入 \(cols) × \(rows) 表格")) { onInsert(cols, rows) }
                 .buttonStyle(.borderedProminent)
         }
         .padding(16)

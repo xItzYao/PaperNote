@@ -2,9 +2,9 @@ import SwiftUI
 
 /// 永久刪除前的確認文字
 enum PermanentDeleteText {
-    static let message = "此操作將會把本機檔案永久刪除，且無法復原；雲端檔案會移到 Google Drive 的垃圾桶"
+    static let message = L("此操作將會把本機檔案永久刪除，且無法復原；雲端檔案會移到 Google Drive 的垃圾桶")
 
-    static func title(_ name: String) -> String { "確認刪除\(name)?" }
+    static func title(_ name: String) -> String { L("確認刪除\(name)?") }
 }
 
 /// 垃圾桶：被刪除的資料夾、筆記本，以及各筆記本最近刪除的頁面（30 天後自動永久刪除）
@@ -31,49 +31,49 @@ struct TrashView: View {
         NavigationStack {
             List {
                 if store.trashedFolders.isEmpty && store.trashedNotebooks.isEmpty && store.notebooksWithTrashedPages.isEmpty {
-                    ContentUnavailableView("垃圾桶是空的", systemImage: "trash",
-                                           description: Text("刪除的筆記本、資料夾和頁面會在這裡保留 \(Trash.retentionDays) 天。"))
+                    ContentUnavailableView(L("垃圾桶是空的"), systemImage: "trash",
+                                           description: Text(L("刪除的筆記本、資料夾和頁面會在這裡保留 \(Trash.retentionDays) 天。")))
                 }
                 if !store.trashedFolders.isEmpty || !store.trashedNotebooks.isEmpty {
-                    Section("筆記本與資料夾") {
+                    Section(L("筆記本與資料夾")) {
                         ForEach(store.trashedFolders) { f in
                             row(icon: "folder.fill", title: f.name,
-                                detail: "\(store.index.notebooks.filter { $0.folderId == f.id }.count) 本筆記本",
+                                detail: L("\(store.index.notebooks.filter { $0.folderId == f.id }.count) 本筆記本"),
                                 deletedAt: f.deletedAt)
                                 .swipeActions(edge: .trailing) {
-                                    Button("永久刪除") { deleteTarget = .folder(f) }.tint(.red)
+                                    Button(L("永久刪除")) { deleteTarget = .folder(f) }.tint(.red)
                                 }
                                 .swipeActions(edge: .leading) {
-                                    Button("還原") { store.restoreFolder(f.id) }.tint(.blue)
+                                    Button(L("還原")) { store.restoreFolder(f.id) }.tint(.blue)
                                 }
                                 .contextMenu {
-                                    Button { store.restoreFolder(f.id) } label: { Label("還原", systemImage: "arrow.uturn.backward") }
-                                    Button(role: .destructive) { deleteTarget = .folder(f) } label: { Label("永久刪除", systemImage: "trash") }
+                                    Button { store.restoreFolder(f.id) } label: { Label(L("還原"), systemImage: "arrow.uturn.backward") }
+                                    Button(role: .destructive) { deleteTarget = .folder(f) } label: { Label(L("永久刪除"), systemImage: "trash") }
                                 }
                         }
                         ForEach(store.trashedNotebooks) { nb in
-                            row(icon: "book.closed.fill", title: nb.title, detail: "\(nb.pageCount) 頁", deletedAt: nb.deletedAt)
+                            row(icon: "book.closed.fill", title: nb.title, detail: L("\(nb.pageCount) 頁"), deletedAt: nb.deletedAt)
                                 .swipeActions(edge: .trailing) {
-                                    Button("永久刪除") { deleteTarget = .notebook(nb) }.tint(.red)
+                                    Button(L("永久刪除")) { deleteTarget = .notebook(nb) }.tint(.red)
                                 }
                                 .swipeActions(edge: .leading) {
-                                    Button("還原") { store.restoreNotebook(nb.id) }.tint(.blue)
+                                    Button(L("還原")) { store.restoreNotebook(nb.id) }.tint(.blue)
                                 }
                                 .contextMenu {
-                                    Button { store.restoreNotebook(nb.id) } label: { Label("還原", systemImage: "arrow.uturn.backward") }
-                                    Button(role: .destructive) { deleteTarget = .notebook(nb) } label: { Label("永久刪除", systemImage: "trash") }
+                                    Button { store.restoreNotebook(nb.id) } label: { Label(L("還原"), systemImage: "arrow.uturn.backward") }
+                                    Button(role: .destructive) { deleteTarget = .notebook(nb) } label: { Label(L("永久刪除"), systemImage: "trash") }
                                 }
                         }
                     }
                 }
                 if !store.notebooksWithTrashedPages.isEmpty {
-                    Section("最近刪除的頁面") {
+                    Section(L("最近刪除的頁面")) {
                         ForEach(store.notebooksWithTrashedPages) { nb in
                             Button { pagesOf = nb } label: {
                                 HStack {
                                     Label(nb.title, systemImage: "doc.on.doc")
                                     Spacer()
-                                    Text("\(nb.trashedPageCount) 頁").foregroundStyle(.secondary)
+                                    Text(L("\(nb.trashedPageCount) 頁")).foregroundStyle(.secondary)
                                     Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
                                 }
                             }
@@ -82,31 +82,31 @@ struct TrashView: View {
                     }
                 }
             }
-            .navigationTitle("垃圾桶")
+            .navigationTitle(L("垃圾桶"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button(L("完成")) { dismiss() } }
                 ToolbarItem(placement: .destructiveAction) {
-                    Button("清空", role: .destructive) { confirmEmpty = true }
+                    Button(L("清空"), role: .destructive) { confirmEmpty = true }
                         .disabled(store.trashedFolders.isEmpty && store.trashedNotebooks.isEmpty && store.notebooksWithTrashedPages.isEmpty)
                 }
             }
-            .alert(PermanentDeleteText.title("垃圾桶裡的全部項目"), isPresented: $confirmEmpty) {
-                Button("永久刪除全部", role: .destructive) { emptyAll() }
-                Button("取消", role: .cancel) {}
+            .alert(PermanentDeleteText.title(L("垃圾桶裡的全部項目")), isPresented: $confirmEmpty) {
+                Button(L("永久刪除全部"), role: .destructive) { emptyAll() }
+                Button(L("取消"), role: .cancel) {}
             } message: {
                 Text(PermanentDeleteText.message)
             }
             .alert(PermanentDeleteText.title(deleteTarget?.name ?? ""),
                    isPresented: Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } }),
                    presenting: deleteTarget) { target in
-                Button("永久刪除", role: .destructive) {
+                Button(L("永久刪除"), role: .destructive) {
                     switch target {
                     case let .folder(f): store.deleteFolder(f.id)
                     case let .notebook(nb): store.deleteNotebook(nb.id)
                     }
                 }
-                Button("取消", role: .cancel) {}
+                Button(L("取消"), role: .cancel) {}
             } message: { _ in
                 Text(PermanentDeleteText.message)
             }
@@ -126,7 +126,7 @@ struct TrashView: View {
             }
             Spacer()
             if let d = deletedAt {
-                Text("\(Trash.daysLeft(d)) 天後刪除").font(.caption).foregroundStyle(.secondary)
+                Text(L("\(Trash.daysLeft(d)) 天後刪除")).font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -165,7 +165,7 @@ struct TrashedPagesSheet: View {
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button(L("完成")) { dismiss() } }
             }
         }
         .onAppear {
@@ -204,8 +204,8 @@ struct TrashedPagesList: View {
     var body: some View {
         List {
             if items.isEmpty {
-                ContentUnavailableView("沒有最近刪除的頁面", systemImage: "doc",
-                                       description: Text("刪除的頁面會在這裡保留 \(Trash.retentionDays) 天。"))
+                ContentUnavailableView(L("沒有最近刪除的頁面"), systemImage: "doc",
+                                       description: Text(L("刪除的頁面會在這裡保留 \(Trash.retentionDays) 天。")))
             }
             ForEach(items) { item in
                 HStack(alignment: .top, spacing: 12) {
@@ -221,12 +221,12 @@ struct TrashedPagesList: View {
                     .clipShape(RoundedRectangle(cornerRadius: 4))
                     .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.gray.opacity(0.3)))
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("原本的第 \(item.originalNumber) 頁").font(.headline)
-                        Text("\(Trash.daysLeft(item.deletedAt)) 天後永久刪除").font(.caption).foregroundStyle(.secondary)
+                        Text(L("原本的第 \(item.originalNumber) 頁")).font(.headline)
+                        Text(L("\(Trash.daysLeft(item.deletedAt)) 天後永久刪除")).font(.caption).foregroundStyle(.secondary)
                         HStack(spacing: 12) {
-                            Button { onRestore(item.id) } label: { Label("還原", systemImage: "arrow.uturn.backward") }
+                            Button { onRestore(item.id) } label: { Label(L("還原"), systemImage: "arrow.uturn.backward") }
                                 .buttonStyle(.bordered)
-                            Button(role: .destructive) { deleteTarget = item } label: { Label("永久刪除", systemImage: "trash") }
+                            Button(role: .destructive) { deleteTarget = item } label: { Label(L("永久刪除"), systemImage: "trash") }
                                 .buttonStyle(.bordered)
                         }
                         .font(.subheadline)
@@ -235,11 +235,11 @@ struct TrashedPagesList: View {
                 .padding(.vertical, 4)
             }
         }
-        .alert(PermanentDeleteText.title(deleteTarget.map { "原本的第 \($0.originalNumber) 頁" } ?? ""),
+        .alert(PermanentDeleteText.title(deleteTarget.map { L("原本的第 \($0.originalNumber) 頁") } ?? ""),
                isPresented: Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } }),
                presenting: deleteTarget) { item in
-            Button("永久刪除", role: .destructive) { onDelete(item.id) }
-            Button("取消", role: .cancel) {}
+            Button(L("永久刪除"), role: .destructive) { onDelete(item.id) }
+            Button(L("取消"), role: .cancel) {}
         } message: { _ in
             Text(PermanentDeleteText.message)
         }

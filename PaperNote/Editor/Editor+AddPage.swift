@@ -45,9 +45,9 @@ final class AddPagePullView: UIView {
         alpha = min(1, max(0, progress))
         icon.transform = CGAffineTransform(rotationAngle: min(progress, 1) * .pi / 2)
         switch stage {
-        case .none: label.text = "繼續往上拉，新增頁面"
-        case .blankPage: label.text = "放開新增空白頁，再拉選紙張"
-        case .paperPicker: label.text = "放開選紙張"
+        case .none: label.text = L("繼續往上拉，新增頁面")
+        case .blankPage: label.text = L("放開新增空白頁，再拉選紙張")
+        case .paperPicker: label.text = L("放開選紙張")
         }
     }
 }
@@ -101,7 +101,7 @@ extension NotebookViewController {
 
     /// 拉過最後一頁放開：中間跳出選紙張的小視窗，選好加在最後面
     func presentAddPageMenu() {
-        presentPaperPicker(title: "新增頁面", insertAt: pages.count)
+        presentPaperPicker(title: L("新增頁面"), insertAt: pages.count)
     }
 }
 

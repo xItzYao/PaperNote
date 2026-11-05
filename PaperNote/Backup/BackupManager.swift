@@ -105,7 +105,7 @@ final class BackupManager: ObservableObject {
         guard GoogleAuth.shared.isSignedIn, !isRunning else { return }
         isRunning = true
         lastError = nil
-        status = "準備備份…"
+        status = L("準備備份…")
         var bgTask = UIBackgroundTaskIdentifier.invalid
         bgTask = UIApplication.shared.beginBackgroundTask(withName: "PaperNoteBackup") {
             UIApplication.shared.endBackgroundTask(bgTask)
@@ -126,7 +126,7 @@ final class BackupManager: ObservableObject {
                 } else {
                     self.lastBackup = Date()
                     UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "backup.last")
-                    self.status = count == 0 ? "沒有變動" : "已更新 \(count) 個檔案"
+                    self.status = count == 0 ? L("沒有變動") : L("已更新 \(count) 個檔案")
                 }
                 UIApplication.shared.endBackgroundTask(bgTask)
             }
@@ -205,7 +205,7 @@ final class BackupManager: ObservableObject {
 
         var uploaded = 0
         for (i, f) in changed.enumerated() {
-            await setStatus("備份中…（\(i + 1)/\(changed.count)）")
+            await setStatus(L("備份中…（\(i + 1)/\(changed.count)）"))
             let parentRel = (f.rel as NSString).deletingLastPathComponent
             let parent = try await folderID(for: parentRel, root: root)
             let name = (f.rel as NSString).lastPathComponent
@@ -367,12 +367,12 @@ final class BackupManager: ObservableObject {
     func restore() async throws -> RestoreResult {
         await MainActor.run {
             self.isRunning = true
-            self.status = "正在讀取雲端備份…"
+            self.status = L("正在讀取雲端備份…")
         }
         defer { Task { await MainActor.run { self.isRunning = false } } }
 
         guard let root = try await drive.findFolder(named: Self.rootFolderName, in: "root") else {
-            throw BackupError.http(404, "雲端找不到 \(Self.rootFolderName) 資料夾")
+            throw BackupError.http(404, L("雲端找不到 \(Self.rootFolderName) 資料夾"))
         }
         let stored = try await storedManifest(in: root)
         let base = try await stored == nil ? legacyManifest(in: root) : stored
@@ -395,7 +395,7 @@ final class BackupManager: ObservableObject {
             guard let id = UUID(uuidString: f.name), !purged.contains(id), entries[id]?.status != .deleted else { continue }
             let dest = library.notebookURL(id)
             if fm.fileExists(atPath: dest.path) { continue }
-            await setStatus("下載筆記本…（\(i + 1)/\(remoteNotebooks.count)）")
+            await setStatus(L("下載筆記本…（\(i + 1)/\(remoteNotebooks.count)）"))
             // 先下載到暫存：中途失敗不會留下半本筆記本
             let tmp = fm.temporaryDirectory.appendingPathComponent("restore-\(UUID().uuidString)", isDirectory: true)
             defer { try? fm.removeItem(at: tmp) }
@@ -410,7 +410,7 @@ final class BackupManager: ObservableObject {
             self.library.mergeRestored(folders: folders, notebooks: restored)
             let kept = restored.compactMap { self.library.notebook($0.id) }
             let result = RestoreResult(notebooks: kept.count, trashed: kept.filter(self.library.isHidden).count)
-            self.status = result.notebooks == 0 ? "本機已經有全部的筆記本" : "已還原 \(result.notebooks) 本筆記本"
+            self.status = result.notebooks == 0 ? L("本機已經有全部的筆記本") : L("已還原 \(result.notebooks) 本筆記本")
             return result
         }
         return result
@@ -418,7 +418,7 @@ final class BackupManager: ObservableObject {
 
     private static func restoredMeta(id: UUID, entry: BackupManifest.NotebookEntry?, document: NotebookDocument) -> NotebookMeta {
         guard let entry, var meta = entry.meta else {
-            var meta = NotebookMeta(title: "復原的筆記本", folderId: nil, coverHex: Palette.covers[0])
+            var meta = NotebookMeta(title: L("復原的筆記本"), folderId: nil, coverHex: Palette.covers[0])
             meta.id = id
             meta.pageCount = document.pages.count
             meta.trashedPageCount = document.trash?.count ?? 0

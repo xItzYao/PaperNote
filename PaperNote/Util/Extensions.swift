@@ -65,14 +65,14 @@ extension Array {
 enum Palette {
     static let covers = ["#2654A0FF", "#2E7D5BFF", "#B5523BFF", "#6A4C93FF", "#C08A1EFF", "#3A6073FF", "#8E3B5FFF", "#4A4A4AFF"]
     static let highlights: [(name: String, hex: String)] = [
-        ("黃色", "#FFF176FF"), ("綠色", "#B9F6CAFF"), ("粉紅", "#F8BBD0FF"), ("藍色", "#B3E5FCFF"), ("橘色", "#FFCC80FF"),
+        (L("黃色"), "#FFF176FF"), (L("綠色"), "#B9F6CAFF"), (L("粉紅"), "#F8BBD0FF"), (L("藍色"), "#B3E5FCFF"), (L("橘色"), "#FFCC80FF"),
     ]
 }
 
 extension UIViewController {
     func showMessage(_ title: String, _ message: String? = nil) {
         let a = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        a.addAction(UIAlertAction(title: "好", style: .default))
+        a.addAction(UIAlertAction(title: L("好"), style: .default))
         present(a, animated: true)
     }
 }

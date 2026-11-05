@@ -49,7 +49,7 @@ struct PaperPickerOverlay: View {
         VStack(spacing: 18) {
             Text(title).font(.headline)
             if askName {
-                TextField("筆記本名稱", text: $name)
+                TextField(L("筆記本名稱"), text: $name)
                     .textFieldStyle(.roundedBorder)
             }
             HStack(alignment: .bottom, spacing: 14) {
@@ -69,23 +69,23 @@ struct PaperPickerOverlay: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("紙張 \(s.title)")
+                    .accessibilityLabel(L("紙張 \(s.title)"))
                     .accessibilityAddTraits(style == s ? .isSelected : [])
                 }
             }
             .animation(.easeInOut(duration: 0.15), value: landscape)
             .animation(.easeInOut(duration: 0.15), value: sizeIndex)
-            Picker("大小", selection: $sizeIndex) {
+            Picker(L("大小"), selection: $sizeIndex) {
                 ForEach(sizes.indices, id: \.self) { i in Text(sizes[i].title).tag(i) }
             }
             .pickerStyle(.segmented)
-            Picker("方向", selection: $landscape) {
-                Label("直式", systemImage: "rectangle.portrait").tag(false)
-                Label("橫式", systemImage: "rectangle").tag(true)
+            Picker(L("方向"), selection: $landscape) {
+                Label(L("直式"), systemImage: "rectangle.portrait").tag(false)
+                Label(L("橫式"), systemImage: "rectangle").tag(true)
             }
             .pickerStyle(.segmented)
             HStack {
-                Button("取消", action: onCancel)
+                Button(L("取消"), action: onCancel)
                 Spacer()
                 Button(confirmTitle) {
                     onConfirm(name.trimmingCharacters(in: .whitespacesAndNewlines), style, landscape, sizes[min(sizeIndex, sizes.count - 1)])
@@ -127,7 +127,7 @@ extension NotebookViewController {
         if case let .paper(_, _, s) = ref.background { style = s }
         let size = session.baseSize(of: ref)
         let sizes = paperSizeOptions(like: ref)
-        let picker = PaperPickerOverlay(title: title, confirmTitle: "新增", askName: false, style: style,
+        let picker = PaperPickerOverlay(title: title, confirmTitle: L("新增"), askName: false, style: style,
                                         landscape: size.width > size.height, sizes: sizes.options, sizeIndex: sizes.selected,
                                         onConfirm: { [weak self] _, s, l, paper in
                                             self?.dismiss(animated: true)
@@ -148,7 +148,7 @@ extension NotebookViewController {
             return (PaperSize.presets, i)
         }
         let n = (pageIndex(of: ref.id) ?? 0) + 1
-        return ([PaperSize(title: "同第 \(n) 頁", size: size)] + PaperSize.presets, 0)
+        return ([PaperSize(title: L("同第 \(n) 頁"), size: size)] + PaperSize.presets, 0)
     }
 
     /// 在 index 插入一頁：大小照選的（沒指定就和參考頁一樣），方向照選的（直式＝窄邊在上）

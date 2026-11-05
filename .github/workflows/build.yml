@@ -16,13 +16,15 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - name: Check every UI string has an English translation
+        run: python3 scripts/check_localization.py
       - name: Check PDF text selection math
         run: swift Tests/pdf_selection_check.swift
       - name: Check the last character on a line
         run: swift Tests/pdf_line_end_check.swift
       - name: Check circuit geometry
         run: |
-          swiftc -O PaperNote/Model/CircuitData.swift Tests/CircuitCheck/main.swift -o circuit_check
+          swiftc -O PaperNote/Model/CircuitData.swift PaperNote/Util/Localization.swift Tests/CircuitCheck/main.swift -o circuit_check
           ./circuit_check
 
   # 單元測試和 UI 測試分成兩個工作同時跑

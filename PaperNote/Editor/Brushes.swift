@@ -9,13 +9,13 @@ enum InkStyle: String, Codable, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .pen: return "鋼筆"
-        case .monoline: return "原子筆"
-        case .fountainPen: return "毛筆／沾水筆"
-        case .pencil: return "鉛筆"
-        case .marker: return "螢光筆"
-        case .crayon: return "蠟筆"
-        case .watercolor: return "水彩"
+        case .pen: return L("鋼筆")
+        case .monoline: return L("原子筆")
+        case .fountainPen: return L("毛筆／沾水筆")
+        case .pencil: return L("鉛筆")
+        case .marker: return L("螢光筆")
+        case .crayon: return L("蠟筆")
+        case .watercolor: return L("水彩")
         }
     }
 
@@ -325,31 +325,31 @@ struct BrushSettingsView: View {
 
     var body: some View {
         Form {
-            Section("色票") {
+            Section(L("色票")) {
                 LazyVGrid(columns: Array(repeating: GridItem(.fixed(34), spacing: 10), count: 6), spacing: 10) {
                     ForEach(Self.swatches, id: \.self) { swatch($0) }
                     // 喜歡的顏色：長按可以拿掉
                     ForEach(favorites, id: \.self) { hex in
                         swatch(hex).contextMenu {
-                            Button("從色票移除", systemImage: "trash", role: .destructive) {
+                            Button(L("從色票移除"), systemImage: "trash", role: .destructive) {
                                 FavoriteColors.remove(hex)
                                 favorites = FavoriteColors.all
                             }
                         }
                     }
                 }
-                ColorPicker("自訂顏色", selection: Binding(
+                ColorPicker(L("自訂顏色"), selection: Binding(
                     get: { Color(uiColor: preset.color) },
                     set: { preset.colorHex = UIColor($0).hexString }
                 ))
-                Button("把這個顏色加進色票", systemImage: "plus.circle") {
+                Button(L("把這個顏色加進色票"), systemImage: "plus.circle") {
                     FavoriteColors.add(preset.colorHex)
                     favorites = FavoriteColors.all
                 }
                 .disabled(favorites.contains(preset.colorHex) || Self.swatches.contains(preset.colorHex) || favorites.count >= FavoriteColors.limit)
             }
             if preset.style == .marker {
-                Section("不透明度：\(Int((preset.opacity ?? BrushPreset.defaultMarkerOpacity) * 100))%") {
+                Section(L("不透明度：\(Int((preset.opacity ?? BrushPreset.defaultMarkerOpacity) * 100))%")) {
                     Slider(value: Binding(
                         get: { preset.opacity ?? BrushPreset.defaultMarkerOpacity },
                         set: { preset.opacity = $0 }
@@ -357,21 +357,21 @@ struct BrushSettingsView: View {
                 }
             }
             if preset.style == .marker {
-                Section("粗細：\(String(format: "%.1f", preset.width))") {
+                Section(L("粗細：\(String(format: "%.1f", preset.width))")) {
                     Slider(value: $preset.width, in: preset.style.widthRange)
                     StrokePreview(preset: preset)
                         .frame(height: 44)
                 }
             } else {
                 // 筆的粗細在工具列的細、中、粗調整，這裡只留預覽
-                Section("預覽") {
+                Section(L("預覽")) {
                     StrokePreview(preset: preset)
                         .frame(height: 44)
                 }
             }
             if let onDelete {
                 Section {
-                    Button("刪除這支筆刷", systemImage: "trash", role: .destructive, action: onDelete)
+                    Button(L("刪除這支筆刷"), systemImage: "trash", role: .destructive, action: onDelete)
                 }
             }
         }

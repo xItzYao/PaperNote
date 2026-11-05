@@ -60,3 +60,6 @@ schemes:
       targets:
         - PaperNoteTests
         - PaperNoteUITests
+      # 模擬器是英文系統；測試裡比對的是中文字串
+      commandLineArguments:
+        "-appLanguage zh-Hant": true

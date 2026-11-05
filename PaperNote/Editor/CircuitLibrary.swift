@@ -18,18 +18,18 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
 
     /// 分類參考 CircuiTikZ
     static let sections: [(String, [CircuitPart])] = [
-        ("被動元件", [.resistor, .capacitor, .inductor, .potentiometer, .variableResistor, .polarCapacitor, .variableCapacitor, .transformer, .fuse]),
-        ("接地、電源", [.ground, .vdd, .vss, .signalGround, .chassisGround]),
-        ("訊號源", [.voltageSource, .currentSource, .battery, .sineSource, .squareSource, .controlledVoltageSource, .controlledCurrentSource]),
-        ("二極體", [.diode, .schottky, .zener, .tunnelDiode, .led, .photodiode, .varicap]),
-        ("電晶體", [.nmos, .pmos, .nmos4, .pmos4, .npn, .pnp, .njfet, .pjfet, .nigbt, .pigbt]),
-        ("放大器", [.opAmp, .fdOpAmp, .ota]),
-        ("開關、儀表", [.switchOpen, .switchClosed, .pushButton, .spdt, .ammeter, .voltmeter, .ohmmeter, .lamp]),
-        ("邏輯閘", [.andGate, .orGate, .notGate, .bufferGate, .nandGate, .norGate, .xorGate, .xnorGate]),
-        ("數位方塊", [.dFlipFlop, .dLatch, .mux, .decoder, .encoder, .alu, .adc, .dac]),
-        ("其他", [.mixer, .antenna]),
+        (L("被動元件"), [.resistor, .capacitor, .inductor, .potentiometer, .variableResistor, .polarCapacitor, .variableCapacitor, .transformer, .fuse]),
+        (L("接地、電源"), [.ground, .vdd, .vss, .signalGround, .chassisGround]),
+        (L("訊號源"), [.voltageSource, .currentSource, .battery, .sineSource, .squareSource, .controlledVoltageSource, .controlledCurrentSource]),
+        (L("二極體"), [.diode, .schottky, .zener, .tunnelDiode, .led, .photodiode, .varicap]),
+        (L("電晶體"), [.nmos, .pmos, .nmos4, .pmos4, .npn, .pnp, .njfet, .pjfet, .nigbt, .pigbt]),
+        (L("放大器"), [.opAmp, .fdOpAmp, .ota]),
+        (L("開關、儀表"), [.switchOpen, .switchClosed, .pushButton, .spdt, .ammeter, .voltmeter, .ohmmeter, .lamp]),
+        (L("邏輯閘"), [.andGate, .orGate, .notGate, .bufferGate, .nandGate, .norGate, .xorGate, .xnorGate]),
+        (L("數位方塊"), [.dFlipFlop, .dLatch, .mux, .decoder, .encoder, .alu, .adc, .dac]),
+        (L("其他"), [.mixer, .antenna]),
     ]
-    static let customSectionName = "自訂電路圖"
+    static let customSectionName = L("自訂電路圖")
     /// 收起來的分類（記在本機）
     private static let collapsedKey = "circuitLibrary.collapsedSections"
     private static let expandedWidth: CGFloat = 148
@@ -78,7 +78,7 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
         translatesAutoresizingMaskIntoConstraints = false
 
         // 標題列：元件庫＋收合
-        titleLabel.text = "元件庫"
+        titleLabel.text = L("元件庫")
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         titleLabel.textColor = .secondaryLabel
         collapseButton.addAction(UIAction { [weak self] _ in self?.toggleCollapsed() }, for: .touchUpInside)
@@ -216,7 +216,7 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
         titleLabel.isHidden = collapsed || !onLeft
         let symbol = onLeft ? (collapsed ? "sidebar.right" : "sidebar.left") : (collapsed ? "chevron.up" : "chevron.down")
         collapseButton.configuration?.image = UIImage(systemName: symbol)
-        collapseButton.accessibilityLabel = collapsed ? "展開元件庫" : "收合元件庫"
+        collapseButton.accessibilityLabel = collapsed ? L("展開元件庫") : L("收合元件庫")
     }
 
     /// 放下面時的一個分類：標題，底下元件由上往下排滿兩列再換下一行
@@ -364,15 +364,15 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
     }
 
     private func drawSymbolButton() -> UIButton {
-        let b = tile(image: UIImage(systemName: "pencil.and.outline"), title: "畫元件")
-        b.accessibilityLabel = "畫自訂元件"
+        let b = tile(image: UIImage(systemName: "pencil.and.outline"), title: L("畫元件"))
+        b.accessibilityLabel = L("畫自訂元件")
         b.addAction(UIAction { [weak self] _ in self?.onDrawSymbol?(nil) }, for: .touchUpInside)
         return b
     }
 
     private func addCustomButton() -> UIButton {
-        let b = tile(image: UIImage(systemName: "plus"), title: "加入")
-        b.accessibilityLabel = "加入自訂電路圖"
+        let b = tile(image: UIImage(systemName: "plus"), title: L("加入"))
+        b.accessibilityLabel = L("加入自訂電路圖")
         b.addAction(UIAction { [weak self] _ in self?.onAddCustom?() }, for: .touchUpInside)
         return b
     }
@@ -386,10 +386,10 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
         drag.custom = c.id
         drag.delegate = self
         b.addGestureRecognizer(drag)
-        let edit = c.symbol == nil ? [] : [UIAction(title: "編輯符號", image: UIImage(systemName: "pencil.and.outline")) { [weak self] _ in self?.onDrawSymbol?(c.id) }]
+        let edit = c.symbol == nil ? [] : [UIAction(title: L("編輯符號"), image: UIImage(systemName: "pencil.and.outline")) { [weak self] _ in self?.onDrawSymbol?(c.id) }]
         b.menu = UIMenu(children: edit + [
-            UIAction(title: "改名", image: UIImage(systemName: "pencil")) { [weak self] _ in self?.onRenameCustom?(c.id) },
-            UIAction(title: "刪除", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in self?.onDeleteCustom?(c.id) },
+            UIAction(title: L("改名"), image: UIImage(systemName: "pencil")) { [weak self] _ in self?.onRenameCustom?(c.id) },
+            UIAction(title: L("刪除"), image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in self?.onDeleteCustom?(c.id) },
         ])
         modeButtons.append((.placeCustom(c.id), b))
         return b

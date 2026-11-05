@@ -19,10 +19,10 @@ enum PaperStyle: String, Codable, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .blank: return "空白"
-        case .ruled: return "橫線"
-        case .grid: return "方格"
-        case .dotted: return "點格"
+        case .blank: return L("空白")
+        case .ruled: return L("橫線")
+        case .grid: return L("方格")
+        case .dotted: return L("點格")
         }
     }
 }
@@ -235,7 +235,7 @@ struct NotebookMeta: Codable, Equatable, Identifiable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
-        title = try c.decodeIfPresent(String.self, forKey: .title) ?? "未命名"
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? L("未命名")
         folderId = try c.decodeIfPresent(UUID.self, forKey: .folderId)
         created = try c.decodeIfPresent(Date.self, forKey: .created) ?? Date()
         modified = try c.decodeIfPresent(Date.self, forKey: .modified) ?? Date()

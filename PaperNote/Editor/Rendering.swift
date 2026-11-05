@@ -301,7 +301,7 @@ enum PageSelection {
         var errorDescription: String? { message }
     }
 
-    static let hint = "例如 7-10 或 1 3 5 6 7，空白是全部"
+    static let hint = L("例如 7-10 或 1 3 5 6 7，空白是全部")
 
     /// 排好、不重複的頁面索引（從 0 開始）
     static func parse(_ text: String, pageCount: Int) throws -> [Int] {
@@ -315,10 +315,10 @@ enum PageSelection {
         for t in tokens {
             let parts = t.split(separator: "-", omittingEmptySubsequences: false)
             guard (1...2).contains(parts.count), let a = Int(parts[0]), let b = Int(parts[parts.count - 1]) else {
-                throw Invalid(message: "看不懂「\(t)」，請輸入像 7-10 或 1 3 5 這樣的頁碼")
+                throw Invalid(message: L("看不懂「\(t)」，請輸入像 7-10 或 1 3 5 這樣的頁碼"))
             }
             let lo = min(a, b), hi = max(a, b)
-            guard lo >= 1, hi <= pageCount else { throw Invalid(message: "這本筆記本只有 \(pageCount) 頁，沒有第 \(lo < 1 ? lo : hi) 頁") }
+            guard lo >= 1, hi <= pageCount else { throw Invalid(message: L("這本筆記本只有 \(pageCount) 頁，沒有第 \(lo < 1 ? lo : hi) 頁")) }
             result.formUnion((lo - 1)..<hi)
         }
         return result.sorted()

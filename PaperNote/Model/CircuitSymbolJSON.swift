@@ -43,11 +43,11 @@ enum CircuitSymbolJSON {
 
         var errorDescription: String? {
             switch self {
-            case let .notJSON(why): return "格式不對：\(why)"
-            case .badPoint: return "每個點要寫成 [x, y]（兩個數字）。"
-            case .tooBig: return "座標要在 -\(Int(CircuitSymbolJSON.limit))～\(Int(CircuitSymbolJSON.limit)) 之間。"
-            case .noLines: return "沒有線條：strokes 至少要有一條兩個點以上的線（或 circles 有一個圓）。"
-            case .noPins: return "沒有接腳：pins 至少要有一個點。"
+            case let .notJSON(why): return L("格式不對：\(why)")
+            case .badPoint: return L("每個點要寫成 [x, y]（兩個數字）。")
+            case .tooBig: return L("座標要在 -\(Int(CircuitSymbolJSON.limit))～\(Int(CircuitSymbolJSON.limit)) 之間。")
+            case .noLines: return L("沒有線條：strokes 至少要有一條兩個點以上的線（或 circles 有一個圓）。")
+            case .noPins: return L("沒有接腳：pins 至少要有一個點。")
             }
         }
     }
@@ -62,7 +62,7 @@ enum CircuitSymbolJSON {
             if let end = rest.range(of: "```") { body = rest[..<end.lowerBound] }
         }
         guard let open = body.firstIndex(of: "{"), let close = body.lastIndex(of: "}"), open < close else {
-            throw ParseError.notJSON("找不到 { … }")
+            throw ParseError.notJSON(L("找不到 { … }"))
         }
         let file: File
         do {
@@ -70,7 +70,7 @@ enum CircuitSymbolJSON {
         } catch let DecodingError.typeMismatch(_, c), let DecodingError.valueNotFound(_, c), let DecodingError.keyNotFound(_, c) {
             throw ParseError.notJSON(c.codingPath.map(\.stringValue).joined(separator: ".") + " " + c.debugDescription)
         } catch {
-            throw ParseError.notJSON("不是 JSON")
+            throw ParseError.notJSON(L("不是 JSON"))
         }
 
         func point(_ a: [Double]) throws -> CGPoint {

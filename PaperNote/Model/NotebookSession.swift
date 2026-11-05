@@ -27,7 +27,7 @@ final class NotebookSession {
         try data.write(to: documentURL(in: dir), options: .atomic)
     }
 
-    var title: String { LibraryStore.shared.notebook(id)?.title ?? "筆記本" }
+    var title: String { LibraryStore.shared.notebook(id)?.title ?? L("筆記本") }
     var pages: [Page] { document.pages }
 
     init(id: UUID) throws {

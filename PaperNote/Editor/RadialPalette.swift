@@ -34,8 +34,8 @@ final class PaletteOverlay: UIView {
 
     // 都放在左側，右手拿筆時不會被手擋住
     private let mainItems = [
-        MainItem(tool: .pen, symbol: "pencil.tip", title: "筆", angle: 180),
-        MainItem(tool: .highlighter, symbol: "highlighter", title: "螢光筆", angle: 130),
+        MainItem(tool: .pen, symbol: "pencil.tip", title: L("筆"), angle: 180),
+        MainItem(tool: .highlighter, symbol: "highlighter", title: L("螢光筆"), angle: 130),
     ]
 
     /// 打開時的中心（切換橡皮擦時筆尖的位置）；nil 就以小圖示為中心

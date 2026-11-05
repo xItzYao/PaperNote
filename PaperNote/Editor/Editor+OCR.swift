@@ -27,7 +27,7 @@ extension NotebookViewController {
             applyOCRSelection(lines, pageIndex: i, docRect: docRect)
             return
         }
-        showToast("這頁沒有文字層，正在辨識文字…")
+        showToast(L("這頁沒有文字層，正在辨識文字…"))
         guard !ocrInFlight.contains(pageID) else { return }
         ocrInFlight.insert(pageID)
         recognizePage(i) { [weak self] lines in
@@ -37,7 +37,7 @@ extension NotebookViewController {
             guard let idx = self.pageIndex(of: pageID) else { return }
             if lines.isEmpty {
                 self.overlay.showTextRects([])
-                self.showToast("這頁辨識不到文字")
+                self.showToast(L("這頁辨識不到文字"))
             } else {
                 self.applyOCRSelection(lines, pageIndex: idx, docRect: docRect)
             }
@@ -52,7 +52,7 @@ extension NotebookViewController {
         guard !hit.isEmpty else {
             clearTextSelection()
             let n = session.pdfPage(for: pages[i])?.numberOfCharacters ?? 0
-            showToast("這裡沒有辨識到文字（此頁 PDF 文字 \(n) 字、辨識 \(lines.count) 行）")
+            showToast(L("這裡沒有辨識到文字（此頁 PDF 文字 \(n) 字、辨識 \(lines.count) 行）"))
             return
         }
         let rects = hit.map { $0.rect.offsetBy(dx: o.x, dy: o.y) }

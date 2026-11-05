@@ -38,12 +38,12 @@ final class PhotoStripView: UIView, UICollectionViewDataSource, UICollectionView
         layer.shadowOffset = CGSize(width: 0, height: 2)
 
         browse.configuration?.image = UIImage(systemName: "photo.on.rectangle")
-        browse.configuration?.title = "全部照片…"
+        browse.configuration?.title = L("全部照片…")
         browse.configuration?.imagePlacement = .top
         browse.configuration?.imagePadding = 4
         browse.configuration?.buttonSize = .small
         browse.addAction(UIAction { [weak self] _ in self?.onBrowse?() }, for: .touchUpInside)
-        more.configuration?.title = "選擇更多照片"
+        more.configuration?.title = L("選擇更多照片")
         more.configuration?.buttonSize = .mini
         more.addAction(UIAction { [weak self] _ in
             guard let self, let vc = self.presenter else { return }
@@ -94,7 +94,7 @@ final class PhotoStripView: UIView, UICollectionViewDataSource, UICollectionView
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         switch status {
         case .notDetermined:
-            show(message: "允許取用照片後，最近的照片會列在這裡")
+            show(message: L("允許取用照片後，最近的照片會列在這裡"))
             PHPhotoLibrary.requestAuthorization(for: .readWrite) { [weak self] _ in
                 DispatchQueue.main.async { self?.reload() }
             }
@@ -110,7 +110,7 @@ final class PhotoStripView: UIView, UICollectionViewDataSource, UICollectionView
             more.isHidden = status != .limited
             collection.reloadData()
             if assets?.count ?? 0 == 0 {
-                show(message: status == .limited ? "還沒有開放任何照片，按「選擇更多照片」" : "照片圖庫是空的")
+                show(message: status == .limited ? L("還沒有開放任何照片，按「選擇更多照片」") : L("照片圖庫是空的"))
             } else {
                 show(message: nil)
             }
@@ -118,7 +118,7 @@ final class PhotoStripView: UIView, UICollectionViewDataSource, UICollectionView
             assets = nil
             more.isHidden = true
             collection.reloadData()
-            show(message: "沒有照片的取用權限（到「設定」開啟），也可以用「全部照片…」挑選")
+            show(message: L("沒有照片的取用權限（到「設定」開啟），也可以用「全部照片…」挑選"))
         }
     }
 

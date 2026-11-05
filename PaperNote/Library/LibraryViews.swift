@@ -65,13 +65,13 @@ struct RootView: View {
             // 先讓使用者選要放在哪個資料夾，選好才匯入
             pendingImport = ShareItem(url: url)
         }
-        .alert("匯入完成", isPresented: Binding(get: { importSummary != nil }, set: { if !$0 { importSummary = nil } })) {
-            Button("好", role: .cancel) {}
+        .alert(L("匯入完成"), isPresented: Binding(get: { importSummary != nil }, set: { if !$0 { importSummary = nil } })) {
+            Button(L("好"), role: .cancel) {}
         } message: {
             Text(importSummary ?? "")
         }
-        .alert("匯入失敗", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
-            Button("好", role: .cancel) {}
+        .alert(L("匯入失敗"), isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
+            Button(L("好"), role: .cancel) {}
         } message: {
             Text(importError ?? "")
         }
@@ -89,7 +89,7 @@ struct RootView: View {
     @ViewBuilder
     private var importPicker: some View {
         if let item = pendingImport {
-            FolderPickerSheet(title: "匯入「\(item.url.deletingPathExtension().lastPathComponent)」到…", confirmTitle: "匯入") { dest in
+            FolderPickerSheet(title: L("匯入「\(item.url.deletingPathExtension().lastPathComponent)」到…"), confirmTitle: L("匯入")) { dest in
                 pendingImport = nil
                 // 等選資料夾的視窗收起來再打開筆記本
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { importShared(item.url, into: dest) }
@@ -174,6 +174,8 @@ struct FolderView: View {
     @State private var openAfterFavorites: UUID?
     @State private var exporting = false
     @State private var showAbout = false
+    @State private var language = AppLanguage.current
+    @State private var languageNeedsRestart = false
     @State private var showBackup = false
     @State private var showTrash = false
     @State private var dropTarget: UUID?
@@ -188,7 +190,7 @@ struct FolderView: View {
     private let columns = [GridItem(.adaptive(minimum: 160, maximum: 220), spacing: 28)]
 
     private var title: String {
-        folderID.flatMap { store.folder($0)?.name } ?? "資料庫"
+        folderID.flatMap { store.folder($0)?.name } ?? L("資料庫")
     }
 
     private var folders: [Folder] {
@@ -227,16 +229,16 @@ struct FolderView: View {
                 searchField
                 if let active = TabStore.shared.state.active {
                     Button { open(active, nil) } label: {
-                        Label("回到分頁", systemImage: "rectangle.stack")
+                        Label(L("回到分頁"), systemImage: "rectangle.stack")
                     }
                 }
                 Button { showFavorites = true } label: {
-                    Label("我的最愛文件", systemImage: "star")
+                    Label(L("我的最愛文件"), systemImage: "star")
                 }
                 Menu {
-                    Button { setNewNotebookShown(true) } label: { Label("新增筆記本", systemImage: "book.closed") }
-                    Button { showImporter = true } label: { Label("匯入 PDF、zip 或 PaperNote 檔", systemImage: "doc.richtext") }
-                    Button { newFolderName = ""; showNewFolder = true } label: { Label("新增資料夾", systemImage: "folder.badge.plus") }
+                    Button { setNewNotebookShown(true) } label: { Label(L("新增筆記本"), systemImage: "book.closed") }
+                    Button { showImporter = true } label: { Label(L("匯入 PDF、zip 或 PaperNote 檔"), systemImage: "doc.richtext") }
+                    Button { newFolderName = ""; showNewFolder = true } label: { Label(L("新增資料夾"), systemImage: "folder.badge.plus") }
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -244,30 +246,37 @@ struct FolderView: View {
             // 右邊：檢視方式（在修改日期那一欄上面）、⋯、選取
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Menu {
-                    Section("檢視方式") {
-                        Picker("檢視方式", selection: $viewMode) {
-                            Label("大圖", systemImage: "square.grid.2x2").tag("grid")
-                            Label("詳細資料", systemImage: "list.bullet").tag("list")
+                    Section(L("檢視方式")) {
+                        Picker(L("檢視方式"), selection: $viewMode) {
+                            Label(L("大圖"), systemImage: "square.grid.2x2").tag("grid")
+                            Label(L("詳細資料"), systemImage: "list.bullet").tag("list")
                         }
                     }
-                    Section("排序方式") {
-                        Picker("排序方式", selection: $sortMode) {
-                            Label("修改日期", systemImage: "clock").tag("modified")
-                            Label("建立日期", systemImage: "calendar").tag("created")
-                            Label("名稱", systemImage: "textformat").tag("name")
+                    Section(L("排序方式")) {
+                        Picker(L("排序方式"), selection: $sortMode) {
+                            Label(L("修改日期"), systemImage: "clock").tag("modified")
+                            Label(L("建立日期"), systemImage: "calendar").tag("created")
+                            Label(L("名稱"), systemImage: "textformat").tag("name")
                         }
                     }
                 } label: {
-                    Label("檢視方式", systemImage: viewMode == "list" ? "list.bullet" : "square.grid.2x2")
+                    Label(L("檢視方式"), systemImage: viewMode == "list" ? "list.bullet" : "square.grid.2x2")
                 }
                 Menu {
-                    Button { showTrash = true } label: { Label("垃圾桶", systemImage: "trash") }
-                    Button { showBackup = true } label: { Label("雲端備份（Google Drive）", systemImage: "icloud.and.arrow.up") }
-                    Button { showAbout = true } label: { Label("關於我", systemImage: "person.crop.circle") }
+                    Button { showTrash = true } label: { Label(L("垃圾桶"), systemImage: "trash") }
+                    Button { showBackup = true } label: { Label(L("雲端備份（Google Drive）"), systemImage: "icloud.and.arrow.up") }
+                    Button { showAbout = true } label: { Label(L("關於我"), systemImage: "person.crop.circle") }
+                    Picker(selection: Binding(get: { language }, set: { chooseLanguage($0) })) {
+                        ForEach(AppLanguage.allCases, id: \.self) { Text($0.menuTitle).tag($0) }
+                    } label: {
+                        // 中英並列：看不懂目前語言的人也找得到
+                        Label("語言 Language", systemImage: "globe")
+                    }
+                    .pickerStyle(.menu)
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
-                Button(selecting ? "完成" : "選取") {
+                Button(selecting ? L("完成") : L("選取")) {
                     selecting.toggle()
                     selection = []
                 }
@@ -276,17 +285,24 @@ struct FolderView: View {
         }
     }
 
+    /// 語言存起來，下次開 App 生效；畫面上的語言真的會變才提醒重開
+    private func chooseLanguage(_ new: AppLanguage) {
+        language = new
+        AppLanguage.current = new
+        languageNeedsRestart = new.usesEnglish() != Loc.isEnglish
+    }
+
     /// 搜尋筆記本名稱（放在左上角，和其他文件操作在一起）
     private var searchField: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("搜尋筆記本名稱", text: $search)
+            TextField(L("搜尋筆記本名稱"), text: $search)
                 .textFieldStyle(.plain)
                 .submitLabel(.search)
             if !search.isEmpty {
                 Button { search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("清除搜尋")
+                    .accessibilityLabel(L("清除搜尋"))
             }
         }
         .padding(.horizontal, 10)
@@ -300,11 +316,11 @@ struct FolderView: View {
         if folders.isEmpty && notebooks.isEmpty {
             ScrollView {
                 if !search.isEmpty {
-                    ContentUnavailableView("找不到符合的筆記本", systemImage: "magnifyingglass")
+                    ContentUnavailableView(L("找不到符合的筆記本"), systemImage: "magnifyingglass")
                         .padding(.top, 80)
                 } else {
-                    ContentUnavailableView("這裡還沒有東西", systemImage: "books.vertical",
-                                           description: Text("按左上角的「＋」新增筆記本、匯入 PDF 或建立資料夾。"))
+                    ContentUnavailableView(L("這裡還沒有東西"), systemImage: "books.vertical",
+                                           description: Text(L("按左上角的「＋」新增筆記本、匯入 PDF 或建立資料夾。")))
                         .padding(.top, 80)
                 }
             }
@@ -325,7 +341,7 @@ struct FolderView: View {
                     if let parent = parentDropID {
                         detailLine(dropID: parent, item: nil) {
                             Button { dismissFolder() } label: {
-                                DetailRow(cover: nil, isFolder: true, name: "上一層", modified: nil, isParent: true,
+                                DetailRow(cover: nil, isFolder: true, name: L("上一層"), modified: nil, isParent: true,
                                           checked: selecting ? false : nil)
                             }
                         }
@@ -407,7 +423,7 @@ struct FolderView: View {
                 .frame(width: DetailColumns.menu, height: 36)
                 .contentShape(Rectangle())
         }
-        .accessibilityLabel("「\(item.name)」的選單")
+        .accessibilityLabel(L("「\(item.name)」的選單"))
     }
 
     /// 大圖：封面網格
@@ -438,7 +454,7 @@ struct FolderView: View {
                             }
                         }
                         .buttonStyle(.plain)
-                        gridCaption("\(store.itemCount(in: folder.id)) 個項目", .folder(folder))
+                        gridCaption(L("\(store.itemCount(in: folder.id)) 個項目"), .folder(folder))
                     }
                     .draggable(dragPayload(folder.id, "fd")) {
                         dragPreview(folder.name, symbol: "folder.fill", id: folder.id)
@@ -456,7 +472,7 @@ struct FolderView: View {
                                 }
                         }
                         .buttonStyle(.plain)
-                        gridCaption("\(nb.pageCount) 頁 · \(LibraryDate.day(nb.modified))", .notebook(nb))
+                        gridCaption(L("\(nb.pageCount) 頁 · \(LibraryDate.day(nb.modified))"), .notebook(nb))
                     }
                     .draggable(dragPayload(nb.id, "nb")) {
                         dragPreview(nb.title, symbol: "book.closed.fill", id: nb.id)
@@ -477,7 +493,7 @@ struct FolderView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(nb.starred ? "從我的最愛文件移除「\(nb.title)」" : "把「\(nb.title)」加入我的最愛文件")
+        .accessibilityLabel(nb.starred ? L("從我的最愛文件移除「\(nb.title)」") : L("把「\(nb.title)」加入我的最愛文件"))
     }
 
     /// 大圖底下那行小字，左邊是選單 ⌄（筆記本還有星星）
@@ -525,7 +541,7 @@ struct FolderView: View {
         base
         .overlay {
             if exporting || importing {
-                ProgressView(exporting ? "正在匯出 PDF…" : "正在匯入…")
+                ProgressView(exporting ? L("正在匯出 PDF…") : L("正在匯入…"))
                     .padding(24)
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
             }
@@ -538,25 +554,25 @@ struct FolderView: View {
                 errorMessage = error.localizedDescription
             }
         }
-        .alert("匯入完成", isPresented: Binding(get: { importSummary != nil }, set: { if !$0 { importSummary = nil } })) {
-            Button("好", role: .cancel) {}
+        .alert(L("匯入完成"), isPresented: Binding(get: { importSummary != nil }, set: { if !$0 { importSummary = nil } })) {
+            Button(L("好"), role: .cancel) {}
         } message: {
             Text(importSummary ?? "")
         }
-        .alert("匯出「\(exportTarget?.title ?? "")」", isPresented: Binding(get: { exportTarget != nil }, set: { if !$0 { exportTarget = nil } }),
+        .alert(L("匯出「\(exportTarget?.title ?? "")」"), isPresented: Binding(get: { exportTarget != nil }, set: { if !$0 { exportTarget = nil } }),
                presenting: exportTarget) { nb in
             TextField(PageSelection.hint, text: $exportPages)
                 .keyboardType(.numbersAndPunctuation)
-                .accessibilityLabel("匯出的頁面")
-            Button("PDF（給別人看、列印）") { export(nb.id, paperNote: false, pages: exportPages) }
-            Button("PaperNote（可以繼續編輯筆跡）") { export(nb.id, paperNote: true, pages: exportPages) }
-            Button("取消", role: .cancel) {}
+                .accessibilityLabel(L("匯出的頁面"))
+            Button(L("PDF（給別人看、列印）")) { export(nb.id, paperNote: false, pages: exportPages) }
+            Button(L("PaperNote（可以繼續編輯筆跡）")) { export(nb.id, paperNote: true, pages: exportPages) }
+            Button(L("取消"), role: .cancel) {}
         } message: { _ in
-            Text("要匯出成哪一種格式？可以只匯出部分頁面。")
+            Text(L("要匯出成哪一種格式？可以只匯出部分頁面。"))
         }
         // 畫面中間的小視窗（和新增頁面同一個）：點旁邊取消
         .fullScreenCover(isPresented: $showNewNotebook) {
-            PaperPickerOverlay(title: "新增筆記本", confirmTitle: "建立", askName: true, style: .ruled, landscape: false,
+            PaperPickerOverlay(title: L("新增筆記本"), confirmTitle: L("建立"), askName: true, style: .ruled, landscape: false,
                                onConfirm: { title, paper, landscape, size in
                                    let meta = store.createNotebook(title: title, folder: folderID, paper: paper, landscape: landscape, size: size)
                                    setNewNotebookShown(false)
@@ -565,15 +581,15 @@ struct FolderView: View {
                                onCancel: { setNewNotebookShown(false) })
                 .presentationBackground(.clear)
         }
-        .alert("新增資料夾", isPresented: $showNewFolder) {
-            TextField("資料夾名稱", text: $newFolderName)
-            Button("取消", role: .cancel) {}
-            Button("建立") { store.createFolder(name: newFolderName, parent: folderID) }
+        .alert(L("新增資料夾"), isPresented: $showNewFolder) {
+            TextField(L("資料夾名稱"), text: $newFolderName)
+            Button(L("取消"), role: .cancel) {}
+            Button(L("建立")) { store.createFolder(name: newFolderName, parent: folderID) }
         }
-        .alert("重新命名", isPresented: Binding(get: { renameTarget != nil }, set: { if !$0 { renameTarget = nil } })) {
-            TextField("名稱", text: $renameText)
-            Button("取消", role: .cancel) { renameTarget = nil }
-            Button("確定") {
+        .alert(L("重新命名"), isPresented: Binding(get: { renameTarget != nil }, set: { if !$0 { renameTarget = nil } })) {
+            TextField(L("名稱"), text: $renameText)
+            Button(L("取消"), role: .cancel) { renameTarget = nil }
+            Button(L("確定")) {
                 let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
                 switch renameTarget {
                 case let .folder(f): store.renameFolder(f.id, to: name)
@@ -587,7 +603,7 @@ struct FolderView: View {
             MoveSheet(items: [item]) { dest in
                 switch item {
                 case let .folder(f):
-                    if !store.moveFolder(f.id, to: dest) { errorMessage = "不能把資料夾移到它自己裡面。" }
+                    if !store.moveFolder(f.id, to: dest) { errorMessage = L("不能把資料夾移到它自己裡面。") }
                 case let .notebook(n):
                     store.moveNotebook(n.id, to: dest)
                 }
@@ -601,7 +617,7 @@ struct FolderView: View {
                 for item in selectedItems {
                     switch item {
                     case let .folder(f):
-                        if !store.moveFolder(f.id, to: dest) { errorMessage = "不能把資料夾移到它自己裡面。" }
+                        if !store.moveFolder(f.id, to: dest) { errorMessage = L("不能把資料夾移到它自己裡面。") }
                     case let .notebook(n):
                         store.moveNotebook(n.id, to: dest)
                     }
@@ -616,6 +632,11 @@ struct FolderView: View {
         }
         .sheet(isPresented: $showTrash) { TrashView().environmentObject(store) }
         .sheet(isPresented: $showAbout) { AboutView() }
+        .alert(L("重新開啟 App 後換成新的語言"), isPresented: $languageNeedsRestart) {
+            Button(L("好"), role: .cancel) {}
+        } message: {
+            Text(L("從多工畫面把 PaperNote 往上滑關掉，再重新打開。"))
+        }
         .sheet(isPresented: $showFavorites, onDismiss: {
             if let id = openAfterFavorites {
                 openAfterFavorites = nil
@@ -628,8 +649,8 @@ struct FolderView: View {
         .sheet(item: $shareItem) { item in
             ActivityView(items: [item.url])
         }
-        .alert("發生問題", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
-            Button("好", role: .cancel) {}
+        .alert(L("發生問題"), isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+            Button(L("好"), role: .cancel) {}
         } message: {
             Text(errorMessage ?? "")
         }
@@ -668,7 +689,7 @@ struct FolderView: View {
                 if store.moveFolder(id, to: dest) {
                     moved = true
                 } else {
-                    errorMessage = "不能把資料夾移到它自己裡面。"
+                    errorMessage = L("不能把資料夾移到它自己裡面。")
                 }
             }
         }
@@ -708,7 +729,7 @@ struct FolderView: View {
 
     private func dragPreview(_ title: String, symbol: String, id: UUID) -> some View {
         let multi = selecting && selection.contains(id) && selection.count > 1
-        return Label(multi ? "\(selection.count) 個項目" : title, systemImage: multi ? "square.stack.3d.up.fill" : symbol)
+        return Label(multi ? L("\(selection.count) 個項目") : title, systemImage: multi ? "square.stack.3d.up.fill" : symbol)
             .padding(8)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
     }
@@ -716,13 +737,13 @@ struct FolderView: View {
     private var batchBar: some View {
         let all = Set(folders.map(\.id) + notebooks.map(\.id))
         return HStack(spacing: 18) {
-            Button(selection == all && !all.isEmpty ? "取消全選" : "全選") {
+            Button(selection == all && !all.isEmpty ? L("取消全選") : L("全選")) {
                 selection = selection == all ? [] : all
             }
-            Text("已選取 \(selection.count) 項").foregroundStyle(.secondary)
+            Text(L("已選取 \(selection.count) 項")).foregroundStyle(.secondary)
             Spacer()
             Group {
-            Button { showBatchMove = true } label: { Label("移動到…", systemImage: "folder") }
+            Button { showBatchMove = true } label: { Label(L("移動到…"), systemImage: "folder") }
             Button {
                 for item in selectedItems {
                     switch item {
@@ -731,12 +752,12 @@ struct FolderView: View {
                     }
                 }
                 selection = []
-            } label: { Label("複製", systemImage: "plus.square.on.square") }
+            } label: { Label(L("複製"), systemImage: "plus.square.on.square") }
             Button(role: .destructive) {
                 moveToTrash(selectedItems)
                 selection = []
                 selecting = false
-            } label: { Label("刪除", systemImage: "trash") }
+            } label: { Label(L("刪除"), systemImage: "trash") }
             }
             .disabled(selection.isEmpty)
         }
@@ -760,19 +781,19 @@ struct FolderView: View {
 
     @ViewBuilder
     private func itemMenu(_ item: LibraryItem) -> some View {
-        Button { renameText = item.name; renameTarget = item } label: { Label("重新命名", systemImage: "pencil") }
+        Button { renameText = item.name; renameTarget = item } label: { Label(L("重新命名"), systemImage: "pencil") }
         Button {
             switch item {
             case let .folder(f): store.duplicateFolder(f.id)
             case let .notebook(n): store.duplicateNotebook(n.id)
             }
-        } label: { Label("複製", systemImage: "plus.square.on.square") }
-        Button { moveTarget = item } label: { Label("移動到…", systemImage: "folder") }
+        } label: { Label(L("複製"), systemImage: "plus.square.on.square") }
+        Button { moveTarget = item } label: { Label(L("移動到…"), systemImage: "folder") }
         if case let .notebook(n) = item {
-            Button { exportPages = ""; exportTarget = n } label: { Label("匯出…", systemImage: "square.and.arrow.up") }
+            Button { exportPages = ""; exportTarget = n } label: { Label(L("匯出…"), systemImage: "square.and.arrow.up") }
         }
         Divider()
-        Button(role: .destructive) { moveToTrash([item]) } label: { Label("刪除", systemImage: "trash") }
+        Button(role: .destructive) { moveToTrash([item]) } label: { Label(L("刪除"), systemImage: "trash") }
     }
 
     private func export(_ id: UUID, paperNote: Bool, pages text: String) {
@@ -786,7 +807,7 @@ struct FolderView: View {
                                     : try NotebookExporter.exportPDF(session: session, pages: pages)
                 shareItem = ShareItem(url: url)
             } catch {
-                errorMessage = "匯出失敗：\(error.localizedDescription)"
+                errorMessage = L("匯出失敗：\(error.localizedDescription)")
             }
         }
     }
@@ -806,7 +827,7 @@ struct ParentFolderCell: View {
                 .frame(maxWidth: .infinity)
                 .background(RoundedRectangle(cornerRadius: 12)
                     .fill(highlighted ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.08)))
-            Text("上一層").font(.subheadline.weight(.semibold))
+            Text(L("上一層")).font(.subheadline.weight(.semibold))
             Color.clear.frame(height: GridCaption.height)
         }
     }
@@ -888,8 +909,8 @@ struct MoveSheet: View {
     let onCancel: () -> Void
 
     var body: some View {
-        FolderPickerSheet(title: items.count == 1 ? "移動「\(items[0].name)」到…" : "移動 \(items.count) 個項目到…",
-                          confirmTitle: "移動", isDisabled: isDisabled, onPick: onPick, onCancel: onCancel)
+        FolderPickerSheet(title: items.count == 1 ? L("移動「\(items[0].name)」到…") : L("移動 \(items.count) 個項目到…"),
+                          confirmTitle: L("移動"), isDisabled: isDisabled, onPick: onPick, onCancel: onCancel)
     }
 
     private func isDisabled(_ f: Folder) -> Bool {
@@ -928,7 +949,7 @@ struct FolderPickerSheet: View {
     @EnvironmentObject var store: LibraryStore
     let title: String
     /// 右上角確定的按鈕（匯入、移動）
-    var confirmTitle = "選擇"
+    var confirmTitle = L("選擇")
     var isDisabled: (Folder) -> Bool = { _ in false }
     let onPick: (UUID?) -> Void
     let onCancel: () -> Void
@@ -951,7 +972,7 @@ struct FolderPickerSheet: View {
                 HStack(spacing: 6) {
                     Color.clear.frame(width: Self.chevronWidth)
                     Button { tap(nil, hasChildren: false) } label: {
-                        Label("資料庫（最上層）", systemImage: "books.vertical")
+                        Label(L("資料庫（最上層）"), systemImage: "books.vertical")
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
                     }
@@ -974,7 +995,7 @@ struct FolderPickerSheet: View {
                             }
                             .buttonStyle(.borderless)
                             .foregroundStyle(.secondary)
-                            .accessibilityLabel(open ? "收合「\(row.folder.name)」" : "展開「\(row.folder.name)」")
+                            .accessibilityLabel(open ? L("收合「\(row.folder.name)」") : L("展開「\(row.folder.name)」"))
                         } else {
                             Color.clear.frame(width: Self.chevronWidth)
                         }
@@ -994,7 +1015,7 @@ struct FolderPickerSheet: View {
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消", action: onCancel) }
+                ToolbarItem(placement: .cancellationAction) { Button(L("取消"), action: onCancel) }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(confirmTitle) { onPick(state.selected) }
                         .fontWeight(.semibold)
@@ -1049,12 +1070,12 @@ struct DetailHeader: View {
         HStack(spacing: DetailColumns.spacing) {
             if selecting { Color.clear.frame(width: DetailColumns.check, height: 1) }
             Color.clear.frame(width: DetailColumns.icon, height: 1)
-            Text("名稱")
+            Text(L("名稱"))
             Spacer(minLength: 8)
             // 選單 ⌄、星星那一欄（在修改日期左邊）
             Color.clear.frame(width: DetailColumns.menu + DetailColumns.star, height: 1)
             if hSize == .regular {
-                Text("修改日期").frame(width: DetailColumns.modified, alignment: .leading)
+                Text(L("修改日期")).frame(width: DetailColumns.modified, alignment: .leading)
             }
         }
         .font(.subheadline.weight(.semibold))
@@ -1073,8 +1094,8 @@ struct FavoriteDocumentsSheet: View {
         NavigationStack {
             Group {
                 if store.favoriteNotebooks.isEmpty {
-                    ContentUnavailableView("還沒有我的最愛文件", systemImage: "star",
-                                           description: Text("點筆記本旁邊的星星，就會加到這裡。"))
+                    ContentUnavailableView(L("還沒有我的最愛文件"), systemImage: "star",
+                                           description: Text(L("點筆記本旁邊的星星，就會加到這裡。")))
                 } else {
                     List(store.favoriteNotebooks) { nb in
                         HStack(spacing: 12) {
@@ -1089,15 +1110,15 @@ struct FavoriteDocumentsSheet: View {
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.borderless)
-                            .accessibilityLabel("把「\(nb.title)」移出我的最愛文件")
+                            .accessibilityLabel(L("把「\(nb.title)」移出我的最愛文件"))
                         }
                     }
                 }
             }
-            .navigationTitle("我的最愛文件")
+            .navigationTitle(L("我的最愛文件"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button(L("完成")) { dismiss() } }
             }
         }
         .presentationSizing(.form)
@@ -1117,7 +1138,7 @@ struct FavoriteDocumentsSheet: View {
             .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.gray.opacity(0.3)))
             VStack(alignment: .leading, spacing: 3) {
                 Text(nb.title).font(.headline).lineLimit(1)
-                Text([nb.folderId.flatMap { store.folder($0)?.name } ?? "資料庫", LibraryDate.dateTime(nb.modified)]
+                Text([nb.folderId.flatMap { store.folder($0)?.name } ?? L("資料庫"), LibraryDate.dateTime(nb.modified)]
                     .joined(separator: " · "))
                     .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
             }

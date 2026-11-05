@@ -366,7 +366,7 @@ extension NotebookViewController: UIPencilInteractionDelegate {
         // 選到表格（表格工具列）：直接進入手繪格線，之後點兩下切換畫線／擦線，按「完成」結束
         if tool == .select, selectedTable() != nil {
             beginTableHandDraw()
-            showToast("手繪格線：筆身點兩下切換畫線／擦線，按「完成」結束")
+            showToast(L("手繪格線：筆身點兩下切換畫線／擦線，按「完成」結束"))
             return
         }
         // 電路工具：在橡皮擦和原本的模式（選取、接線或放置元件）之間切換
@@ -376,7 +376,7 @@ extension NotebookViewController: UIPencilInteractionDelegate {
             } else {
                 circuitModeBeforeErase = circuitMode
                 selectCircuitMode(.erase)
-                showToast("橡皮擦（筆身點兩下切回）")
+                showToast(L("橡皮擦（筆身點兩下切回）"))
             }
             return
         }

@@ -5,23 +5,23 @@ enum CircuitSymbolTool: Int, CaseIterable {
 
     var title: String {
         switch self {
-        case .select: return "選取"
-        case .line: return "線條"
-        case .brush: return "筆刷"
-        case .text: return "文字"
-        case .pin: return "接腳"
-        case .eraser: return "橡皮擦"
+        case .select: return L("選取")
+        case .line: return L("線條")
+        case .brush: return L("筆刷")
+        case .text: return L("文字")
+        case .pin: return L("接腳")
+        case .eraser: return L("橡皮擦")
         }
     }
 
     var hint: String {
         switch self {
-        case .select: return "點一下選取字或線條，拖曳移動；選到字時拉右下角的把手調整大小。"
-        case .line: return "拖一條直線：兩端自動吸到最近的格點。從線的端點接著畫就連在一起。"
-        case .brush: return "用 Pencil 或手指直接畫；畫到一半停住會修成直線、圓弧、圓、橢圓、矩形、三角形或平滑的曲線，筆不放開繼續移動可以調整。"
-        case .text: return "點一下加上文字（例如 +、−、A、VCC），點已經有的字修改、換大小或刪除；拖曳移動。上下標寫 R_1、V^2。"
-        case .pin: return "點格點加上接腳（導線接的地方），再點一下拿掉。至少要有一個。"
-        case .eraser: return "點或劃過線條、接腳擦掉：「整條」擦掉整條線，「局部」只擦掉碰到的那一段。Pencil 筆身點兩下、Pencil Pro 按壓可以切換橡皮擦。"
+        case .select: return L("點一下選取字或線條，拖曳移動；選到字時拉右下角的把手調整大小。")
+        case .line: return L("拖一條直線：兩端自動吸到最近的格點。從線的端點接著畫就連在一起。")
+        case .brush: return L("用 Pencil 或手指直接畫；畫到一半停住會修成直線、圓弧、圓、橢圓、矩形、三角形或平滑的曲線，筆不放開繼續移動可以調整。")
+        case .text: return L("點一下加上文字（例如 +、−、A、VCC），點已經有的字修改、換大小或刪除；拖曳移動。上下標寫 R_1、V^2。")
+        case .pin: return L("點格點加上接腳（導線接的地方），再點一下拿掉。至少要有一個。")
+        case .eraser: return L("點或劃過線條、接腳擦掉：「整條」擦掉整條線，「局部」只擦掉碰到的那一段。Pencil 筆身點兩下、Pencil Pro 按壓可以切換橡皮擦。")
         }
     }
 }
@@ -569,7 +569,7 @@ final class CircuitSymbolEditorViewController: UIViewController {
     let nameField = UITextField()
     private let toolPicker = UISegmentedControl(items: CircuitSymbolTool.allCases.map(\.title))
     /// 橡皮擦：整條擦掉或只擦碰到的那一段（選橡皮擦時才出現）
-    let eraseKind = UISegmentedControl(items: ["整條擦除", "局部擦除"])
+    let eraseKind = UISegmentedControl(items: [L("整條擦除"), L("局部擦除")])
     let hint = UILabel()
     let strokeTouch = SymbolStrokeRecognizer(target: nil, action: nil)
     private(set) var tapGesture: UITapGestureRecognizer!
@@ -587,7 +587,7 @@ final class CircuitSymbolEditorViewController: UIViewController {
     /// 選取工具正在拖：拖之前的樣子、起點；resizing：拉的是字的縮放把手
     private var transform: (original: CircuitSymbol, start: CGPoint, resizing: Bool)?
     /// 文字的大小選項（元件座標，格點 10）
-    static let textSizes: [(String, CGFloat)] = [("小字", 8), ("中字", 12), ("大字", 16)]
+    static let textSizes: [(String, CGFloat)] = [(L("小字"), 8), (L("中字"), 12), (L("大字"), 16)]
 
     init(name: String, symbol: CircuitSymbol?, onDone: @escaping (String, CircuitSymbol) -> Void) {
         draft = CircuitSymbolDraft(symbol ?? CircuitSymbol())
@@ -604,7 +604,7 @@ final class CircuitSymbolEditorViewController: UIViewController {
         isModalInPresentation = true
         preferredContentSize = CGSize(width: 720, height: 820)
 
-        nameField.placeholder = "元件名稱"
+        nameField.placeholder = L("元件名稱")
         nameField.textAlignment = .center
         nameField.borderStyle = .roundedRect
         nameField.frame.size = CGSize(width: 240, height: 34)
@@ -614,7 +614,7 @@ final class CircuitSymbolEditorViewController: UIViewController {
         })
         navigationItem.rightBarButtonItems = [
             UIBarButtonItem(systemItem: .done, primaryAction: UIAction { [weak self] _ in self?.finish() }),
-            UIBarButtonItem(title: "復原", primaryAction: UIAction { [weak self] _ in self?.undoTapped() }),
+            UIBarButtonItem(title: L("復原"), primaryAction: UIAction { [weak self] _ in self?.undoTapped() }),
             UIBarButtonItem(title: "JSON", menu: jsonMenu()),
         ]
 
@@ -786,10 +786,10 @@ final class CircuitSymbolEditorViewController: UIViewController {
     /// 文字工具：輸入字、選大小。editing：點到的那一段（nil＝新增在 p）
     func presentTextEditor(editing: Int?, at p: CGPoint) {
         let old = editing.flatMap { draft.symbol.texts[safe: $0] }
-        let a = UIAlertController(title: old == nil ? "加上文字" : "修改文字", message: "上下標寫成 R_1、V^2", preferredStyle: .alert)
+        let a = UIAlertController(title: old == nil ? L("加上文字") : L("修改文字"), message: L("上下標寫成 R_1、V^2"), preferredStyle: .alert)
         a.addTextField { f in
             f.text = old?.text
-            f.placeholder = "例如 +、A、VCC"
+            f.placeholder = L("例如 +、A、VCC")
         }
         for (title, size) in Self.textSizes {
             let current = old.map { abs($0.size - size) < 0.5 } ?? (size == CircuitSymbol.Label.defaultSize)
@@ -798,11 +798,11 @@ final class CircuitSymbolEditorViewController: UIViewController {
             })
         }
         if editing != nil {
-            a.addAction(UIAlertAction(title: "刪除", style: .destructive) { [weak self] _ in
+            a.addAction(UIAlertAction(title: L("刪除"), style: .destructive) { [weak self] _ in
                 self?.commitText("", size: old?.size ?? CircuitSymbol.Label.defaultSize, editing: editing, at: p)
             })
         }
-        a.addAction(UIAlertAction(title: "取消", style: .cancel))
+        a.addAction(UIAlertAction(title: L("取消"), style: .cancel))
         present(a, animated: true)
     }
 
@@ -917,17 +917,17 @@ final class CircuitSymbolEditorViewController: UIViewController {
 
     private func jsonMenu() -> UIMenu {
         UIMenu(children: [
-            UIAction(title: "貼上 JSON", image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in
+            UIAction(title: L("貼上 JSON"), image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in
                 self?.importJSON(UIPasteboard.general.string ?? "")
             },
-            UIAction(title: "拷貝 JSON", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
+            UIAction(title: L("拷貝 JSON"), image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
                 guard let self else { return }
                 UIPasteboard.general.string = CircuitSymbolJSON.export(self.draft.symbol, name: self.nameField.text ?? "")
-                self.hint.text = "已拷貝這個元件的 JSON。"
+                self.hint.text = L("已拷貝這個元件的 JSON。")
             },
-            UIAction(title: "拷貝給 AI 的說明", image: UIImage(systemName: "sparkles")) { [weak self] _ in
+            UIAction(title: L("拷貝給 AI 的說明"), image: UIImage(systemName: "sparkles")) { [weak self] _ in
                 UIPasteboard.general.string = CircuitSymbolJSON.aiPrompt
-                self?.hint.text = "已拷貝給 AI 的說明：貼到 AI 聊天裡、附上手繪元件的照片，把回覆的 JSON 拷貝起來，再按「JSON」→「貼上 JSON」。"
+                self?.hint.text = L("已拷貝給 AI 的說明：貼到 AI 聊天裡、附上手繪元件的照片，把回覆的 JSON 拷貝起來，再按「JSON」→「貼上 JSON」。")
             },
         ])
     }
@@ -938,22 +938,22 @@ final class CircuitSymbolEditorViewController: UIViewController {
             let file = try CircuitSymbolJSON.parse(text)
             draft.replace(with: file.symbol)
             if let name = file.name, !name.isEmpty, (nameField.text ?? "").isEmpty { nameField.text = name }
-            hint.text = "已貼上 JSON；可以再用線條、筆刷修改。"
+            hint.text = L("已貼上 JSON；可以再用線條、筆刷修改。")
             canvas.refresh()
         } catch {
-            alert(title: "沒辦法讀這段 JSON", message: error.localizedDescription)
+            alert(title: L("沒辦法讀這段 JSON"), message: error.localizedDescription)
         }
     }
 
     private func alert(title: String, message: String?) {
         let a = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        a.addAction(UIAlertAction(title: "好", style: .default))
+        a.addAction(UIAlertAction(title: L("好"), style: .default))
         present(a, animated: true)
     }
 
     func finish() {
         guard let symbol = draft.finished() else {
-            alert(title: draft.symbol.strokes.isEmpty && draft.symbol.texts.isEmpty ? "還沒有畫符號" : "還沒有接腳，導線接不上去：用「接腳」工具在格點上點一下", message: nil)
+            alert(title: draft.symbol.strokes.isEmpty && draft.symbol.texts.isEmpty ? L("還沒有畫符號") : L("還沒有接腳，導線接不上去：用「接腳」工具在格點上點一下"), message: nil)
             return
         }
         onDone(nameField.text ?? "", symbol)

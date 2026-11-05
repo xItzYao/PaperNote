@@ -9,10 +9,10 @@ enum ZipError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .notZip: return "這不是 zip 檔，或檔案已經損壞。"
-        case let .unsupported(name): return "「\(name)」用了不支援的壓縮方式。"
-        case let .encrypted(name): return "「\(name)」有密碼保護，請先解除密碼再匯入。"
-        case let .corrupt(name): return "「\(name)」在 zip 裡已經損壞。"
+        case .notZip: return L("這不是 zip 檔，或檔案已經損壞。")
+        case let .unsupported(name): return L("「\(name)」用了不支援的壓縮方式。")
+        case let .encrypted(name): return L("「\(name)」有密碼保護，請先解除密碼再匯入。")
+        case let .corrupt(name): return L("「\(name)」在 zip 裡已經損壞。")
         }
     }
 }

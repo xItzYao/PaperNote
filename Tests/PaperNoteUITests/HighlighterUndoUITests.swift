@@ -8,7 +8,7 @@ final class HighlighterUndoUITests: XCTestCase {
     private func launch(_ extra: [String] = [], tool: String = "螢光筆") {
         continueAfterFailure = false
         app = XCUIApplication()
-        app.launchArguments = ["-uiTestNotebook", "-fingerDrawing", "<true/>"] + extra
+        app.launchArguments = ["-appLanguage", "zh-Hant", "-uiTestNotebook", "-fingerDrawing", "<true/>"] + extra
         app.launch()
         XCTAssertTrue(app.buttons[tool].waitForExistence(timeout: 20), "要打開測試用的筆記本")
         app.buttons[tool].tap()

@@ -512,13 +512,13 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     @objc func titleLongPressed(_ g: UILongPressGestureRecognizer) {
         guard g.state == .began else { return }
-        let alert = UIAlertController(title: "筆記本名稱", message: nil, preferredStyle: .alert)
+        let alert = UIAlertController(title: L("筆記本名稱"), message: nil, preferredStyle: .alert)
         alert.addTextField { [weak self] tf in
             tf.text = self?.session.title
             tf.clearButtonMode = .whileEditing
         }
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-        alert.addAction(UIAlertAction(title: "儲存", style: .default) { [weak self, weak alert] _ in
+        alert.addAction(UIAlertAction(title: L("取消"), style: .cancel))
+        alert.addAction(UIAlertAction(title: L("儲存"), style: .default) { [weak self, weak alert] _ in
             self?.renameNotebook(to: alert?.textFields?.first?.text ?? "")
         })
         present(alert, animated: true)
@@ -1134,14 +1134,14 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     func deletePage(_ index: Int) {
         guard pages.count > 1 else {
-            showMessage("至少要保留一頁")
+            showMessage(L("至少要保留一頁"))
             return
         }
         // 移到「最近刪除的頁面」，30 天內可以還原
         performLayoutChange {
             session.trashPage(at: index)
         }
-        showToast("第 \(index + 1) 頁已移到「頁面 → 最近刪除的頁面」，30 天內可以還原")
+        showToast(L("第 \(index + 1) 頁已移到「頁面 → 最近刪除的頁面」，30 天內可以還原"))
     }
 
     func presentTrashedPages(from source: UIView?) {
@@ -1201,20 +1201,20 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     /// 匯出：畫面中間跳出小視窗選格式
     func presentExportChoice(from source: UIView) {
-        let alert = UIAlertController(title: "匯出「\(session.title)」", message: "要匯出成哪一種格式？可以只匯出部分頁面。", preferredStyle: .alert)
+        let alert = UIAlertController(title: L("匯出「\(session.title)」"), message: L("要匯出成哪一種格式？可以只匯出部分頁面。"), preferredStyle: .alert)
         alert.addTextField { f in
             f.placeholder = PageSelection.hint
-            f.accessibilityLabel = "匯出的頁面"
+            f.accessibilityLabel = L("匯出的頁面")
             f.keyboardType = .numbersAndPunctuation
             f.clearButtonMode = .whileEditing
         }
-        alert.addAction(UIAlertAction(title: "PDF（給別人看、列印）", style: .default) { [weak self, weak alert] _ in
+        alert.addAction(UIAlertAction(title: L("PDF（給別人看、列印）"), style: .default) { [weak self, weak alert] _ in
             self?.export(paperNote: false, pages: alert?.textFields?.first?.text ?? "", from: source)
         })
-        alert.addAction(UIAlertAction(title: "PaperNote（可以繼續編輯筆跡）", style: .default) { [weak self, weak alert] _ in
+        alert.addAction(UIAlertAction(title: L("PaperNote（可以繼續編輯筆跡）"), style: .default) { [weak self, weak alert] _ in
             self?.export(paperNote: true, pages: alert?.textFields?.first?.text ?? "", from: source)
         })
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        alert.addAction(UIAlertAction(title: L("取消"), style: .cancel))
         present(alert, animated: true)
     }
 
@@ -1226,7 +1226,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         do {
             pages = try PageSelection.parse(text, pageCount: session.document.pages.count)
         } catch {
-            showMessage("頁碼有誤", error.localizedDescription)
+            showMessage(L("頁碼有誤"), error.localizedDescription)
             return
         }
         do {
@@ -1237,7 +1237,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             vc.popoverPresentationController?.sourceRect = source.bounds
             present(vc, animated: true)
         } catch {
-            showMessage("匯出失敗", error.localizedDescription)
+            showMessage(L("匯出失敗"), error.localizedDescription)
         }
     }
 
@@ -1269,10 +1269,10 @@ struct TrashedPagesHost: View {
     var body: some View {
         NavigationStack {
             TrashedPagesList(items: items, onRestore: onRestore, onDelete: onDelete)
-                .navigationTitle("最近刪除的頁面")
+                .navigationTitle(L("最近刪除的頁面"))
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .confirmationAction) { Button("完成", action: onDone) }
+                    ToolbarItem(placement: .confirmationAction) { Button(L("完成"), action: onDone) }
                 }
         }
     }

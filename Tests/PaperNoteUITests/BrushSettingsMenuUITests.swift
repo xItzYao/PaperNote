@@ -8,7 +8,7 @@ final class BrushSettingsMenuUITests: XCTestCase {
     override func setUp() {
         continueAfterFailure = false
         app = XCUIApplication()
-        app.launchArguments = ["-uiTestNotebook", "-fingerDrawing", "<true/>"]
+        app.launchArguments = ["-appLanguage", "zh-Hant", "-uiTestNotebook", "-fingerDrawing", "<true/>"]
         app.launch()
     }
 

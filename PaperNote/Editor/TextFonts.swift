@@ -16,14 +16,14 @@ enum TextFonts {
     static let bundled = ["LXGWWenKaiTC-Regular", "Iansui-Regular", "NotoSerifTC-Regular"]
 
     private static let all: [(String, [Choice])] = [
-        ("中文", [
-            Choice(name: nil, title: "系統預設"),
-            Choice(name: "PingFangTC-Regular", title: "蘋方（黑體）"),
-            Choice(name: "NotoSerifTC-Regular", title: "思源宋體（明體）"),
-            Choice(name: "LXGWWenKaiTC-Regular", title: "霞鶩文楷（楷體）"),
-            Choice(name: "Iansui-Regular", title: "芫荽（手寫感）"),
+        (L("中文"), [
+            Choice(name: nil, title: L("系統預設")),
+            Choice(name: "PingFangTC-Regular", title: L("蘋方（黑體）")),
+            Choice(name: "NotoSerifTC-Regular", title: L("思源宋體（明體）")),
+            Choice(name: "LXGWWenKaiTC-Regular", title: L("霞鶩文楷（楷體）")),
+            Choice(name: "Iansui-Regular", title: L("芫荽（手寫感）")),
         ]),
-        ("英文、數字", [
+        (L("英文、數字"), [
             Choice(name: "HelveticaNeue", title: "Helvetica Neue"),
             Choice(name: "AvenirNext-Regular", title: "Avenir Next"),
             Choice(name: "Georgia", title: "Georgia"),
@@ -31,7 +31,7 @@ enum TextFonts {
             Choice(name: "Palatino-Roman", title: "Palatino"),
             Choice(name: "Baskerville", title: "Baskerville"),
             Choice(name: "CourierNewPSMT", title: "Courier New"),
-            Choice(name: "Menlo-Regular", title: "Menlo（等寬）"),
+            Choice(name: "Menlo-Regular", title: L("Menlo（等寬）")),
             Choice(name: "AmericanTypewriter", title: "American Typewriter"),
             Choice(name: "ChalkboardSE-Regular", title: "Chalkboard"),
             Choice(name: "Noteworthy-Light", title: "Noteworthy"),
@@ -94,10 +94,10 @@ struct TextFontPicker: View {
                     }
                 }
             }
-            .navigationTitle("字體")
+            .navigationTitle(L("字體"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("完成") { onDone() } }
+                ToolbarItem(placement: .confirmationAction) { Button(L("完成")) { onDone() } }
             }
         }
     }

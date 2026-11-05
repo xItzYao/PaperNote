@@ -18,9 +18,9 @@ struct BrushManagerView: View {
         NavigationStack {
             List {
                 Section {
-                    Picker("類別", selection: $category) {
-                        Text("筆").tag(BrushCategory.pen)
-                        Text("螢光筆").tag(BrushCategory.highlighter)
+                    Picker(L("類別"), selection: $category) {
+                        Text(L("筆")).tag(BrushCategory.pen)
+                        Text(L("螢光筆")).tag(BrushCategory.highlighter)
                     }
                     .pickerStyle(.segmented)
                 }
@@ -43,29 +43,29 @@ struct BrushManagerView: View {
                         reload()
                         editing = p
                     } label: {
-                        Label("新增顏色", systemImage: "plus.circle.fill")
+                        Label(L("新增顏色"), systemImage: "plus.circle.fill")
                     }
                 } header: {
-                    Text("按右上角「編輯」可以拖曳排序、刪除；點一下可以改顏色、粗細")
+                    Text(L("按右上角「編輯」可以拖曳排序、刪除；點一下可以改顏色、粗細"))
                 } footer: {
-                    Text("順序會套用到工具列和調色盤。至少要保留一個。")
+                    Text(L("順序會套用到工具列和調色盤。至少要保留一個。"))
                 }
             }
-            .navigationTitle("管理常用筆刷")
+            .navigationTitle(L("管理常用筆刷"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { EditButton() }
-                ToolbarItem(placement: .confirmationAction) { Button("完成") { onDone() } }
+                ToolbarItem(placement: .confirmationAction) { Button(L("完成")) { onDone() } }
             }
             .onAppear { reload() }
             .onChange(of: category) { _, _ in reload() }
             .sheet(item: $editing, onDismiss: reload) { p in
                 NavigationStack {
                     BrushSettingsView(preset: p) { updated in BrushStore.shared.update(updated) }
-                        .navigationTitle(category == .pen ? "筆" : "螢光筆")
+                        .navigationTitle(category == .pen ? L("筆") : L("螢光筆"))
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbar {
-                            ToolbarItem(placement: .confirmationAction) { Button("完成") { editing = nil } }
+                            ToolbarItem(placement: .confirmationAction) { Button(L("完成")) { editing = nil } }
                         }
                 }
                 .presentationDetents([.medium, .large])
@@ -90,7 +90,7 @@ struct BrushManagerView: View {
             .frame(width: 34)
             VStack(alignment: .leading, spacing: 2) {
                 Text(p.style.title)
-                Text("粗細 \(String(format: "%.1f", p.width))").font(.caption).foregroundStyle(.secondary)
+                Text(L("粗細 \(String(format: "%.1f", p.width))")).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
             if p.id == BrushStore.shared.current(category).id {

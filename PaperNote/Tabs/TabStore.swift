@@ -96,7 +96,7 @@ final class TabStore {
 
     @discardableResult
     func createGroup(name: String, with tab: UUID) -> TabGroup {
-        let g = TabGroup(name: name.isEmpty ? "群組 \(state.groups.count + 1)" : name,
+        let g = TabGroup(name: name.isEmpty ? L("群組 \(state.groups.count + 1)") : name,
                          colorHex: Self.groupColors[state.groups.count % Self.groupColors.count])
         state.groups.append(g)
         move(tab, to: g.id)

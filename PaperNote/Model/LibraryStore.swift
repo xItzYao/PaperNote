@@ -13,10 +13,10 @@ enum LibraryError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .unreadablePDF: return "無法讀取這個 PDF 檔。"
-        case .lockedPDF: return "這個 PDF 有密碼保護，請先解除密碼再匯入。"
-        case .notPaperNote: return "這不是 PaperNote 筆記本檔，或檔案已經損壞。"
-        case .newerPaperNote: return "這個筆記本檔是用比較新的 PaperNote 匯出的，請先更新 App。"
+        case .unreadablePDF: return L("無法讀取這個 PDF 檔。")
+        case .lockedPDF: return L("這個 PDF 有密碼保護，請先解除密碼再匯入。")
+        case .notPaperNote: return L("這不是 PaperNote 筆記本檔，或檔案已經損壞。")
+        case .newerPaperNote: return L("這個筆記本檔是用比較新的 PaperNote 匯出的，請先更新 App。")
         }
     }
 }
@@ -53,17 +53,17 @@ struct ZipImportResult {
     var summary: String {
         var lines: [String] = []
         if notebooks.isEmpty {
-            lines.append("zip 裡沒有可以匯入的 PDF。")
+            lines.append(L("zip 裡沒有可以匯入的 PDF。"))
         } else {
-            lines.append("已匯入 \(notebooks.count) 本筆記本，放在「\(folderName ?? "")」資料夾。")
+            lines.append(L("已匯入 \(notebooks.count) 本筆記本，放在「\(folderName ?? "")」資料夾。"))
         }
         if !skipped.isEmpty {
-            lines.append("有 \(skipped.count) 個檔案不是 PDF，沒有匯入。")
+            lines.append(L("有 \(skipped.count) 個檔案不是 PDF，沒有匯入。"))
             if skipped.contains(where: { $0.lowercased().hasSuffix(".goodnotes") }) {
-                lines.append("其中有 GoodNotes 格式的檔案：請在 GoodNotes 匯出時選「PDF」格式。")
+                lines.append(L("其中有 GoodNotes 格式的檔案：請在 GoodNotes 匯出時選「PDF」格式。"))
             }
         }
-        for f in failed { lines.append("「\(f.name)」沒有匯入：\(f.reason)") }
+        for f in failed { lines.append(L("「\(f.name)」沒有匯入：\(f.reason)")) }
         return lines.joined(separator: "\n")
     }
 }
@@ -111,7 +111,7 @@ final class LibraryStore: ObservableObject {
             guard let id = UUID(uuidString: dir.lastPathComponent), !known.contains(id),
                   let data = try? Data(contentsOf: NotebookSession.documentURL(in: dir)),
                   let doc = try? JSONDecoder.app.decode(NotebookDocument.self, from: data) else { continue }
-            var meta = NotebookMeta(title: "復原的筆記本", folderId: nil, coverHex: Palette.covers[0])
+            var meta = NotebookMeta(title: L("復原的筆記本"), folderId: nil, coverHex: Palette.covers[0])
             meta.id = id
             meta.pageCount = doc.pages.count
             index.notebooks.append(meta)
@@ -244,7 +244,7 @@ final class LibraryStore: ObservableObject {
 
     @discardableResult
     func createFolder(name: String, parent: UUID?) -> Folder {
-        let f = Folder(name: name.isEmpty ? "新資料夾" : name, parentId: parent)
+        let f = Folder(name: name.isEmpty ? L("新資料夾") : name, parentId: parent)
         index.folders.append(f)
         save()
         return f
@@ -337,7 +337,7 @@ final class LibraryStore: ObservableObject {
 
     func duplicateFolder(_ id: UUID) {
         guard let f = folder(id) else { return }
-        copyFolder(f, into: f.parentId, name: f.name + " 複本")
+        copyFolder(f, into: f.parentId, name: f.name + L(" 複本"))
         save()
     }
 
@@ -357,7 +357,7 @@ final class LibraryStore: ObservableObject {
     @discardableResult
     func createNotebook(title: String, folder: UUID?, paper: PaperStyle, landscape: Bool, size paperSize: PaperSize = .a4,
                         coverHex: String? = nil) -> NotebookMeta {
-        var meta = NotebookMeta(title: title.isEmpty ? "未命名筆記本" : title, folderId: folder,
+        var meta = NotebookMeta(title: title.isEmpty ? L("未命名筆記本") : title, folderId: folder,
                                 coverHex: coverHex ?? Palette.covers.randomElement()!)
         let dir = notebookURL(meta.id)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -530,7 +530,7 @@ final class LibraryStore: ObservableObject {
 
     func duplicateNotebook(_ id: UUID) {
         guard let nb = notebook(id) else { return }
-        copyNotebook(nb, into: nb.folderId, title: nb.title + " 複本")
+        copyNotebook(nb, into: nb.folderId, title: nb.title + L(" 複本"))
         save()
     }
 

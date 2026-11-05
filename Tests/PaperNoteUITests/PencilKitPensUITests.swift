@@ -8,7 +8,7 @@ final class PencilKitPensUITests: XCTestCase {
     override func setUp() {
         continueAfterFailure = false
         app = XCUIApplication()
-        app.launchArguments = ["-uiTestNotebook", "-fingerDrawing", "<true/>", "-shapeSnap", "<false/>"]
+        app.launchArguments = ["-appLanguage", "zh-Hant", "-uiTestNotebook", "-fingerDrawing", "<true/>", "-shapeSnap", "<false/>"]
         app.launch()
     }
 

@@ -470,7 +470,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
     /// 切到電路工具編輯這個電路圖
     func editCircuit(_ ref: ElementRef) {
         if case let (pi, ei)? = locate(ref), pages[pi].elements[ei].locked {
-            showToast("電路圖已鎖定，點鎖頭解除才能編輯")
+            showToast(L("電路圖已鎖定，點鎖頭解除才能編輯"))
             return
         }
         setTool(.circuit)
@@ -496,10 +496,10 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             return
         }
         var items: [UIMenuElement] = [
-            UIAction(title: "貼上", image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in self?.pasteFromClipboard(at: p) },
+            UIAction(title: L("貼上"), image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in self?.pasteFromClipboard(at: p) },
         ]
         if onPDF {
-            items.append(UIAction(title: "選取文字", image: UIImage(systemName: "character.cursor.ibeam")) { [weak self] _ in
+            items.append(UIAction(title: L("選取文字"), image: UIImage(systemName: "character.cursor.ibeam")) { [weak self] _ in
                 self?.setTool(.textSelect)
                 self?.tapText(at: p)
             })
@@ -930,7 +930,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         guard case let (pi, ei)? = locate(ref) else { return UIMenu() }
         let e = pages[pi].elements[ei]
         var items: [UIMenuElement] = []
-        items.append(UIAction(title: e.locked ? "解除固定" : "固定位置",
+        items.append(UIAction(title: e.locked ? L("解除固定") : L("固定位置"),
                               image: UIImage(systemName: e.locked ? "lock.open" : "lock")) { [weak self] _ in
             self?.modifyElement(ref) { $0.locked.toggle() }
         })
@@ -948,48 +948,48 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             // 表格的長按選單只放文字、拷貝、剪下、貼上（其他功能在工具列；固定位置是左上角的鎖頭）
             return UIMenu(children: tableCellMenuItems(ref, cell: cell))
         case .text:
-            items.append(UIAction(title: "編輯文字", image: UIImage(systemName: "keyboard")) { [weak self] _ in
+            items.append(UIAction(title: L("編輯文字"), image: UIImage(systemName: "keyboard")) { [weak self] _ in
                 self?.beginTextEditing(ref, cell: nil)
             })
-            items.append(UIMenu(title: "樣式", image: UIImage(systemName: "textformat.size"), children: [
-                UIAction(title: "字體…", image: UIImage(systemName: "textformat")) { [weak self] _ in self?.presentFontPicker(ref) },
-                UIAction(title: "字放大") { [weak self] _ in self?.modifyTextBox(ref) { $0.fontSize = min($0.fontSize + 2, Self.textSizeRange.upperBound) } },
-                UIAction(title: "字縮小") { [weak self] _ in self?.modifyTextBox(ref) { $0.fontSize = max($0.fontSize - 2, Self.textSizeRange.lowerBound) } },
-                UIAction(title: "無底色") { [weak self] _ in self?.modifyTextBox(ref) { $0.backgroundHex = nil } },
-                UIAction(title: "黃色便利貼") { [weak self] _ in self?.modifyTextBox(ref) { $0.backgroundHex = "#FFF59DFF" } },
-                UIAction(title: "藍色便利貼") { [weak self] _ in self?.modifyTextBox(ref) { $0.backgroundHex = "#BBDEFBFF" } },
-                UIAction(title: "紅字") { [weak self] _ in self?.modifyTextBox(ref) { $0.colorHex = "#D32F2FFF" } },
-                UIAction(title: "黑字") { [weak self] _ in self?.modifyTextBox(ref) { $0.colorHex = "#1A1A1AFF" } },
+            items.append(UIMenu(title: L("樣式"), image: UIImage(systemName: "textformat.size"), children: [
+                UIAction(title: L("字體…"), image: UIImage(systemName: "textformat")) { [weak self] _ in self?.presentFontPicker(ref) },
+                UIAction(title: L("字放大")) { [weak self] _ in self?.modifyTextBox(ref) { $0.fontSize = min($0.fontSize + 2, Self.textSizeRange.upperBound) } },
+                UIAction(title: L("字縮小")) { [weak self] _ in self?.modifyTextBox(ref) { $0.fontSize = max($0.fontSize - 2, Self.textSizeRange.lowerBound) } },
+                UIAction(title: L("無底色")) { [weak self] _ in self?.modifyTextBox(ref) { $0.backgroundHex = nil } },
+                UIAction(title: L("黃色便利貼")) { [weak self] _ in self?.modifyTextBox(ref) { $0.backgroundHex = "#FFF59DFF" } },
+                UIAction(title: L("藍色便利貼")) { [weak self] _ in self?.modifyTextBox(ref) { $0.backgroundHex = "#BBDEFBFF" } },
+                UIAction(title: L("紅字")) { [weak self] _ in self?.modifyTextBox(ref) { $0.colorHex = "#D32F2FFF" } },
+                UIAction(title: L("黑字")) { [weak self] _ in self?.modifyTextBox(ref) { $0.colorHex = "#1A1A1AFF" } },
             ]))
         case let .image(d):
-            items.append(UIAction(title: "釘選在畫面上", image: UIImage(systemName: "pin")) { [weak self] _ in
+            items.append(UIAction(title: L("釘選在畫面上"), image: UIImage(systemName: "pin")) { [weak self] _ in
                 guard let self, let img = self.session.image(named: d.file) else { return }
                 self.pinOverlay.addPin(image: img, near: self.docRectInView(self.docFrame(of: e, pageIndex: pi)))
             })
         case .circuit:
-            items.append(UIAction(title: "編輯電路", image: UIImage(systemName: "bolt")) { [weak self] _ in
+            items.append(UIAction(title: L("編輯電路"), image: UIImage(systemName: "bolt")) { [weak self] _ in
                 self?.editCircuit(ref)
             })
-            items.append(UIAction(title: "匯出 SVG", image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
+            items.append(UIAction(title: L("匯出 SVG"), image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
                 self?.exportCircuitSVG(ref)
             })
         }
         items.append(UIMenu(options: .displayInline, children: [
-            UIAction(title: "拷貝", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in self?.copyElement(ref) },
-            UIAction(title: "剪下", image: UIImage(systemName: "scissors")) { [weak self] _ in self?.cutElement(ref) },
-            UIAction(title: "複製一份", image: UIImage(systemName: "plus.square.on.square")) { [weak self] _ in self?.duplicateElement(ref) },
-            UIAction(title: "刪除", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in self?.deleteElement(ref) },
+            UIAction(title: L("拷貝"), image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in self?.copyElement(ref) },
+            UIAction(title: L("剪下"), image: UIImage(systemName: "scissors")) { [weak self] _ in self?.cutElement(ref) },
+            UIAction(title: L("複製一份"), image: UIImage(systemName: "plus.square.on.square")) { [weak self] _ in self?.duplicateElement(ref) },
+            UIAction(title: L("刪除"), image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in self?.deleteElement(ref) },
         ]))
         return UIMenu(children: items)
     }
 
     func emptyAreaMenu(at p: CGPoint) -> UIMenu {
         UIMenu(children: [
-            UIAction(title: "貼上", image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in self?.pasteFromClipboard(at: p) },
-            UIAction(title: "插入表格…", image: UIImage(systemName: "tablecells")) { [weak self] _ in
+            UIAction(title: L("貼上"), image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in self?.pasteFromClipboard(at: p) },
+            UIAction(title: L("插入表格…"), image: UIImage(systemName: "tablecells")) { [weak self] _ in
                 self?.presentInsertTablePanel(anchor: .doc(CGRect(x: p.x, y: p.y, width: 1, height: 1)), at: p)
             },
-            UIAction(title: "插入文字框", image: UIImage(systemName: "character.textbox")) { [weak self] _ in self?.insertTextBox(at: p) },
+            UIAction(title: L("插入文字框"), image: UIImage(systemName: "character.textbox")) { [weak self] _ in self?.insertTextBox(at: p) },
         ])
     }
 
@@ -1137,7 +1137,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             k += 1
         }
         insertImage(image, jpeg: true, at: c)
-        showToast("已加到第 \(pageIndex(containing: c).map { $0 + 1 } ?? pi + 1) 頁")
+        showToast(L("已加到第 \(pageIndex(containing: c).map { $0 + 1 } ?? pi + 1) 頁"))
     }
 
     func pasteFromClipboard(at p: CGPoint?) {
@@ -1160,7 +1160,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         } else if let s = pb.string, !s.isEmpty {
             insertTextBox(at: p, text: s)
         } else {
-            showMessage("剪貼簿是空的")
+            showMessage(L("剪貼簿是空的"))
         }
     }
 
@@ -1307,29 +1307,29 @@ extension NotebookViewController {
         let rect = path.bounds
         let viewRect = docRectInView(rect)
         let menu = UIMenu(children: [
-            UIAction(title: "釘選在畫面上", image: UIImage(systemName: "pin")) { [weak self] _ in
+            UIAction(title: L("釘選在畫面上"), image: UIImage(systemName: "pin")) { [weak self] _ in
                 self?.pinOverlay.addPin(image: img, near: viewRect)
             },
-            UIAction(title: "拷貝", image: UIImage(systemName: "doc.on.doc")) { _ in
+            UIAction(title: L("拷貝"), image: UIImage(systemName: "doc.on.doc")) { _ in
                 UIPasteboard.general.image = img
             },
-            UIAction(title: "翻譯文字", image: UIImage(systemName: "translate")) { [weak self] _ in
+            UIAction(title: L("翻譯文字"), image: UIImage(systemName: "translate")) { [weak self] _ in
                 TextServices.recognizeText(in: img) { text in
                     guard let self else { return }
-                    if text.isEmpty { self.showMessage("沒有辨識到文字"); return }
+                    if text.isEmpty { self.showMessage(L("沒有辨識到文字")); return }
                     TextServices.translate(text, from: self, anchor: viewRect)
                 }
             },
-            UIAction(title: "拷貝文字", image: UIImage(systemName: "text.viewfinder")) { [weak self] _ in
+            UIAction(title: L("拷貝文字"), image: UIImage(systemName: "text.viewfinder")) { [weak self] _ in
                 TextServices.recognizeText(in: img) { text in
-                    if text.isEmpty { self?.showMessage("沒有辨識到文字"); return }
+                    if text.isEmpty { self?.showMessage(L("沒有辨識到文字")); return }
                     UIPasteboard.general.string = text
                 }
             },
-            UIAction(title: "存到照片", image: UIImage(systemName: "photo.badge.arrow.down")) { _ in
+            UIAction(title: L("存到照片"), image: UIImage(systemName: "photo.badge.arrow.down")) { _ in
                 UIImageWriteToSavedPhotosAlbum(img, nil, nil, nil)
             },
-            UIAction(title: "分享…", image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
+            UIAction(title: L("分享…"), image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
                 guard let self else { return }
                 let vc = UIActivityViewController(activityItems: [img], applicationActivities: nil)
                 vc.popoverPresentationController?.sourceView = self.view
@@ -1611,28 +1611,28 @@ extension NotebookViewController {
             }
         }
         let menu = UIMenu(children: [
-            UIAction(title: "翻譯", image: UIImage(systemName: "translate")) { [weak self] _ in
+            UIAction(title: L("翻譯"), image: UIImage(systemName: "translate")) { [weak self] _ in
                 guard let self else { return }
                 TextServices.translate(text, from: self, anchor: anchor) { [weak self] translated in
                     self?.insertTextBox(at: CGPoint(x: bounds.midX, y: bounds.maxY + 50), text: translated)
                 }
             },
-            UIAction(title: "拷貝", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
+            UIAction(title: L("拷貝"), image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
                 UIPasteboard.general.string = text
                 self?.endTextSelection()
             },
-            UIAction(title: "查詢", image: UIImage(systemName: "character.book.closed")) { [weak self] _ in
+            UIAction(title: L("查詢"), image: UIImage(systemName: "character.book.closed")) { [weak self] _ in
                 guard let self else { return }
                 TextServices.lookUp(text, from: self, anchor: anchor)
             },
-            UIMenu(title: "螢光標示", image: UIImage(systemName: "highlighter"), children: colors),
+            UIMenu(title: L("螢光標示"), image: UIImage(systemName: "highlighter"), children: colors),
         ] + removeHighlightActions(removableHighlight))
         presentMenu(menu, atDocPoint: CGPoint(x: bounds.midX, y: bounds.minY), avoiding: bounds)
     }
 
     private func removeHighlightActions(_ h: (Int, UUID)?) -> [UIMenuElement] {
         guard case let (pi, hid)? = h else { return [] }
-        return [UIAction(title: "移除螢光標示", image: UIImage(systemName: "eraser"), attributes: .destructive) { [weak self] _ in
+        return [UIAction(title: L("移除螢光標示"), image: UIImage(systemName: "eraser"), attributes: .destructive) { [weak self] _ in
             self?.updatePage(pi) { $0.highlights.removeAll { $0.id == hid } }
             self?.endTextSelection()
         }]

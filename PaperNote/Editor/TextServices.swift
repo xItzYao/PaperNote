@@ -73,8 +73,8 @@ struct TranslatePanel: View {
     let onClose: () -> Void
 
     static let languages: [(id: String, name: String)] = [
-        ("zh-Hant", "繁體中文"), ("en", "英文"), ("ja", "日文"), ("zh-Hans", "簡體中文"),
-        ("ko", "韓文"), ("fr", "法文"), ("de", "德文"), ("es", "西班牙文"),
+        ("zh-Hant", L("繁體中文")), ("en", L("英文")), ("ja", L("日文")), ("zh-Hans", L("簡體中文")),
+        ("ko", L("韓文")), ("fr", L("法文")), ("de", L("德文")), ("es", L("西班牙文")),
     ]
 
     @AppStorage("translate.target") private var targetID = "zh-Hant"
@@ -147,7 +147,7 @@ struct TranslatePanel: View {
                     GroupBox {
                         Text(text).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
                     } label: {
-                        Text("原文").font(.caption).foregroundStyle(.secondary)
+                        Text(L("原文")).font(.caption).foregroundStyle(.secondary)
                     }
 
                     GroupBox {
@@ -157,29 +157,29 @@ struct TranslatePanel: View {
                             } else if let errorText {
                                 Text(errorText).foregroundStyle(.red)
                             } else {
-                                HStack { ProgressView(); Text("翻譯中…").foregroundStyle(.secondary) }
+                                HStack { ProgressView(); Text(L("翻譯中…")).foregroundStyle(.secondary) }
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     } label: {
-                        Text("譯文").font(.caption).foregroundStyle(.secondary)
+                        Text(L("譯文")).font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 .padding()
             }
-            .navigationTitle("翻譯")
+            .navigationTitle(L("翻譯"))
             .navigationBarTitleDisplayMode(.inline)
             .interactiveDismissDisabled(true)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("關閉") { onClose() }
+                    Button(L("關閉")) { onClose() }
                         .disabled(busy && !allowCloseAnyway)
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     if let result {
-                        Button { UIPasteboard.general.string = result } label: { Label("拷貝譯文", systemImage: "doc.on.doc") }
+                        Button { UIPasteboard.general.string = result } label: { Label(L("拷貝譯文"), systemImage: "doc.on.doc") }
                         if let onInsert {
-                            Button { onInsert(result) } label: { Label("插入文字框", systemImage: "character.textbox") }
+                            Button { onInsert(result) } label: { Label(L("插入文字框"), systemImage: "character.textbox") }
                         }
                     }
                 }
@@ -190,7 +190,7 @@ struct TranslatePanel: View {
                 let response = try await session.translate(text)
                 result = response.targetText
             } catch {
-                errorText = "無法翻譯：\(error.localizedDescription)\n可以到「設定 → App → 翻譯」下載語言，或換一個原文語言再試。"
+                errorText = L("無法翻譯：\(error.localizedDescription)\n可以到「設定 → App → 翻譯」下載語言，或換一個原文語言再試。")
             }
         }
         .onAppear {
