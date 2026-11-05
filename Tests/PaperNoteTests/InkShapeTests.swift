@@ -255,6 +255,21 @@ final class InkShapeTests: XCTestCase {
         XCTAssertGreaterThan(after.height, before.height + 20)
     }
 
+    /// 回報的問題：手畫的矩形停在上緣（不在角上），拖的時候角要和筆尖一起移動，不能越拉越偏
+    func testTheRectangleCornerFollowsThePen() throws {
+        let s = try XCTUnwrap(InkShapes.recognize(roughRectangle(CGRect(x: 0, y: 0, width: 200, height: 100))))
+        XCTAssertEqual(s.kind, .rectangle)
+        let before = InkShapes.bounds(s.points)
+        XCTAssertGreaterThan(abs(s.grab.x - before.minX), 10, "（筆停的地方離角還有一段）")
+        let move = CGPoint(x: -60, y: -40)
+        let m = InkShapes.moved(s, to: CGPoint(x: s.grab.x + move.x, y: s.grab.y + move.y))
+        let after = InkShapes.bounds(m.points)
+        XCTAssertEqual(after.minX, before.minX + move.x, accuracy: 0.5, "左上角和筆尖移動一樣多")
+        XCTAssertEqual(after.minY, before.minY + move.y, accuracy: 0.5, "左上角和筆尖移動一樣多")
+        XCTAssertEqual(after.maxX, before.maxX, accuracy: 0.5, "右下角不動")
+        XCTAssertEqual(after.maxY, before.maxY, accuracy: 0.5, "右下角不動")
+    }
+
     func testCircleStaysACircleWhenResized() throws {
         let s = try XCTUnwrap(InkShapes.recognize(ellipsePoints(CGRect(x: 0, y: 0, width: 150, height: 150))))
         let m = InkShapes.moved(s, to: CGPoint(x: s.grab.x + 120, y: s.grab.y + 10))

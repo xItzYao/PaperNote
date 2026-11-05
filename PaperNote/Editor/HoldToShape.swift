@@ -42,14 +42,30 @@ enum HoldToShape {
         return corners.max { $0.distance(to: p) < $1.distance(to: p) }
     }
 
-    /// 長寬分別依筆尖相對固定角的距離縮放（0.1～10 倍）
+    /// 跟著筆尖走的角：固定角的對角
+    static func movingCorner(of shape: [CGPoint], anchor a: CGPoint) -> CGPoint? {
+        guard let minX = shape.map(\.x).min(), let maxX = shape.map(\.x).max(),
+              let minY = shape.map(\.y).min(), let maxY = shape.map(\.y).max() else { return nil }
+        return CGPoint(x: abs(a.x - minX) <= abs(a.x - maxX) ? maxX : minX,
+                       y: abs(a.y - minY) <= abs(a.y - maxY) ? maxY : minY)
+    }
+
+    /// 筆尖移到 p 時，跟著走的角要到哪裡：停住時筆尖離那個角多遠，之後就一直保持（角和筆尖一起移動）。
+    /// 不能拿筆尖本身當角：筆停的地方通常離角還有一段，用它算比例的話角會比筆尖跑得快或慢，越拉越偏
+    static func cornerTarget(corner c: CGPoint, grab: CGPoint, pen p: CGPoint) -> CGPoint {
+        CGPoint(x: p.x + c.x - grab.x, y: p.y + c.y - grab.y)
+    }
+
+    /// 長寬分別縮放，固定角不動、對角跟著筆尖走（0.1～10 倍）
     static func scaled(_ base: [CGPoint], grab: CGPoint, anchor a: CGPoint, to p: CGPoint) -> [CGPoint] {
-        func scale(_ now: CGFloat, _ grab: CGFloat, _ anchor: CGFloat) -> CGFloat {
-            let d = grab - anchor
+        guard let c = movingCorner(of: base, anchor: a) else { return base }
+        let t = cornerTarget(corner: c, grab: grab, pen: p)
+        func scale(_ target: CGFloat, _ corner: CGFloat, _ anchor: CGFloat) -> CGFloat {
+            let d = corner - anchor
             guard abs(d) > 8 else { return 1 }
-            return min(max((now - anchor) / d, 0.1), 10)
+            return min(max((target - anchor) / d, 0.1), 10)
         }
-        let sx = scale(p.x, grab.x, a.x), sy = scale(p.y, grab.y, a.y)
+        let sx = scale(t.x, c.x, a.x), sy = scale(t.y, c.y, a.y)
         return base.map { CGPoint(x: a.x + ($0.x - a.x) * sx, y: a.y + ($0.y - a.y) * sy) }
     }
 

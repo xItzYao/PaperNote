@@ -46,8 +46,11 @@ enum InkShapes {
             s.end = p
             s.points = arc(from: s.start, to: s.end, bulge: s.bulge)
         case .circle:
-            let d0 = s.grab.distance(to: s.anchor)
-            let k = d0 > 8 ? min(max(p.distance(to: s.anchor) / d0, 0.1), 10) : 1
+            // 外框的角和筆尖一起移動（和矩形一樣），但長寬同比例，圓還是圓
+            let c = HoldToShape.movingCorner(of: s.base, anchor: s.anchor) ?? s.grab
+            let d0 = c.distance(to: s.anchor)
+            let target = HoldToShape.cornerTarget(corner: c, grab: s.grab, pen: p)
+            let k = d0 > 8 ? min(max(target.distance(to: s.anchor) / d0, 0.1), 10) : 1
             s.points = s.base.map { CGPoint(x: s.anchor.x + ($0.x - s.anchor.x) * k, y: s.anchor.y + ($0.y - s.anchor.y) * k) }
         case .ellipse, .rectangle, .triangle:
             s.points = HoldToShape.scaled(s.base, grab: s.grab, anchor: s.anchor, to: p)

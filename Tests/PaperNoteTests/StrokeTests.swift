@@ -95,6 +95,22 @@ final class HoldToShapeTests: XCTestCase {
         XCTAssertEqual(HoldToShape.anchorCorner(of: square, farthestFrom: CGPoint(x: 95, y: 5)), CGPoint(x: 0, y: 50))
     }
 
+    /// 回報的問題：矩形停住後拖大，角沒有跟著筆尖跑，會跑掉（筆停的地方不在角上）
+    func testTheCornerMovesTogetherWithThePen() {
+        let box = [CGPoint(x: 0, y: 0), CGPoint(x: 100, y: 0), CGPoint(x: 100, y: 50), CGPoint(x: 0, y: 50)]
+        let anchor = CGPoint(x: 0, y: 50)
+        // 筆停在右上角往左 20、往下 10 的地方
+        let grab = CGPoint(x: 80, y: 10)
+        for move in [CGPoint(x: 50, y: -30), CGPoint(x: 120, y: 40), CGPoint(x: -30, y: 15)] {
+            let pen = CGPoint(x: grab.x + move.x, y: grab.y + move.y)
+            let out = HoldToShape.scaled(box, grab: grab, anchor: anchor, to: pen)
+            XCTAssertEqual(out.map(\.x).max()!, 100 + move.x, accuracy: 0.001, "右上角和筆尖一起移動 \(move)")
+            XCTAssertEqual(out.map(\.y).min()!, 0 + move.y, accuracy: 0.001, "右上角和筆尖一起移動 \(move)")
+            XCTAssertEqual(out.map(\.x).min()!, 0, accuracy: 0.001, "左下角不動")
+            XCTAssertEqual(out.map(\.y).max()!, 50, accuracy: 0.001, "左下角不動")
+        }
+    }
+
     func testDraggingResizesWidthAndHeightSeparately() {
         let square = [CGPoint(x: 0, y: 0), CGPoint(x: 100, y: 0), CGPoint(x: 100, y: 50), CGPoint(x: 0, y: 50)]
         let anchor = CGPoint(x: 0, y: 50)
