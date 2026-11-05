@@ -103,6 +103,55 @@ final class InkShapeTests: XCTestCase {
         XCTAssertEqual(s.points.last!.distance(to: pts.last!), 0, accuracy: 3)
     }
 
+    // MARK: 扁的曲線不能變成圓弧（回報的問題：上下比較小的曲線停住後變成一個弧）
+
+    /// 300pt 寬的手畫路徑，y = f(x 的比例)，加上手抖
+    private func flat(_ f: (CGFloat) -> CGFloat, n: Int = 120) -> [CGPoint] {
+        (0...n).map { i in
+            let t = CGFloat(i) / CGFloat(n)
+            return CGPoint(x: t * 300 + wobble(i), y: 200 - f(t) + wobble(i + 4))
+        }
+    }
+
+    func testAFlatBellIsACurveNotAnArc() throws {
+        // 中間凸起、兩邊平的鐘形
+        let s = try XCTUnwrap(InkShapes.recognize(flat { 45 * exp(-pow(($0 - 0.5) / 0.15, 2)) }))
+        XCTAssertEqual(s.kind, .curve)
+    }
+
+    func testTwoUnevenBumpsAreACurveNotAnArc() throws {
+        let s = try XCTUnwrap(InkShapes.recognize(flat { 45 * (sin($0 * .pi) + 0.35 * sin($0 * 3 * .pi)) }))
+        XCTAssertEqual(s.kind, .curve)
+    }
+
+    func testALopsidedBumpIsACurveNotAnArc() throws {
+        // 左邊平、右邊才拱起來
+        let s = try XCTUnwrap(InkShapes.recognize(flat { 50 * sin(.pi * pow($0, 2.2)) }))
+        XCTAssertEqual(s.kind, .curve)
+    }
+
+    func testAFlatArcIsStillAnArc() throws {
+        // 弦 300pt、拱高 40pt 的圓弧（半徑約 300pt）
+        let c: CGFloat = 300, h: CGFloat = 40
+        let r = c * c / (8 * h) + h / 2
+        let half = asin(c / 2 / r)
+        let pts = (0...120).map { i -> CGPoint in
+            let a = -half + 2 * half * CGFloat(i) / 120
+            return CGPoint(x: 150 + r * sin(a) + wobble(i), y: 200 - (r * cos(a) - (r - h)) + wobble(i + 4))
+        }
+        let s = try XCTUnwrap(InkShapes.recognize(pts))
+        XCTAssertEqual(s.kind, .arc)
+        XCTAssertEqual(InkShapes.bounds(s.points).height, h, accuracy: 4, "拱高照手畫的")
+    }
+
+    func testTheArcToleranceFollowsTheHeight() {
+        // 很扁（半徑很大）時門檻還是拱高的 8%；超過半圓（拱高比半徑大）時不超過半徑的 14%
+        XCTAssertEqual(InkShapes.arcTolerance(height: 40, radius: 300), 4, accuracy: 0.001)
+        XCTAssertEqual(InkShapes.arcTolerance(height: 80, radius: 300), 6.4, accuracy: 0.001)
+        XCTAssertEqual(InkShapes.arcTolerance(height: 100, radius: 50), 7, accuracy: 0.001)
+        XCTAssertEqual(InkShapes.arcTolerance(height: 10, radius: 20), 4, accuracy: 0.001, "最少 4pt")
+    }
+
     // MARK: 平滑的曲線（回報的需求：停住後不是基本圖形也要修，像用多項式逼近）
 
     /// S 形的波浪（晃動很明顯）

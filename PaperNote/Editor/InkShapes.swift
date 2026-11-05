@@ -127,7 +127,7 @@ enum InkShapes {
         if let c = circleCenter(a, far, b) {
             let r = c.distance(to: a)
             let err = pts.reduce(0) { $0 + abs($1.distance(to: c) - r) } / CGFloat(pts.count)
-            if err < max(5, r * 0.14) {
+            if err < arcTolerance(height: farDev, radius: r) {
                 let bulge = h / chord
                 return InkShape(kind: .arc, start: a, end: b, bulge: bulge, points: arc(from: a, to: b, bulge: bulge))
             }
@@ -135,6 +135,12 @@ enum InkShapes {
         // 其他的（波浪、S 形、勾…）：照手畫的修成平滑的曲線，頭尾不動
         let curve = smoothCurve(pts, closed: false)
         return InkShape(kind: .curve, start: a, end: b, base: curve, grab: b, anchor: a, points: curve)
+    }
+
+    /// 圓弧和手畫的平均差多少以內算圓弧：拱高的 8%（最少 4pt），也不超過半徑的 14%。
+    /// 要和拱高比，不能只看半徑：越扁的弧半徑越大（約 弦長² ÷ 8 拱高），扁的波浪、雙拱都會被當成圓弧
+    static func arcTolerance(height h: CGFloat, radius r: CGFloat) -> CGFloat {
+        max(4, min(h * 0.08, r * 0.14))
     }
 
     // MARK: 平滑的曲線
