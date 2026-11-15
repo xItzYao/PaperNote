@@ -286,8 +286,9 @@ final class HoldToShapeController {
 
     private func showPreview() {
         guard let ls = live, let editor else { return }
-        // 預覽線用這支筆實際畫出來的粗細；點是文件座標，換成畫布座標
-        let width = samples[ls.preset.id]?.size.width ?? ls.preset.width
+        // 預覽線用這支筆實際畫出來的粗細（和放開後的圖形一樣）；點是文件座標，換成畫布座標
+        let tool = ls.preset.tool
+        let width = samples[ls.preset.id].map { PencilKitInkWidth.drawn(tool.ink.inkType, size: $0.size.width) } ?? tool.width
         let pts = ls.points.map { editor.pagesContainer.convert($0, to: editor.canvas) }
         CATransaction.begin()
         CATransaction.setDisableActions(true)

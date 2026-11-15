@@ -592,9 +592,11 @@ final class EditorRequestsNov15Tests: XCTestCase {
         func onScreen(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
             CGPoint(x: r.minX + r.width * x / 100, y: r.minY + r.height * y / 100)
         }
-        // 塗「保留」：左上角的背景留下來
-        vc.paint([onScreen(5, 10), onScreen(20, 10)], keep: true)
-        XCTAssertTrue(canvas.keeps(CGPoint(x: 12, y: 10)), "塗過的背景留下來")
+        // 回報的需求：大面積用塗的效果不好 →「保留」改成框選，框起來的整塊留下來
+        vc.keepBox(StickerEditorViewController.box(onScreen(4, 4), onScreen(22, 26)))
+        XCTAssertTrue(canvas.keeps(CGPoint(x: 6, y: 6)), "框的角落也留下來")
+        XCTAssertTrue(canvas.keeps(CGPoint(x: 20, y: 24)))
+        XCTAssertFalse(canvas.keeps(CGPoint(x: 26, y: 10)), "框外面的背景還是去掉")
         // 塗「去掉」：主體中間挖掉
         vc.paint([onScreen(50, 50)], keep: false)
         XCTAssertFalse(canvas.keeps(CGPoint(x: 50, y: 50)), "塗過的主體去掉")
@@ -602,7 +604,7 @@ final class EditorRequestsNov15Tests: XCTestCase {
         // 做出來的貼紙照塗過的遮罩
         let sticker = try XCTUnwrap(vc.makeSticker().cgImage)
         XCTAssertLessThan(sticker.width, 100)
-        XCTAssertGreaterThan(sticker.width, 60, "左上角塗保留的部分也在貼紙裡")
+        XCTAssertGreaterThan(sticker.width, 60, "左上角框起來的部分也在貼紙裡")
         vc.setBrushKeeps(false)
         XCTAssertEqual(vc.brushMode.selectedSegmentIndex, 1)
         XCTAssertFalse(vc.brushKeeps)
@@ -615,10 +617,10 @@ final class EditorRequestsNov15Tests: XCTestCase {
         let canvas = try XCTUnwrap(vc.maskCanvas)
         XCTAssertFalse(canvas.keeps(CGPoint(x: 50, y: 50)), "一開始什麼都沒留")
         let r = vc.imageRect
-        vc.paint([CGPoint(x: r.midX, y: r.midY)], keep: true)
+        vc.keepBox(CGRect(x: r.minX + r.width * 0.4, y: r.minY + r.height * 0.4, width: r.width * 0.2, height: r.height * 0.2))
         XCTAssertTrue(canvas.keeps(CGPoint(x: 50, y: 50)))
         let sticker = try XCTUnwrap(vc.makeSticker().cgImage)
-        XCTAssertLessThan(sticker.width, 60, "只有塗的那一塊")
+        XCTAssertEqual(Double(sticker.width), 20, accuracy: 2, "只有框起來的那一塊")
     }
 
     /// 回報的需求：筆跡的貼紙分開存成向量，貼上的是真的筆跡

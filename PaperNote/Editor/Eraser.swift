@@ -59,18 +59,9 @@ enum StrokeEraser {
         return changed ? out : nil
     }
 
-    /// PencilKit 實際畫出來的半個線寬（和點的 size 不一樣，實測見 PencilKitInkStudy）：
-    /// pen、monoline（螢光筆也是）寬 2·size − 4；沾水筆斜的筆頭長的那邊 2·(size − 2)；
-    /// 舊筆記的 marker 是斜的筆頭，長的那邊約 1.1·size；鉛筆 1.45·size、蠟筆 1.25·size、水彩 1.6·size。斜的筆頭都用長的那邊（比較好擦）
+    /// PencilKit 實際畫出來的半個線寬（和點的 size 不一樣，見 PencilKitInkWidth）。斜的筆頭都用長的那邊（比較好擦）
     static func drawnHalfWidth(_ ink: PKInk, _ size: CGSize) -> CGFloat {
-        switch ink.inkType {
-        case .pen, .monoline, .fountainPen: return max(0.5, size.width - 2)
-        case .marker: return size.width * 0.55
-        case .pencil: return size.width * 0.725
-        case .crayon: return size.width * 0.625
-        case .watercolor: return size.width * 0.8
-        default: return size.width / 2
-        }
+        PencilKitInkWidth.drawn(ink.inkType, size: size.width) / 2
     }
 
     /// 點到橡皮擦走過的折線的距離

@@ -51,12 +51,17 @@ enum ShapeRecognizer {
     }
 
     static func makeStroke(points: [CGPoint], preset: BrushPreset, sample: PKStrokePoint? = nil) -> PKStroke {
-        makeStroke(points: points, ink: preset.tool.ink, width: preset.width, sample: sample)
+        let t = preset.tool
+        return makeStroke(points: points, ink: t.ink, width: t.width, sample: sample)
     }
 
+    /// width：畫出來的線寬（和筆工具的粗細、預覽線一樣）。有手寫那一筆的取樣點就照它的 size，沒有就從線寬換算
     static func makeStroke(points: [CGPoint], ink: PKInk, width: CGFloat, sample: PKStrokePoint?,
                            creationDate: Date = Date()) -> PKStroke {
-        let size = sample?.size ?? CGSize(width: width, height: width)
+        let size = sample?.size ?? {
+            let s = PencilKitInkWidth.pointSize(ink.inkType, drawn: width)
+            return CGSize(width: s, height: s)
+        }()
         let strokePoints = points.enumerated().map { i, p in
             strokePoint(p, timeOffset: TimeInterval(i) * 0.005, size: size, like: sample)
         }

@@ -32,6 +32,34 @@ final class StrokeTests: XCTestCase {
         }
     }
 
+    /// 回報的問題：沾水筆（粗細 1.5）停住變圖形後整個不見。除錯紀錄：PencilKit 沒留下手寫那一筆（沒有取樣可以照），
+    /// 圖形照筆的粗細 1.5 當成點的 size；沾水筆畫出來寬 2·(size − 2)，size 1.5 什麼都畫不出來
+    func testShapesFromThinPensWithoutAHandStrokeAreStillVisible() {
+        let vertical = ShapeRecognizer.segment(CGPoint(x: 30, y: 10), CGPoint(x: 30, y: 210))
+        let tall = CGRect(x: 0, y: 0, width: 60, height: 220)
+        for style in InkStyle.allCases {
+            let lower = style.pencilKitWidthRange.lowerBound
+            for w in Set([lower, max(lower, 1.5), max(lower, 3)]) {
+                let preset = BrushPreset(style: style, colorHex: "#1E1E1EFF", width: w)
+                let shape = ShapeRecognizer.makeStroke(points: vertical, preset: preset, sample: nil)
+                XCTAssertGreaterThan(inkedPixels([shape], in: tall), 150, "\(style) 粗細 \(w) 的圖形畫不出來")
+                let size = shape.path.first?.size.width ?? 0
+                XCTAssertEqual(PencilKitInkWidth.drawn(shape.ink.inkType, size: size), preset.tool.width, accuracy: 0.01,
+                               "\(style) 畫出來和筆的粗細（預覽線）一樣")
+            }
+        }
+    }
+
+    func testDrawnWidthAndPointSizeAreInverse() {
+        for t in [PKInk.InkType.pen, .monoline, .fountainPen, .marker, .pencil, .crayon, .watercolor] {
+            for w: CGFloat in [1, 1.5, 4, 18] {
+                XCTAssertEqual(PencilKitInkWidth.drawn(t, size: PencilKitInkWidth.pointSize(t, drawn: w)), w, accuracy: 0.001, "\(t.rawValue) \(w)")
+            }
+        }
+        // 橡皮擦用同一套：螢光筆（monoline）size 12 畫出來寬 20
+        XCTAssertEqual(StrokeEraser.drawnHalfWidth(PKInk(.monoline, color: .yellow), CGSize(width: 12, height: 12)), 10)
+    }
+
     func testLineCopiesTheHandStrokesWidth() {
         let preset = BrushPreset(style: .monoline, colorHex: "#C0392BFF", width: 3)
         let hand = ShapeRecognizer.makeStroke(points: [CGPoint(x: 20, y: 30), CGPoint(x: 120, y: 34), CGPoint(x: 220, y: 28)],
