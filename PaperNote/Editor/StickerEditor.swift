@@ -132,8 +132,12 @@ final class StickerEditorViewController: UIViewController {
         setBrushKeeps(true)
         updateTouchRoles()
         updateStatus()
-        startMarching()
         computeMask()
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        startMarching()
     }
 
     override func viewDidLayoutSubviews() {
@@ -172,9 +176,11 @@ final class StickerEditorViewController: UIViewController {
         unitCrop = u.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
     }
 
-    /// 虛線一直往前走（像選取範圍的螞蟻線）
+    /// 虛線一直往前走（像選取範圍的螞蟻線）。視窗切換、App 到背景時系統會拿掉動畫：顯示外框時沒有就重新加上
     private func startMarching() {
+        guard outlineLayer.animation(forKey: "march") == nil else { return }
         let a = CABasicAnimation(keyPath: "lineDashPhase")
+        a.isRemovedOnCompletion = false
         a.fromValue = 0
         a.toValue = -12
         a.duration = 0.6
@@ -310,6 +316,7 @@ final class StickerEditorViewController: UIViewController {
         outlineLayer.path = path
         outlineBase.path = path
         CATransaction.commit()
+        if path != nil { startMarching() }
     }
 
     /// 裁切範圍（原圖的像素）
