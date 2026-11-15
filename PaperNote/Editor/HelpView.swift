@@ -13,9 +13,9 @@ struct HelpView: View {
         Item(symbol: "pencil.tip", title: L("筆"), detail: L("第二列切換常用筆刷、粗細、虛線；原子筆用自製筆刷（照筆尖原始軌跡、不做圓滑），鋼筆、毛筆、鉛筆、蠟筆、水彩和 PencilKit 一樣。管理常用筆刷裡可以把喜歡的顏色加進色票。筆尖停住約 0.5 秒會變直線或修正成圖形。")),
         Item(symbol: "highlighter", title: L("螢光筆"), detail: L("畫在 PDF 文字上會自動對齊文字。")),
         Item(symbol: "eraser", title: L("橡皮擦"), detail: L("Pencil 筆身點兩下切換橡皮擦。表格、圖片不會被擦掉。")),
-        Item(symbol: "lasso", title: L("套索"), detail: L("圈起來可以移動、改顏色、拷貝、刪除；只圈到筆跡時拉右下角可以等比例縮放。表格、圖片、電路圖圈到一部分就算，不想被圈到就點鎖頭鎖起來；只圈到一個物件時，選單的「編輯」會換到選取工具編輯它。")),
+        Item(symbol: "lasso", title: L("套索"), detail: L("圈起來可以移動、改顏色、拷貝、刪除；只圈到筆跡時拉右下角可以等比例縮放。選取框照你圈的形狀。點一下物件或筆跡就能直接選起來，再點一下打開選單；表格點兩下打字。表格、圖片、電路圖圈到一部分就算，不想被圈到就點鎖頭鎖起來；只圈到一個物件時，選單的「編輯」可以編輯它。")),
         Item(symbol: "camera.viewfinder", title: L("截圖"), detail: L("框選範圍，可以釘在畫面上、拷貝、翻譯、存到照片。")),
-        Item(symbol: "hand.point.up.left", title: L("選取"), detail: L("點物件或筆跡選取，拖曳移動、拉右下角縮放（筆跡是等比例）；再點一下打開選單。左上角的鎖頭固定物件的位置。")),
+        Item(symbol: "seal", title: L("貼紙"), detail: L("工具列的「貼紙」：按 ＋ 從相簿挑照片，會自動去背做成貼紙；頁面上的圖片點一下選「變成貼紙」也可以。點貼紙就貼到目前這一頁，長按貼紙可以刪除。所有筆記本共用。")),
         Item(symbol: "character.cursor.ibeam", title: L("PDF 文字"), detail: L("選取 PDF 的文字來翻譯、拷貝、查詢、螢光標示。")),
     ]
 

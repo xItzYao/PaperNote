@@ -192,6 +192,36 @@ enum CircuitRenderer {
 
     private static func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x, y: y) }
 
+    /// 訊號源、電表裡的記號（+、−、波形、字母）：位置跟著元件旋轉、翻轉，形狀永遠是正的（橫的 − 不會轉成 |）。
+    /// build 以記號中心為原點畫；先反轉元件的旋轉、翻轉，元件的變換再轉回來，畫出來就是正的
+    static func upright(_ c: CircuitComponent, at center: CGPoint, _ build: (UIBezierPath) -> Void) -> UIBezierPath {
+        let g = UIBezierPath()
+        build(g)
+        var turn = CircuitGeometry.transform(c)
+        turn.tx = 0
+        turn.ty = 0
+        g.apply(turn.inverted().concatenating(CGAffineTransform(translationX: center.x, y: center.y)))
+        return g
+    }
+
+    /// 正的 +、−（r 是半長）
+    private static func plus(_ c: CircuitComponent, _ s: UIBezierPath, at p: CGPoint, r: CGFloat = 4) {
+        s.append(upright(c, at: p) { g in
+            line(g, pt(-r, 0), pt(r, 0))
+            line(g, pt(0, -r), pt(0, r))
+        })
+    }
+
+    private static func minus(_ c: CircuitComponent, _ s: UIBezierPath, at p: CGPoint, r: CGFloat = 4) {
+        s.append(upright(c, at: p) { g in line(g, pt(-r, 0), pt(r, 0)) })
+    }
+
+    /// 電壓源的 + 和 −（左邊 +、右邊 −）
+    private static func polarityMarks(_ c: CircuitComponent, _ s: UIBezierPath) {
+        plus(c, s, at: pt(-7, 0))
+        minus(c, s, at: pt(7, 0))
+    }
+
     /// 實心箭頭：尖端在 tip，從 from 的方向來
     private static func head(_ f: UIBezierPath, tip: CGPoint, from: CGPoint, size s: CGFloat = 7) {
         let dx = tip.x - from.x, dy = tip.y - from.y
@@ -251,11 +281,11 @@ enum CircuitRenderer {
     }
 
     /// 放大器的兩個輸入和正負號（上面是負、下面是正）
-    private static func ampInputs(_ s: UIBezierPath) {
+    /// 運算放大器的輸入：上面 −、下面 +
+    private static func ampInputs(_ c: CircuitComponent, _ s: UIBezierPath) {
         for y in [-20, 20] as [CGFloat] { line(s, pt(-40, y), pt(-24, y)) }
-        line(s, pt(-20, -20), pt(-14, -20))
-        line(s, pt(-20, 20), pt(-14, 20))
-        line(s, pt(-17, 17), pt(-17, 23))
+        minus(c, s, at: pt(-17, -20), r: 3)
+        plus(c, s, at: pt(-17, 20), r: 3)
     }
 
     private static func ampTriangle(_ s: UIBezierPath) {
@@ -369,24 +399,26 @@ enum CircuitRenderer {
             line(s, pt(9, 0), pt(30, 0))
         case .sineSource:
             circleBody(s)
-            s.move(to: pt(-9, 0))
-            s.addQuadCurve(to: pt(0, 0), controlPoint: pt(-4.5, -12))
-            s.addQuadCurve(to: pt(9, 0), controlPoint: pt(4.5, 12))
+            s.append(upright(c, at: .zero) { g in
+                g.move(to: pt(-9, 0))
+                g.addQuadCurve(to: pt(0, 0), controlPoint: pt(-4.5, -12))
+                g.addQuadCurve(to: pt(9, 0), controlPoint: pt(4.5, 12))
+            })
         case .squareSource:
             circleBody(s)
-            s.move(to: pt(-9, 5)); s.addLine(to: pt(-4.5, 5)); s.addLine(to: pt(-4.5, -5)); s.addLine(to: pt(4.5, -5))
-            s.addLine(to: pt(4.5, 5)); s.addLine(to: pt(9, 5))
+            s.append(upright(c, at: .zero) { g in
+                g.move(to: pt(-9, 5)); g.addLine(to: pt(-4.5, 5)); g.addLine(to: pt(-4.5, -5)); g.addLine(to: pt(4.5, -5))
+                g.addLine(to: pt(4.5, 5)); g.addLine(to: pt(9, 5))
+            })
         case .controlledVoltageSource:
             diamondBody(s)
-            line(s, pt(-11, 0), pt(-3, 0))
-            line(s, pt(-7, -4), pt(-7, 4))
-            line(s, pt(3, 0), pt(11, 0))
+            polarityMarks(c, s)
         case .controlledCurrentSource:
             diamondBody(s)
             arrow(s, f, from: pt(-9, 0), to: pt(10, 0))
         case .ammeter, .voltmeter, .ohmmeter:
             circleBody(s)
-            meterLetter(c.part, s)
+            s.append(upright(c, at: .zero) { g in meterLetter(c.part, g) })
         case .lamp:
             circleBody(s)
             line(s, pt(-10.6, -10.6), pt(10.6, 10.6))
@@ -438,21 +470,20 @@ enum CircuitRenderer {
             line(s, pt(-8, -14), pt(-8, 14))
             bipolarLegs(s, f, baseX: -8, outward: c.part == .nigbt)
         case .opAmp:
-            ampInputs(s)
+            ampInputs(c, s)
             ampTriangle(s)
             line(s, pt(26, 0), pt(40, 0))
         case .fdOpAmp:
-            ampInputs(s)
+            ampInputs(c, s)
             ampTriangle(s)
             // 輸出從斜邊拉出來
             line(s, pt(9.33, -10), pt(40, -10))
             line(s, pt(9.33, 10), pt(40, 10))
-            line(s, pt(20, -19), pt(26, -19))
-            line(s, pt(23, -22), pt(23, -16))
-            line(s, pt(20, 19), pt(26, 19))
+            plus(c, s, at: pt(23, -19), r: 3)
+            minus(c, s, at: pt(23, 19), r: 3)
         case .ota:
             // OTA：切掉尖端的三角形，輸出端多一條線
-            ampInputs(s)
+            ampInputs(c, s)
             s.move(to: pt(-24, -30)); s.addLine(to: pt(-24, 30)); s.addLine(to: pt(12, 8)); s.addLine(to: pt(12, -8)); s.close()
             line(s, pt(18, -8), pt(18, 8))
             line(s, pt(18, 0), pt(40, 0))
@@ -484,9 +515,7 @@ enum CircuitRenderer {
             s.append(UIBezierPath(ovalIn: CGRect(x: -15, y: -15, width: 30, height: 30)))
             line(s, pt(-30, 0), pt(-15, 0))
             line(s, pt(15, 0), pt(30, 0))
-            line(s, pt(-11, 0), pt(-3, 0))
-            line(s, pt(-7, -4), pt(-7, 4))
-            line(s, pt(3, 0), pt(11, 0))
+            polarityMarks(c, s)
         case .currentSource:
             s.append(UIBezierPath(ovalIn: CGRect(x: -15, y: -15, width: 30, height: 30)))
             line(s, pt(-30, 0), pt(-15, 0))

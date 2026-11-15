@@ -245,7 +245,8 @@ final class SelectInkTests: XCTestCase {
             g.fake = i == 0 ? .began : (i == pts.count - 1 ? .ended : .changed)
             editor.handleLassoPan(g, p)
         }
-        let b = try XCTUnwrap(editor.lassoSel, "要圈到那一筆").bounds
+        // 選取框照圈的形狀：把手在圈的範圍右下角
+        let b = try XCTUnwrap(editor.lassoSel, "要圈到那一筆").frame
         let handle = try XCTUnwrap(editor.lassoScaleHandle(b))
         XCTAssertEqual(editor.lassoGrab(at: handle), .scale)
         XCTAssertEqual(editor.lassoGrab(at: CGPoint(x: b.midX, y: b.midY)), .move)

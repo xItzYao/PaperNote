@@ -129,7 +129,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         holdRecognizer.allowFinger = settings.fingerDrawing
         eraserTracker.isEnabled = tool == .eraser
         eraserTracker.allowFinger = settings.fingerDrawing
-        longPressGesture.isEnabled = tool == .select || tool == .image
+        longPressGesture.isEnabled = tool == .select || tool == .image || tool == .sticker
         textLongPress.isEnabled = true
         textHandlePan.isEnabled = true
         // 預覽模式只能捲動、縮放
@@ -145,7 +145,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             switch tool {
             case .capture, .textSelect, .tableDraw:
                 return true
-            case .select, .image:
+            case .select, .image, .sticker:
                 // 用手指剛碰到的位置判斷：拖曳要移動一小段才開始，那時手指已經離開格線了
                 let q = panTouchDownPoint(g)
                 return editingTextView == nil && (dragTarget(at: q) != nil || (tool == .select && lassoGrab(at: q) != nil))
@@ -234,7 +234,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             // 套索、截圖工具 Pencil 長按也可以貼上（套索長按圈選範圍內則打開套索選單）
             guard tool != .select, !(settings.fingerDrawing && tool.isDrawing) else { return false }
             let p = touch.location(in: pagesContainer)
-            if tool == .lasso, let sel = lassoSel, sel.bounds.insetBy(dx: -10, dy: -10).contains(p) { return true }
+            if tool == .lasso, lassoSelectionHit(p) { return true }
             if touch.type == .pencil { return (tool == .lasso || tool == .capture) && clipboardHasContent }
             guard touch.type == .direct, let i = pageIndex(containing: p) else { return false }
             return clipboardHasContent || session.pdfPage(for: pages[i]) != nil
@@ -341,7 +341,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         // 選取工具選起的筆跡：和套索圈到的一樣拖曳移動、縮放
         case .select where lassoMoveStart != nil || (g.state == .began && lassoGrab(at: panTouchDownPoint(g)) != nil):
             handleLassoPan(g, g.state == .began ? panTouchDownPoint(g) : p)
-        case .select, .image: handleElementPan(g, g.state == .began ? panTouchDownPoint(g) : p)
+        case .select, .image, .sticker: handleElementPan(g, g.state == .began ? panTouchDownPoint(g) : p)
         case .pageResize: handlePageResizePan(g, p)
         case .lasso: handleLassoPan(g, g.state == .began ? panTouchDownPoint(g) : p)
         case .tableDraw: handleTableDrawPan(g, p)
@@ -358,10 +358,18 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         }
         switch tool {
         case .lasso:
+            // 套索也是選取工具：點物件選起物件（表格選那一格），點筆跡選那一筆
             if let ref = lockIconHit(at: p) {
                 toggleLock(ref)
-            } else if let sel = lassoSel, sel.bounds.insetBy(dx: -10, dy: -10).contains(p) {
+            } else if lassoSelectionHit(p) {
                 presentLassoMenu()
+            } else if let hit = hitElement(at: p) {
+                clearLassoSelection()
+                setTool(.select)
+                select(hit)
+                if case let (pi, ei)? = locate(hit), pages[pi].elements[ei].isTable { updateCellSelection(from: p, to: p) }
+            } else if let ink = inkSelection(at: p) {
+                selectInk(ink)
             } else {
                 clearLassoSelection()
             }
@@ -429,8 +437,8 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
                 resizePageIndex = i
                 updatePageResizeChrome()
             }
-        case .image:
-            // 圖片工具：點圖片選起來（可以拖曳、拉右下角調整大小），點空白處取消；左上角的鎖頭、紅色叉叉也能點
+        case .image, .sticker:
+            // 圖片、貼紙工具：點圖片選起來（可以拖曳、拉右下角調整大小），點空白處取消；左上角的鎖頭、紅色叉叉也能點
             if handleImageDeleteTap(at: p) { return }
             if let ref = lockIconHit(at: p) {
                 toggleLock(ref)
@@ -483,7 +491,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
     @objc func handleTextLongPress(_ g: UILongPressGestureRecognizer) {
         guard g.state == .began else { return }
         let p = g.location(in: pagesContainer)
-        if tool == .lasso, let sel = lassoSel, sel.bounds.insetBy(dx: -10, dy: -10).contains(p) {
+        if tool == .lasso, lassoSelectionHit(p) {
             presentLassoMenu()
             return
         }
@@ -516,7 +524,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
     }
 
     @objc func handleLongPress(_ g: UILongPressGestureRecognizer) {
-        guard g.state == .began, tool == .select || tool == .image else { return }
+        guard g.state == .began, tool == .select || tool == .image || tool == .sticker else { return }
         endTextEditing()
         let p = g.location(in: pagesContainer)
         // 長按標頭：選整欄（整列，已經選了好幾欄就不變），跳出列與欄的選單
@@ -966,6 +974,10 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
                 guard let self, let img = self.session.image(named: d.file) else { return }
                 self.pinOverlay.addPin(image: img, near: self.docRectInView(self.docFrame(of: e, pageIndex: pi)))
             })
+            items.append(UIAction(title: L("變成貼紙"), image: UIImage(systemName: "seal")) { [weak self] _ in
+                guard let self, let img = self.session.image(named: d.file) else { return }
+                self.makeStickers(from: [img])
+            })
         case .circuit:
             items.append(UIAction(title: L("編輯電路"), image: UIImage(systemName: "bolt")) { [weak self] _ in
                 self?.editCircuit(ref)
@@ -1091,8 +1103,8 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
                             content: content)
         updatePage(pi) { $0.elements.append(e) }
         let ref = ElementRef(pageID: page.id, elementID: e.id)
-        // 圖片工具：留在工具裡，可以接著加下一張；剛加的先選起來，可以馬上拖曳、調整大小
-        if tool == .image {
+        // 圖片、貼紙工具：留在工具裡，可以接著加下一張；剛加的先選起來，可以馬上拖曳、調整大小
+        if tool == .image || tool == .sticker {
             select(ref)
             return ref
         }

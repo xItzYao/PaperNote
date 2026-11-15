@@ -790,6 +790,7 @@ final class CircuitSymbolEditorViewController: UIViewController {
         a.addTextField { f in
             f.text = old?.text
             f.placeholder = L("例如 +、A、VCC")
+            SubscriptKey.install(on: f)
         }
         for (title, size) in Self.textSizes {
             let current = old.map { abs($0.size - size) < 0.5 } ?? (size == CircuitSymbol.Label.defaultSize)

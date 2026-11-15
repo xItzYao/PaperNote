@@ -54,6 +54,35 @@ struct LassoSelection {
     var highlights: [HighlightRef]
     var bounds: CGRect
     var ink: [InkRef] = []
+    /// 使用者圈的形狀（文件座標）：選取框照這個形狀畫，不縮成外框。點選、貼上的沒有，用內容的外框
+    var outline: [CGPoint]? = nil
+
+    /// 選取框的範圍（圈的形狀和內容加起來）：縮放把手放在它的右下角
+    var frame: CGRect {
+        guard let o = outline, o.count > 2 else { return bounds }
+        return bounds.union(InkShapes.bounds(o))
+    }
+
+    /// p 在選取範圍內：圈的形狀裡面，或內容外框（含 margin）裡面
+    func contains(_ p: CGPoint, margin: CGFloat) -> Bool {
+        if bounds.insetBy(dx: -margin, dy: -margin).contains(p) { return true }
+        guard let o = outline, o.count > 2 else { return false }
+        return Self.path(o).contains(p)
+    }
+
+    /// 移動、縮放後：內容外框和圈的形狀一起變
+    func applying(_ t: CGAffineTransform) -> (bounds: CGRect, outline: [CGPoint]?) {
+        (bounds.applying(t), outline?.map { $0.applying(t) })
+    }
+
+    static func path(_ pts: [CGPoint]) -> UIBezierPath {
+        let path = UIBezierPath()
+        guard let first = pts.first else { return path }
+        path.move(to: first)
+        for q in pts.dropFirst() { path.addLine(to: q) }
+        path.close()
+        return path
+    }
 
     var isEmpty: Bool { strokeIndices.isEmpty && elements.isEmpty && highlights.isEmpty && ink.isEmpty }
     /// 圈到可以改顏色的筆跡
@@ -109,8 +138,7 @@ extension NotebookViewController {
     /// p 在圈選範圍內（含一點邊界）：按下去是移動，不是重新圈選
     func lassoSelectionHit(_ p: CGPoint) -> Bool {
         guard let sel = lassoSel else { return false }
-        let m = 14 / canvas.zoomScale
-        return sel.bounds.insetBy(dx: -m, dy: -m).contains(p)
+        return sel.contains(p, margin: 14 / canvas.zoomScale)
     }
 
     enum LassoGrab { case move, scale }
@@ -118,7 +146,7 @@ extension NotebookViewController {
     /// 按在選取範圍上是移動，按在右下角的把手上是縮放
     func lassoGrab(at p: CGPoint) -> LassoGrab? {
         guard let sel = lassoSel else { return nil }
-        if let h = lassoScaleHandle(sel.bounds), h.distance(to: p) < 22 / canvas.zoomScale { return .scale }
+        if let h = lassoScaleHandle(sel.frame), h.distance(to: p) < 22 / canvas.zoomScale { return .scale }
         return lassoSelectionHit(p) ? .move : nil
     }
 
@@ -132,7 +160,7 @@ extension NotebookViewController {
     /// 選取框和縮放把手（拖曳中由拖曳自己更新）
     func updateLassoChrome() {
         guard lassoMoveStart == nil else { return }
-        overlay.showLassoSelection(lassoSel?.bounds, handle: lassoSel.flatMap { lassoScaleHandle($0.bounds) })
+        overlay.showLassoSelection(lassoSel?.frame, handle: lassoSel.flatMap { lassoScaleHandle($0.frame) }, outline: lassoSel?.outline)
     }
 
     func clearLassoSelection() {
@@ -229,7 +257,7 @@ extension NotebookViewController {
                 }
             }
         }
-        let sel = LassoSelection(strokeIndices: strokes, elements: elements, highlights: highlights, bounds: bounds, ink: ink)
+        let sel = LassoSelection(strokeIndices: strokes, elements: elements, highlights: highlights, bounds: bounds, ink: ink, outline: pts)
         guard !sel.isEmpty else { return }
         lassoSel = sel
         updateLassoChrome()
@@ -281,23 +309,25 @@ extension NotebookViewController {
             let d = clampedDelta(moving: b, by: v)
             return CGAffineTransform(translationX: d.x, y: d.y)
         }
-        // 把手沿著對角線走：拖曳的距離投影到對角線上
-        let w = max(b.width, 1), h = max(b.height, 1)
+        // 把手在選取框（圈的形狀）的右下角，沿著對角線走：拖曳的距離投影到對角線上；左上角不動
+        let fr = sel.frame
+        let w = max(fr.width, 1), h = max(fr.height, 1)
         var k = 1 + (v.x * w + v.y * h) / (w * w + h * h)
         let c = CGPoint(x: b.midX, y: b.midY)
         if let f = pageFrames[safe: pageIndex(containing: c) ?? nearestPageIndex(to: c)] {
-            k = min(k, max(1, min((f.maxX - b.minX) / w, (f.maxY - b.minY) / h)))
+            k = min(k, max(1, min((f.maxX - fr.minX) / max(b.maxX - fr.minX, 1), (f.maxY - fr.minY) / max(b.maxY - fr.minY, 1))))
         }
         // 不縮到看不見
-        k = max(k, min(1, 12 / max(w, h)))
-        return CGAffineTransform(translationX: b.minX, y: b.minY).scaledBy(x: k, y: k).translatedBy(x: -b.minX, y: -b.minY)
+        k = max(k, min(1, 12 / max(b.width, b.height, 1)))
+        return CGAffineTransform(translationX: fr.minX, y: fr.minY).scaledBy(x: k, y: k).translatedBy(x: -fr.minX, y: -fr.minY)
     }
 
     private func updateLassoMove(to p: CGPoint) {
         guard let sel = lassoSel else { return }
         let t = lassoDragTransform(to: p)
         let r = sel.bounds.applying(t)
-        overlay.showLassoSelection(r, handle: lassoScaleHandle(r))
+        let frame = sel.frame.applying(t)
+        overlay.showLassoSelection(frame, handle: lassoScaleHandle(frame), outline: sel.applying(t).outline)
         overlay.moveLassoPreview(to: r)
         // 縮放：照現在的大小重畫預覽（把原本的圖拉大會糊）；變化不到 2% 先用拉伸的
         if lassoScaling, abs(t.a / lassoPreviewScale - 1) > 0.02 {
@@ -344,8 +374,9 @@ extension NotebookViewController {
         lassoMoveInk = []
         lassoMoveOriginal = nil
         lassoMoveElementFrames = [:]
+        let moved = sel.applying(t)
         lassoSel = LassoSelection(strokeIndices: Array(base..<(base + sel.strokeIndices.count)), elements: sel.elements,
-                                  highlights: sel.highlights, bounds: sel.bounds.applying(t), ink: movedInk)
+                                  highlights: sel.highlights, bounds: moved.bounds, ink: movedInk, outline: moved.outline)
         updateLassoChrome()
     }
 
@@ -694,7 +725,7 @@ extension NotebookViewController {
             return (ElementRef(pageID: pages[pi].id, elementID: e.id), p, e.locked)
         }
         func lockable(_ e: PageElement) -> Bool { e.isTable || e.isImage || e.isCircuit }
-        if tool == .select || tool == .image, editingTextView == nil, let ref = selected, case let (pi, ei)? = locate(ref),
+        if tool == .select || tool == .image || tool == .sticker, editingTextView == nil, let ref = selected, case let (pi, ei)? = locate(ref),
            lockable(pages[pi].elements[ei]) {
             return [target(pages[pi].elements[ei], pi)]
         }
@@ -725,7 +756,7 @@ extension NotebookViewController {
 
     /// 選到的圖片（沒鎖定）：左上角鎖頭右邊的紅色叉叉
     func imageDeleteTarget() -> (ref: ElementRef, point: CGPoint)? {
-        guard tool == .select || tool == .image, editingTextView == nil, let ref = selected,
+        guard tool == .select || tool == .image || tool == .sticker, editingTextView == nil, let ref = selected,
               case let (pi, ei)? = locate(ref), pages[pi].elements[ei].isImage, !pages[pi].elements[ei].locked,
               let lock = lockIconTargets().first(where: { $0.ref == ref }) else { return nil }
         return (ref, CGPoint(x: lock.point.x + 36 / canvas.zoomScale, y: lock.point.y))

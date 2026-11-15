@@ -1053,6 +1053,7 @@ extension NotebookViewController {
             tf.clearButtonMode = .whileEditing
             tf.autocapitalizationType = .none
             tf.autocorrectionType = .no
+            SubscriptKey.install(on: tf)
         }
         a.addAction(UIAlertAction(title: L("取消"), style: .cancel))
         a.addAction(UIAlertAction(title: L("完成"), style: .default) { [weak self, weak a] _ in
@@ -1088,6 +1089,7 @@ extension NotebookViewController {
             tf.clearButtonMode = .whileEditing
             tf.autocapitalizationType = .none
             tf.autocorrectionType = .no
+            SubscriptKey.install(on: tf)
         }
         a.addAction(UIAlertAction(title: L("取消"), style: .cancel))
         a.addAction(UIAlertAction(title: L("完成"), style: .default) { [weak self, weak a] _ in

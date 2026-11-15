@@ -531,10 +531,15 @@ final class OverlayView: UIView {
         CATransaction.commit()
     }
 
-    func showLassoSelection(_ rect: CGRect?, handle: CGPoint? = nil) {
+    /// outline：使用者圈的形狀（有的話選取框照它畫，不縮成外框）
+    func showLassoSelection(_ rect: CGRect?, handle: CGPoint? = nil, outline: [CGPoint]? = nil) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        lassoSelLayer.path = rect.map { UIBezierPath(roundedRect: $0.insetBy(dx: -6 * lineScale, dy: -6 * lineScale), cornerRadius: 6 * lineScale).cgPath }
+        if rect != nil, let o = outline, o.count > 2 {
+            lassoSelLayer.path = LassoSelection.path(o).cgPath
+        } else {
+            lassoSelLayer.path = rect.map { UIBezierPath(roundedRect: $0.insetBy(dx: -6 * lineScale, dy: -6 * lineScale), cornerRadius: 6 * lineScale).cgPath }
+        }
         if let h = handle {
             let s = Self.handleSize * lineScale
             lassoResizeHandle.frame = CGRect(x: h.x - s / 2, y: h.y - s / 2, width: s, height: s)

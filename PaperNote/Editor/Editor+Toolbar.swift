@@ -199,8 +199,8 @@ extension NotebookViewController {
         (.eraser, "eraser", L("橡皮擦")),
         (.lasso, "lasso", L("套索")),
         (.capture, "camera.viewfinder", L("截圖")),
-        (.select, "hand.point.up.left", L("選取")),
         (.image, "photo", L("圖片")),
+        (.sticker, "seal", L("貼紙")),
         (.pageResize, "arrow.up.left.and.arrow.down.right", L("擴展")),
         (.circuit, "bolt", L("電路")),
     ]
@@ -337,10 +337,12 @@ extension NotebookViewController {
         canvas.contentInset.bottom = bottomInset
         applyInkEngine()
 
+        // 工具列沒有「選取」（套索就能選）：選起物件時亮著套索
+        let lit = tool == .select ? EditorTool.lasso : tool
         for (t, b) in toolButtons {
             var c = b.configuration ?? .plain()
-            c.background.backgroundColor = t == tool ? UIColor.systemBlue.withAlphaComponent(0.15) : .clear
-            c.baseForegroundColor = t == tool ? .systemBlue : .label
+            c.background.backgroundColor = t == lit ? UIColor.systemBlue.withAlphaComponent(0.15) : .clear
+            c.baseForegroundColor = t == lit ? .systemBlue : .label
             c.background.cornerRadius = 8
             // UIButton 換 configuration 時預設會淡入淡出：工具切換要馬上變色
             UIView.performWithoutAnimation {
@@ -468,6 +470,9 @@ extension NotebookViewController {
 
         case .textSelect:
             break
+
+        case .sticker:
+            for v in buildStickerBar() { subBarStack.addArrangedSubview(v) }
 
         case .image:
             let hint = UILabel()

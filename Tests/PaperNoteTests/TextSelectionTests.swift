@@ -107,8 +107,9 @@ final class TextSelectionTests: XCTestCase {
         XCTAssertEqual(target.height, expected.height, accuracy: 0.5)
     }
 
-    func testToolbarHasSelectButNoTextTool() {
-        XCTAssertNotNil(editor.toolButtons[.select], "「選取」加回工具列")
+    /// 回報的需求：拿掉「選取」（和套索重複），套索就能選
+    func testToolbarHasNoSelectNorTextTool() {
+        XCTAssertNil(editor.toolButtons[.select], "工具列不放「選取」")
         XCTAssertNil(editor.toolButtons[.textSelect], "工具列不放「PDF文字」")
         XCTAssertNotNil(editor.toolButtons[.pen])
     }

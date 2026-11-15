@@ -4,7 +4,7 @@ import PDFKit
 import SwiftUI
 
 enum EditorTool: Equatable {
-    case pen, highlighter, eraser, lasso, capture, select, image, textSelect, pageResize, tableDraw, circuit
+    case pen, highlighter, eraser, lasso, capture, select, image, sticker, textSelect, pageResize, tableDraw, circuit
 
     /// 筆或螢光筆
     var isInking: Bool { self == .pen || self == .highlighter }
@@ -279,6 +279,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     // 自訂套索
     var lassoPoints: [CGPoint] = []
     var lassoSel: LassoSelection?
+    /// 貼紙的相簿選擇器（選擇器只弱參照 delegate）
+    var stickerPicker: StickerPhotoPicker?
     var lassoMoveStart: CGPoint?
     /// 拖的是右下角的縮放把手（不是移動）
     var lassoScaling = false
@@ -440,6 +442,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         canvas.backgroundColor = .clear
         canvas.isOpaque = false
         canvas.alwaysBounceVertical = true
+        // 點到最上面的狀態列不要跳回第一頁（很容易誤觸）
+        canvas.scrollsToTop = false
         canvas.showsHorizontalScrollIndicator = false
         canvas.contentInsetAdjustmentBehavior = .never
         canvas.overrideUserInterfaceStyle = .light
