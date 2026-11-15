@@ -226,7 +226,9 @@ enum InkGeometry {
         var pieces: [InkStroke] = []
         var run: [InkPoint] = inside(first) ? [] : [first]
         func flush() {
-            if run.count >= 2 { pieces.append(InkStroke(colorHex: s.colorHex, points: run, dashGroup: s.dashGroup, style: s.style)) }
+            if run.count >= 2 {
+                pieces.append(InkStroke(colorHex: s.colorHex, points: run, dashGroup: s.dashGroup, style: s.style, stickerSeed: s.stickerSeed))
+            }
             run = []
         }
         for (a, b) in zip(s.points, s.points.dropFirst()) {

@@ -354,6 +354,9 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             select(nil)
             setTool(.lasso)
             handleLassoPan(g, panTouchDownPoint(g))
+        // 貼紙工具選起來的筆跡貼紙：和套索圈到的一樣拖曳移動、縮放
+        case .sticker where lassoMoveStart != nil || (g.state == .began && lassoGrab(at: panTouchDownPoint(g)) != nil):
+            handleLassoPan(g, g.state == .began ? panTouchDownPoint(g) : p)
         case .select, .image, .sticker: handleElementPan(g, g.state == .began ? panTouchDownPoint(g) : p)
         case .pageResize: handlePageResizePan(g, p)
         case .lasso: handleLassoPan(g, g.state == .began ? panTouchDownPoint(g) : p)
@@ -460,6 +463,18 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             if let ref = lockIconHit(at: p) {
                 toggleLock(ref)
                 return
+            }
+            if tool == .sticker {
+                // 筆跡貼紙（貼上的是真的筆跡）：點一下整張選起來，再點一下打開選單
+                if lassoSel != nil, lassoSelectionHit(p) {
+                    presentLassoMenu()
+                    return
+                }
+                if hitElement(at: p) == nil, let sel = stickerInkSelection(at: p) {
+                    selectInk(sel)
+                    return
+                }
+                clearLassoSelection()
             }
             if let hit = hitElement(at: p), case let (pi, ei)? = locate(hit), case .image = pages[pi].elements[ei].content {
                 select(hit)

@@ -56,6 +56,8 @@ struct LassoSelection {
     var ink: [InkRef] = []
     /// 使用者圈的形狀（文件座標）：選取框照這個形狀畫，不縮成外框。點選、貼上的沒有，用內容的外框
     var outline: [CGPoint]? = nil
+    /// 點選整張筆跡貼紙選起來的
+    var stickerSeed: UInt32? = nil
 
     /// 選取框的範圍（圈的形狀和內容加起來）：縮放把手放在它的右下角
     var frame: CGRect {
@@ -179,6 +181,7 @@ extension NotebookViewController {
             let page = pages[pi]
             let o = contentOrigin(pi)
             if let hit = page.ink.last(where: { InkGeometry.hits($0, at: p - o, radius: r) }) {
+                if let g = hit.stickerSeed, isStickerSeed(g) { return stickerSelection(g) }
                 let picked = page.ink.filter { $0.id == hit.id || (hit.dashGroup != nil && $0.dashGroup == hit.dashGroup) }
                 let bounds = picked.reduce(CGRect.null) { $0.union(InkGeometry.bounds(of: $1).offsetBy(dx: o.x, dy: o.y)) }
                 return LassoSelection(strokeIndices: [], elements: [], highlights: [], bounds: bounds,
@@ -187,9 +190,47 @@ extension NotebookViewController {
         }
         let strokes = canvas.drawing.strokes
         guard let hit = strokes.indices.last(where: { LassoGeometry.touches(strokes[$0], at: p, radius: r) }) else { return nil }
+        if isStickerSeed(strokes[hit].randomSeed) { return stickerSelection(strokes[hit].randomSeed) }
         let picked = DashedStroke.wholeDashes(in: strokes, picked: [hit])
         let bounds = picked.reduce(CGRect.null) { $0.union(strokes[$1].renderBounds) }
         return LassoSelection(strokeIndices: picked, elements: [], highlights: [], bounds: bounds)
+    }
+
+    // MARK: 筆跡貼紙
+
+    func isStickerSeed(_ seed: UInt32) -> Bool { session.document.stickerSeeds?.contains(seed) ?? false }
+
+    /// 新的一張筆跡貼紙用的亂數種子（記在筆記本裡）
+    func newStickerSeed() -> UInt32 {
+        var seed = UInt32.random(in: 1 ... .max)
+        while isStickerSeed(seed) || canvas.drawing.strokes.contains(where: { $0.randomSeed == seed }) {
+            seed = UInt32.random(in: 1 ... .max)
+        }
+        session.document.stickerSeeds = (session.document.stickerSeeds ?? []) + [seed]
+        return seed
+    }
+
+    /// 整張筆跡貼紙：PencilKit 那幾筆（同一個亂數種子）和自製筆刷那幾筆
+    func stickerSelection(_ seed: UInt32) -> LassoSelection? {
+        let strokes = canvas.drawing.strokes
+        let picked = strokes.indices.filter { strokes[$0].randomSeed == seed }
+        var bounds = picked.reduce(CGRect.null) { $0.union(strokes[$1].renderBounds) }
+        var ink: [InkRef] = []
+        for (pi, page) in pages.enumerated() {
+            let o = contentOrigin(pi)
+            for s in page.ink where s.stickerSeed == seed {
+                ink.append(InkRef(pageID: page.id, id: s.id))
+                bounds = bounds.union(InkGeometry.bounds(of: s).offsetBy(dx: o.x, dy: o.y))
+            }
+        }
+        guard !picked.isEmpty || !ink.isEmpty else { return nil }
+        return LassoSelection(strokeIndices: picked, elements: [], highlights: [], bounds: bounds, ink: ink, stickerSeed: seed)
+    }
+
+    /// 點到貼上的筆跡貼紙：整張選起來；點到一般的筆跡回傳 nil
+    func stickerInkSelection(at p: CGPoint) -> LassoSelection? {
+        guard let sel = inkSelection(at: p), sel.stickerSeed != nil else { return nil }
+        return sel
     }
 
     /// 選取工具：選起這些筆跡（和套索圈到的一樣可以移動、縮放、打開選單）
@@ -657,7 +698,8 @@ extension NotebookViewController {
     }
 
     /// 把套索拷貝的內容貼到 center（文件座標）。select：貼上後換到套索選起來（貼紙工具貼筆跡貼紙時留在貼紙工具）
-    func pasteLasso(_ clip: LassoClipboard, center: CGPoint, select: Bool = true) {
+    /// stickerSeed：貼上的是筆跡貼紙，筆跡都標上這張貼紙
+    func pasteLasso(_ clip: LassoClipboard, center: CGPoint, select: Bool = true, stickerSeed: UInt32? = nil) {
         let d = CGPoint(x: center.x - clip.bounds.midX, y: center.y - clip.bounds.midY)
         let target = pageIndex(containing: center) ?? nearestPageIndex(to: center)
         guard pages.indices.contains(target) else { return }
@@ -669,6 +711,8 @@ extension NotebookViewController {
         drawing.strokes.append(contentsOf: DashedStroke.copies(of: clip.strokes).map { s in
             var s = s
             s.transform = s.transform.concatenating(t)
+            // 同一張貼紙的筆跡共用一個亂數種子（虛線還是靠建立時間分開）
+            if let stickerSeed { s = PKStroke(ink: s.ink, path: s.path, transform: s.transform, mask: s.mask, randomSeed: stickerSeed) }
             return s
         })
         setDrawing(drawing)
@@ -683,6 +727,7 @@ extension NotebookViewController {
             for s in clip.ink {
                 var s = InkGeometry.offset(s, by: CGPoint(x: d.x - o.x, y: d.y - o.y))
                 s.id = UUID()
+                s.stickerSeed = stickerSeed
                 if let g = s.dashGroup {
                     let n = dashes[g] ?? UUID()
                     dashes[g] = n

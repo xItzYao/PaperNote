@@ -33,7 +33,7 @@ final class StickerEditorViewController: UIViewController {
     private let outlineBase = CAShapeLayer()
     /// 正在塗的那一筆（放開才寫進遮罩、重算外框）
     private let brushPreview = CAShapeLayer()
-    /// 「保留」框選中的範圍
+    /// 「保留」圈選中的形狀
     let boxPreview = CAShapeLayer()
     private var brushPoints: [CGPoint] = []
     let cropView = StickerCropView()
@@ -93,7 +93,7 @@ final class StickerEditorViewController: UIViewController {
 
         cropView.onChange = { [weak self] r in self?.cropChanged(r) }
         container.addSubview(cropView)
-        // Pencil 框選要保留的、塗要去掉的；手指拖裁切框（開了「用手指書寫」手指也可以）
+        // Pencil 圈選要保留的、塗要去掉的；手指拖裁切框（開了「用手指書寫」手指也可以）
         brushPan = UIPanGestureRecognizer(target: self, action: #selector(handleBrush(_:)))
         brushPan.maximumNumberOfTouches = 1
         cropView.addGestureRecognizer(brushPan)
@@ -244,14 +244,14 @@ final class StickerEditorViewController: UIViewController {
         switch maskState {
         case .computing: status.text = L("正在找主體…")
         case .unavailable:
-            status.text = removeBackground ? L("用 Pencil 框選要保留的範圍；手指拖曳框框選裁切範圍") : L("認不出主體，打開去背可以用 Pencil 自己框選")
+            status.text = removeBackground ? L("用 Pencil 圈出要保留的範圍；手指拖曳框框選裁切範圍") : L("認不出主體，打開去背可以用 Pencil 自己圈")
         case .ready:
-            status.text = removeBackground ? L("藍色虛線裡的會留下來；用 Pencil 框選「保留」、塗「去掉」修改，手指拖曳框框選裁切範圍")
+            status.text = removeBackground ? L("藍色虛線裡的會留下來；用 Pencil 圈「保留」、塗「去掉」修改，手指拖曳框框選裁切範圍")
                                            : L("拖曳框框選裁切範圍")
         }
     }
 
-    // MARK: 修改遮罩：「保留」框選，「去掉」塗
+    // MARK: 修改遮罩：「保留」像套索一樣圈，「去掉」塗
 
     @objc private func handleBrush(_ g: UIPanGestureRecognizer) {
         let p = g.location(in: cropView)
@@ -265,8 +265,8 @@ final class StickerEditorViewController: UIViewController {
             updateBrushPreview()
         case .ended:
             brushPoints.append(p)
-            if brushKeeps, let a = brushPoints.first {
-                keepBox(Self.box(a, p))
+            if brushKeeps {
+                keepLasso(brushPoints)
             } else {
                 paint(brushPoints, keep: false)
             }
@@ -278,19 +278,14 @@ final class StickerEditorViewController: UIViewController {
         }
     }
 
-    /// 兩個角拉出來的框
-    static func box(_ a: CGPoint, _ b: CGPoint) -> CGRect {
-        CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
-    }
-
     private func updateBrushPreview() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
-        if brushKeeps, let a = brushPoints.first, let b = brushPoints.last {
-            // 保留：框選的範圍
+        if brushKeeps, brushPoints.count > 1 {
+            // 保留：圈的形狀（自動接回起點）
             brushPreview.path = nil
-            boxPreview.path = UIBezierPath(rect: Self.box(a, b)).cgPath
+            boxPreview.path = Self.closedPath(brushPoints)
             return
         }
         boxPreview.path = nil
@@ -304,13 +299,19 @@ final class StickerEditorViewController: UIViewController {
         }
     }
 
-    /// 框選的範圍（cropView 座標）整塊留下來。測試也直接呼叫
-    func keepBox(_ rect: CGRect) {
+    static func closedPath(_ points: [CGPoint]) -> CGPath {
+        let path = CGMutablePath()
+        path.addLines(between: points)
+        path.closeSubpath()
+        return path
+    }
+
+    /// 像套索一樣圈的形狀（cropView 座標）整塊留下來。測試也直接呼叫
+    func keepLasso(_ points: [CGPoint]) {
         let r = imageRect
-        guard let canvas = maskCanvas, r.width > 0, rect.width >= 1, rect.height >= 1 else { return }
+        guard let canvas = maskCanvas, r.width > 0, points.count > 2 else { return }
         let k = canvas.size.width / r.width
-        canvas.fill(CGRect(x: (rect.minX - r.minX) * k, y: (rect.minY - r.minY) * k, width: rect.width * k, height: rect.height * k),
-                    keep: true)
+        canvas.fill(points.map { CGPoint(x: ($0.x - r.minX) * k, y: ($0.y - r.minY) * k) }, keep: true)
         refreshOutline()
     }
 
@@ -409,10 +410,14 @@ final class StickerMaskCanvas {
         context.strokePath()
     }
 
-    /// 一整塊（像素座標，左上角為原點）
-    func fill(_ rect: CGRect, keep: Bool) {
+    /// 圈起來的一整塊（像素座標，左上角為原點；自動接回起點）
+    func fill(_ polygon: [CGPoint], keep: Bool) {
+        guard polygon.count > 2 else { return }
         context.setFillColor(gray: keep ? 1 : 0, alpha: 1)
-        context.fill(rect)
+        context.beginPath()
+        context.addLines(between: polygon)
+        context.closePath()
+        context.fillPath()
     }
 
     var cgImage: CGImage? { context.makeImage() }

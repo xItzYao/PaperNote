@@ -666,7 +666,8 @@ extension NotebookViewController {
         // 筆跡貼紙：貼上真的筆跡（原本的大小），不是圖片
         if let v = StickerStore.shared.vector(for: s), let clip = v.clipboard() {
             let r = visibleDocRect()
-            pasteLasso(clip, center: p ?? CGPoint(x: r.midX, y: r.midY), select: false)
+            clearLassoSelection()
+            pasteLasso(clip, center: p ?? CGPoint(x: r.midX, y: r.midY), select: false, stickerSeed: newStickerSeed())
             return nil
         }
         guard let img = StickerStore.shared.image(for: s) else { return nil }

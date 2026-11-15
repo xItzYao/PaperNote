@@ -592,11 +592,13 @@ final class EditorRequestsNov15Tests: XCTestCase {
         func onScreen(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
             CGPoint(x: r.minX + r.width * x / 100, y: r.minY + r.height * y / 100)
         }
-        // 回報的需求：大面積用塗的效果不好 →「保留」改成框選，框起來的整塊留下來
-        vc.keepBox(StickerEditorViewController.box(onScreen(4, 4), onScreen(22, 26)))
-        XCTAssertTrue(canvas.keeps(CGPoint(x: 6, y: 6)), "框的角落也留下來")
-        XCTAssertTrue(canvas.keeps(CGPoint(x: 20, y: 24)))
-        XCTAssertFalse(canvas.keeps(CGPoint(x: 26, y: 10)), "框外面的背景還是去掉")
+        // 回報的需求：大面積用塗的效果不好 →「保留」改成像套索一樣圈任意形狀，圈起來的整塊留下來
+        // 左上角圈一個三角形（沒有接回起點也算）
+        vc.keepLasso([onScreen(4, 4), onScreen(26, 4), onScreen(4, 26)])
+        XCTAssertTrue(canvas.keeps(CGPoint(x: 6, y: 6)), "圈的裡面留下來")
+        XCTAssertTrue(canvas.keeps(CGPoint(x: 20, y: 6)))
+        XCTAssertFalse(canvas.keeps(CGPoint(x: 22, y: 22)), "三角形外面（矩形會包到的角落）還是去掉")
+        XCTAssertFalse(canvas.keeps(CGPoint(x: 28, y: 10)), "圈外面的背景還是去掉")
         // 塗「去掉」：主體中間挖掉
         vc.paint([onScreen(50, 50)], keep: false)
         XCTAssertFalse(canvas.keeps(CGPoint(x: 50, y: 50)), "塗過的主體去掉")
@@ -604,7 +606,7 @@ final class EditorRequestsNov15Tests: XCTestCase {
         // 做出來的貼紙照塗過的遮罩
         let sticker = try XCTUnwrap(vc.makeSticker().cgImage)
         XCTAssertLessThan(sticker.width, 100)
-        XCTAssertGreaterThan(sticker.width, 60, "左上角框起來的部分也在貼紙裡")
+        XCTAssertGreaterThan(sticker.width, 60, "左上角圈起來的部分也在貼紙裡")
         vc.setBrushKeeps(false)
         XCTAssertEqual(vc.brushMode.selectedSegmentIndex, 1)
         XCTAssertFalse(vc.brushKeeps)
@@ -617,10 +619,13 @@ final class EditorRequestsNov15Tests: XCTestCase {
         let canvas = try XCTUnwrap(vc.maskCanvas)
         XCTAssertFalse(canvas.keeps(CGPoint(x: 50, y: 50)), "一開始什麼都沒留")
         let r = vc.imageRect
-        vc.keepBox(CGRect(x: r.minX + r.width * 0.4, y: r.minY + r.height * 0.4, width: r.width * 0.2, height: r.height * 0.2))
+        // 圈一個菱形
+        let c = CGPoint(x: r.midX, y: r.midY), d = r.width * 0.1
+        vc.keepLasso([CGPoint(x: c.x, y: c.y - d), CGPoint(x: c.x + d, y: c.y), CGPoint(x: c.x, y: c.y + d), CGPoint(x: c.x - d, y: c.y)])
         XCTAssertTrue(canvas.keeps(CGPoint(x: 50, y: 50)))
+        XCTAssertFalse(canvas.keeps(CGPoint(x: 42, y: 42)), "菱形外面的角落不留")
         let sticker = try XCTUnwrap(vc.makeSticker().cgImage)
-        XCTAssertEqual(Double(sticker.width), 20, accuracy: 2, "只有框起來的那一塊")
+        XCTAssertEqual(Double(sticker.width), 20, accuracy: 2, "只有圈起來的那一塊")
     }
 
     /// 回報的需求：筆跡的貼紙分開存成向量，貼上的是真的筆跡
@@ -664,6 +669,25 @@ final class EditorRequestsNov15Tests: XCTestCase {
         XCTAssertEqual(all.midY, at.y, accuracy: 2)
         XCTAssertEqual(editor.tool, .sticker, "留在貼紙工具，可以接著貼")
         XCTAssertNil(editor.lassoSel)
+
+        // 回報的問題：筆跡貼紙沒辦法被選中 → 點一下整張選起來（兩種筆跡都選到），不會再貼一張
+        let seed = pasted.randomSeed
+        XCTAssertEqual(pastedInk.stickerSeed, seed, "自製筆刷那一筆也標成同一張")
+        XCTAssertTrue(editor.isStickerSeed(seed))
+        XCTAssertNotEqual(editor.canvas.drawing.strokes[0].randomSeed, seed, "原本的筆跡不算")
+        let reloaded = try PKDrawing(data: editor.canvas.drawing.dataRepresentation())
+        XCTAssertEqual(reloaded.strokes[1].randomSeed, seed, "存檔再打開還認得出來")
+        editor.handleTap(FakeTap(CGPoint(x: pasted.renderBounds.midX, y: pasted.renderBounds.midY)))
+        let sel = try XCTUnwrap(editor.lassoSel, "點一下選起來")
+        XCTAssertEqual(sel.strokeIndices, [1])
+        XCTAssertEqual(sel.ink.map(\.id), [pastedInk.id], "整張：自製筆刷那一筆也選到")
+        XCTAssertEqual(editor.canvas.drawing.strokes.count, 2, "沒有再貼一張")
+        XCTAssertEqual(editor.pages[0].ink.count, 2)
+        XCTAssertEqual(editor.tool, .sticker)
+        XCTAssertNotNil(editor.lassoGrab(at: CGPoint(x: sel.bounds.midX, y: sel.bounds.midY)), "可以拖曳移動")
+        // 一般的筆跡不會被當成貼紙
+        XCTAssertNil(editor.stickerInkSelection(at: CGPoint(x: pk.renderBounds.midX, y: pk.renderBounds.midY)))
+        editor.clearLassoSelection()
         editor.undoTapped()
         XCTAssertEqual(editor.canvas.drawing.strokes.count, 1, "一次復原")
         XCTAssertEqual(editor.pages[0].ink.count, 1)

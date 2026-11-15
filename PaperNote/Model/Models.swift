@@ -127,6 +127,8 @@ struct InkStroke: Codable, Equatable, Identifiable {
     var dashGroup: UUID?
     /// 有質感的筆（鉛筆、蠟筆、水彩）；nil＝不透明的實線
     var style: InkStyle?
+    /// 筆跡貼紙貼上來的：同一張貼紙的筆跡是同一個值（和 PencilKit 那幾筆的亂數種子一樣），點一下整張選起來
+    var stickerSeed: UInt32? = nil
 }
 
 struct Page: Codable, Equatable, Identifiable {
@@ -177,6 +179,8 @@ struct NotebookDocument: Codable {
     var trash: [TrashedPage]? = nil
     /// 自己加的大綱（「將該頁加入大綱」；舊版存檔沒有這個欄位）
     var outline: [OutlineBookmark]? = nil
+    /// 貼上的筆跡貼紙：每一張的 PencilKit 筆跡共用一個亂數種子（存得下來、不會變），記在這裡才知道哪些是同一張
+    var stickerSeeds: [UInt32]? = nil
 }
 
 enum Trash {
