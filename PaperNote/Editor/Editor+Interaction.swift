@@ -142,6 +142,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
 
     func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
         if g === toolPan {
+            if tool == .lasso { DebugLog.add("lasso pan should begin") }
             switch tool {
             case .capture, .textSelect, .tableDraw:
                 return true
@@ -335,6 +336,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
 
     @objc func handleToolPan(_ g: UIPanGestureRecognizer) {
         let p = g.location(in: pagesContainer)
+        if g.state == .began { DebugLog.add("tool pan began tool=\(tool)") }
         switch tool {
         case .capture: handleCapturePan(g, p)
         case .textSelect: handleTextPan(g, g.state == .began ? panTouchDownPoint(g) : p)

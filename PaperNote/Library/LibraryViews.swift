@@ -55,6 +55,11 @@ struct RootView: View {
                 let meta = store.createNotebook(title: "UI Test", folder: nil, paper: .blank, landscape: false)
                 if let s = try? NotebookSession(id: meta.id) {
                     for _ in 0..<9 { s.document.pages.append(Page(background: .paper(width: 595, height: 842, style: .grid))) }
+                    // 第一頁放一個表格（測套索、表格一起用）
+                    if ProcessInfo.processInfo.arguments.contains("-uiTestTable"), !s.document.pages.isEmpty {
+                        s.document.pages[0].elements.append(PageElement(frame: CGRect(x: 60, y: 120, width: 360, height: 144),
+                                                                        content: .table(TableData.make(rows: 3, cols: 3))))
+                    }
                     s.save()
                 }
                 open(meta.id, nil)

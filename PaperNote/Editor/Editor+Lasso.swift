@@ -204,7 +204,11 @@ extension NotebookViewController {
         let pts = lassoPoints
         lassoPoints = []
         overlay.showLassoPath(nil)
-        guard pts.count > 4 else { return }
+        guard pts.count > 4 else {
+            DebugLog.add("lasso end: too few points \(pts.count)")
+            updateUITestDump()
+            return
+        }
         let path = UIBezierPath()
         path.move(to: pts[0])
         for q in pts.dropFirst() { path.addLine(to: q) }
@@ -258,6 +262,8 @@ extension NotebookViewController {
             }
         }
         let sel = LassoSelection(strokeIndices: strokes, elements: elements, highlights: highlights, bounds: bounds, ink: ink, outline: pts)
+        DebugLog.add("lasso end points=\(pts.count) strokes=\(strokes.count) ink=\(ink.count) elements=\(elements.count) highlights=\(highlights.count)")
+        updateUITestDump()
         guard !sel.isEmpty else { return }
         lassoSel = sel
         updateLassoChrome()
