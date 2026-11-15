@@ -149,7 +149,10 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             case .select, .image, .sticker:
                 // 用手指剛碰到的位置判斷：拖曳要移動一小段才開始，那時手指已經離開格線了
                 let q = panTouchDownPoint(g)
-                return editingTextView == nil && (dragTarget(at: q) != nil || (tool == .select && lassoGrab(at: q) != nil))
+                guard editingTextView == nil else { return false }
+                if dragTarget(at: q) != nil || (tool == .select && lassoGrab(at: q) != nil) { return true }
+                // 選著物件時工具列亮的是套索：Pencil 從空白處拖就是用套索圈（手指照樣捲動頁面）
+                return tool == .select && toolPanByDrawingTouch
             case .pageResize:
                 return pageHandle(at: g.location(in: pagesContainer)) != nil
             case .lasso:
@@ -239,6 +242,9 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             if touch.type == .pencil { return (tool == .lasso || tool == .capture) && clipboardHasContent }
             guard touch.type == .direct, let i = pageIndex(containing: p) else { return false }
             return clipboardHasContent || session.pdfPage(for: pages[i]) != nil
+        }
+        if g === toolPan, toolPan.numberOfTouches == 0 {
+            toolPanByDrawingTouch = touch.type == .pencil || settings.fingerDrawing
         }
         // 電路工具：手指可以拖元件，其他地方是捲動頁面
         if g === toolPan, tool == .circuit {
@@ -343,6 +349,11 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         // 選取工具選起的筆跡：和套索圈到的一樣拖曳移動、縮放
         case .select where lassoMoveStart != nil || (g.state == .began && lassoGrab(at: panTouchDownPoint(g)) != nil):
             handleLassoPan(g, g.state == .began ? panTouchDownPoint(g) : p)
+        // 選著物件、從空白處拖：換回套索圈選（工具列上本來就亮著套索）
+        case .select where g.state == .began && dragTarget(at: panTouchDownPoint(g)) == nil:
+            select(nil)
+            setTool(.lasso)
+            handleLassoPan(g, panTouchDownPoint(g))
         case .select, .image, .sticker: handleElementPan(g, g.state == .began ? panTouchDownPoint(g) : p)
         case .pageResize: handlePageResizePan(g, p)
         case .lasso: handleLassoPan(g, g.state == .began ? panTouchDownPoint(g) : p)

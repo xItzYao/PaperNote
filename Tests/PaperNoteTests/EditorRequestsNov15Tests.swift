@@ -341,6 +341,55 @@ final class EditorRequestsNov15Tests: XCTestCase {
         XCTAssertNil(editor.lassoSel, "點空白處取消")
     }
 
+    /// 回報的問題：加入表格後套索沒反應。點表格會選起來（換到看不到的「選取」，工具列上亮著套索），
+    /// 這時用 Pencil 從空白處圈，選取工具不理會 → 套索沒反應。要和套索一樣開始圈
+    func testLassoingFromEmptySpaceWorksWhileATableIsSelected() throws {
+        editor.updatePage(0, undoable: false) {
+            $0.elements.append(PageElement(frame: CGRect(x: 300, y: 520, width: 240, height: 96), content: .table(TableData.make(rows: 3, cols: 3))))
+        }
+        let table = try XCTUnwrap(editor.pages[0].elements.last)
+        editor.handleTap(FakeTap(doc(table.frame.midX, table.frame.midY)))
+        XCTAssertEqual(editor.selected?.elementID, table.id, "點表格選起來")
+        XCTAssertEqual(editor.tool, .select)
+        XCTAssertEqual(editor.toolButtons[.lasso]?.configuration?.baseForegroundColor, .systemBlue, "工具列亮著套索")
+
+        // Pencil 在空白處按下去拖
+        let start = triangle[0]
+        let g = TouchPan()
+        editor.toolPan = g
+        g.point = start
+        g.fake = .began
+        XCTAssertTrue(editor.gestureRecognizer(g, shouldReceive: FakeTouch(type: .pencil, location: start)))
+        XCTAssertTrue(editor.gestureRecognizerShouldBegin(g), "Pencil 從空白處拖要開始圈")
+        for (i, p) in triangle.enumerated() {
+            g.fake = i == 0 ? .began : (i == triangle.count - 1 ? .ended : .changed)
+            g.point = p
+            g.moved = CGPoint(x: p.x - start.x, y: p.y - start.y)
+            if i == 0 { g.moved = .zero }
+            editor.handleToolPan(g)
+        }
+        XCTAssertEqual(editor.tool, .lasso, "換回套索")
+        XCTAssertNil(editor.selected, "表格不再選著")
+        XCTAssertEqual(editor.lassoSel?.ink.map(\.id), [inkID], "圈到那一筆字")
+    }
+
+    func testAFingerOnEmptySpaceStillScrollsWhileATableIsSelected() throws {
+        let saved = EditorSettings.shared.fingerDrawing
+        EditorSettings.shared.fingerDrawing = false
+        defer { EditorSettings.shared.fingerDrawing = saved }
+        editor.updatePage(0, undoable: false) {
+            $0.elements.append(PageElement(frame: CGRect(x: 300, y: 520, width: 240, height: 96), content: .table(TableData.make(rows: 3, cols: 3))))
+        }
+        let table = try XCTUnwrap(editor.pages[0].elements.last)
+        editor.handleTap(FakeTap(doc(table.frame.midX, table.frame.midY)))
+        XCTAssertEqual(editor.tool, .select)
+        let g = TouchPan()
+        editor.toolPan = g
+        g.point = doc(50, 700)
+        _ = editor.gestureRecognizer(g, shouldReceive: FakeTouch(type: .direct, location: doc(50, 700)))
+        XCTAssertFalse(editor.gestureRecognizerShouldBegin(g), "手指在空白處拖是捲動頁面")
+    }
+
     // MARK: 套索照圈的形狀
 
     private func lasso(_ pts: [CGPoint]) {

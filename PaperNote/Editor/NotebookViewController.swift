@@ -257,6 +257,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var circuitMarquee: [CGPoint]?
     /// 這次拖曳是手指（只能拖元件，其他地方是捲動頁面）
     var circuitPanByFinger = false
+    /// toolPan 這次的觸碰是用來畫的（Pencil，或開了「用手指書寫」的手指）
+    var toolPanByDrawingTouch = false
 
     // 預覽模式：工具列收起來，只能看
     var previewMode = false
