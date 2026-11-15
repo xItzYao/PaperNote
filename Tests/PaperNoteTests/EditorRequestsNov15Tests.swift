@@ -229,8 +229,18 @@ final class EditorRequestsNov15Tests: XCTestCase {
         }
     }
 
-    /// 圈得比筆跡大很多的三角形
-    private var triangle: [CGPoint] { [doc(20, 450), doc(150, 150), doc(300, 450), doc(22, 448)] }
+    /// 圈得比筆跡大很多的三角形（每邊 10 點，套索至少要 5 點）
+    private var triangle: [CGPoint] {
+        let corners = [doc(20, 450), doc(150, 150), doc(300, 450), doc(22, 448)]
+        var pts: [CGPoint] = []
+        for (a, b) in zip(corners, corners.dropFirst()) {
+            for i in 0..<10 {
+                let t = CGFloat(i) / 10
+                pts.append(CGPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t))
+            }
+        }
+        return pts + [corners[3]]
+    }
 
     func testTheSelectionKeepsTheShapeThatWasDrawn() throws {
         lasso(triangle)
@@ -253,8 +263,8 @@ final class EditorRequestsNov15Tests: XCTestCase {
         TouchPan().drag(from: doc(150, 380), to: doc(190, 430)) { editor.handleLassoPan($0, $0.point) }
         let sel = try XCTUnwrap(editor.lassoSel)
         let moved = try XCTUnwrap(sel.outline)
-        XCTAssertEqual(moved[1].x, triangle[1].x + 40, accuracy: 0.5, "圈的形狀跟著移動")
-        XCTAssertEqual(moved[1].y, triangle[1].y + 50, accuracy: 0.5)
+        XCTAssertEqual(moved[10].x, triangle[10].x + 40, accuracy: 0.5, "圈的形狀跟著移動")
+        XCTAssertEqual(moved[10].y, triangle[10].y + 50, accuracy: 0.5)
         let ink = try XCTUnwrap(editor.pages[0].ink.first)
         XCTAssertEqual(ink.points[0].point.y, 350, accuracy: 0.01, "筆跡也移動了")
     }
