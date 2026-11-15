@@ -1046,20 +1046,9 @@ extension NotebookViewController {
     /// 輸入元件名稱（例如 R1、U2）：選取中的元件再點一下（見 handleCircuitTap）、或工具列的「元件名稱」
     func promptComponentName(_ ref: ElementRef, component id: UUID) {
         guard let c = circuitInfo(ref)?.data.components.first(where: { $0.id == id }) else { return }
-        let a = UIAlertController(title: L("元件名稱"), message: L("例如 R_1 會變成下標、x^2 會變成上標；留空就拿掉名稱"), preferredStyle: .alert)
-        a.addTextField { tf in
-            tf.text = c.name
-            tf.placeholder = "R1"
-            tf.clearButtonMode = .whileEditing
-            tf.autocapitalizationType = .none
-            tf.autocorrectionType = .no
-            SubscriptKey.install(on: tf)
+        presentCircuitNameEditor(title: L("元件名稱"), text: c.name, placeholder: "R1", hint: L("留空就拿掉名稱")) { [weak self] text in
+            self?.setComponentName(ref, component: id, to: text)
         }
-        a.addAction(UIAlertAction(title: L("取消"), style: .cancel))
-        a.addAction(UIAlertAction(title: L("完成"), style: .default) { [weak self, weak a] _ in
-            self?.setComponentName(ref, component: id, to: a?.textFields?.first?.text ?? "")
-        })
-        present(a, animated: true)
     }
 
     /// 改元件名稱（空字串＝拿掉）；新名稱放在元件上方
@@ -1082,20 +1071,9 @@ extension NotebookViewController {
 
     func promptWireLabel(_ ref: ElementRef, wire id: UUID, near local: CGPoint) {
         guard let w = circuitInfo(ref)?.data.wires.first(where: { $0.id == id }) else { return }
-        let a = UIAlertController(title: L("導線名稱"), message: L("例如 V_in 會變成下標、x^2 會變成上標；留空就拿掉名稱"), preferredStyle: .alert)
-        a.addTextField { tf in
-            tf.text = w.label
-            tf.placeholder = "Vout"
-            tf.clearButtonMode = .whileEditing
-            tf.autocapitalizationType = .none
-            tf.autocorrectionType = .no
-            SubscriptKey.install(on: tf)
+        presentCircuitNameEditor(title: L("導線名稱"), text: w.label, placeholder: "Vout", hint: L("留空就拿掉名稱")) { [weak self] text in
+            self?.setWireLabel(ref, wire: id, to: text, near: local)
         }
-        a.addAction(UIAlertAction(title: L("取消"), style: .cancel))
-        a.addAction(UIAlertAction(title: L("完成"), style: .default) { [weak self, weak a] _ in
-            self?.setWireLabel(ref, wire: id, to: a?.textFields?.first?.text ?? "", near: local)
-        })
-        present(a, animated: true)
     }
 
     /// 改導線名稱（空字串＝拿掉）；新名稱放在 near（內容座標）最近的那段旁邊

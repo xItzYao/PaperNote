@@ -786,21 +786,25 @@ final class CircuitSymbolEditorViewController: UIViewController {
     /// 文字工具：輸入字、選大小。editing：點到的那一段（nil＝新增在 p）
     func presentTextEditor(editing: Int?, at p: CGPoint) {
         let old = editing.flatMap { draft.symbol.texts[safe: $0] }
-        let a = UIAlertController(title: old == nil ? L("加上文字") : L("修改文字"), message: L("上下標寫成 R_1、V^2"), preferredStyle: .alert)
-        a.addTextField { f in
-            f.text = old?.text
-            f.placeholder = L("例如 +、A、VCC")
-            SubscriptKey.install(on: f)
+        let hint = editing == nil ? L("例如 +、A、VCC") : L("留空就刪掉這段字")
+        presentCircuitNameEditor(title: old == nil ? L("加上文字") : L("修改文字"), text: old?.text, placeholder: "VCC", hint: hint) { [weak self] text in
+            guard let self else { return }
+            let size = old?.size ?? CircuitSymbol.Label.defaultSize
+            if text.trimmingCharacters(in: .whitespaces).isEmpty {
+                self.commitText("", size: size, editing: editing, at: p)
+            } else {
+                self.presentTextSizePicker(text, current: size, editing: editing, at: p)
+            }
         }
+    }
+
+    /// 打完字：選大小（目前的打勾）
+    func presentTextSizePicker(_ text: String, current: CGFloat, editing: Int?, at p: CGPoint) {
+        let a = UIAlertController(title: L("字的大小"), message: nil, preferredStyle: .alert)
         for (title, size) in Self.textSizes {
-            let current = old.map { abs($0.size - size) < 0.5 } ?? (size == CircuitSymbol.Label.defaultSize)
-            a.addAction(UIAlertAction(title: current ? title + " ✓" : title, style: .default) { [weak self, weak a] _ in
-                self?.commitText(a?.textFields?.first?.text ?? "", size: size, editing: editing, at: p)
-            })
-        }
-        if editing != nil {
-            a.addAction(UIAlertAction(title: L("刪除"), style: .destructive) { [weak self] _ in
-                self?.commitText("", size: old?.size ?? CircuitSymbol.Label.defaultSize, editing: editing, at: p)
+            let isCurrent = abs(current - size) < 0.5
+            a.addAction(UIAlertAction(title: isCurrent ? title + " ✓" : title, style: .default) { [weak self] _ in
+                self?.commitText(text, size: size, editing: editing, at: p)
             })
         }
         a.addAction(UIAlertAction(title: L("取消"), style: .cancel))

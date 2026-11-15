@@ -2,32 +2,88 @@ import XCTest
 import PencilKit
 @testable import PaperNote
 
-/// 回報的需求：電路名稱打下標要切到符號鍵盤，鍵盤上面另外放一個「下標」鍵
-final class SubscriptKeyTests: XCTestCase {
-    func testTheKeyInsertsAnUnderscoreAtTheCursor() {
-        let out = SubscriptKey.apply(to: "R", selection: NSRange(location: 1, length: 0))
-        XCTAssertEqual(out.text, "R_")
-        XCTAssertEqual(out.selection, NSRange(location: 2, length: 0), "接著打的字就是下標")
-        let middle = SubscriptKey.apply(to: "V out", selection: NSRange(location: 1, length: 0))
-        XCTAssertEqual(middle.text, "V_ out")
+/// 回報的需求：電路名稱的下標像 Desmos：打 _ 就直接在下面的框裡打字，不用寫 R_1；可以勾「純文字」切回 R_1 的寫法
+final class CircuitNameEditorTests: XCTestCase {
+    private var savedPlain: Any?
+
+    override func setUp() {
+        savedPlain = UserDefaults.standard.object(forKey: CircuitNameEditorViewController.plainDefaultsKey)
+        UserDefaults.standard.set(false, forKey: CircuitNameEditorViewController.plainDefaultsKey)
     }
 
-    func testTheKeyTurnsTheSelectionIntoASubscript() {
-        XCTAssertEqual(SubscriptKey.apply(to: "R1", selection: NSRange(location: 1, length: 1)).text, "R_1", "一個字不用大括號")
-        let out = SubscriptKey.apply(to: "Vin", selection: NSRange(location: 1, length: 2))
-        XCTAssertEqual(out.text, "V_{in}", "好幾個字包在大括號裡")
-        XCTAssertEqual(out.selection.location, 6, "游標在下標後面")
-        XCTAssertEqual(CircuitText.runs("V_{in}"), [CircuitText.Run(text: "V", script: .normal), CircuitText.Run(text: "in", script: .sub)], "畫出來是 V 加上下標 in")
+    override func tearDown() {
+        UserDefaults.standard.set(savedPlain, forKey: CircuitNameEditorViewController.plainDefaultsKey)
     }
 
-    func testTheKeySitsAboveTheKeyboard() throws {
-        let field = UITextField()
-        field.text = "R"
-        SubscriptKey.install(on: field)
-        let bar = try XCTUnwrap(field.inputAccessoryView, "鍵盤上面有一排按鍵")
-        let key = try XCTUnwrap(bar.subviews.compactMap { $0 as? UIButton }.first { $0.accessibilityIdentifier == SubscriptKey.accessibilityID })
-        key.sendActions(for: .touchUpInside)
-        XCTAssertEqual(field.text?.filter { $0 == "_" }.count, 1, "按一下打出一個下標記號：\(field.text ?? "")")
+    private func editor(_ text: String = "") -> CircuitNameEditorViewController {
+        let vc = CircuitNameEditorViewController(title: "元件名稱", text: text, placeholder: "R1")
+        vc.view.frame = CGRect(x: 0, y: 0, width: 540, height: 400)
+        vc.view.layoutIfNeeded()
+        return vc
+    }
+
+    func testTypingAnUnderscoreMovesIntoTheSubscript() {
+        let vc = editor()
+        vc.type("R")
+        vc.type("_")
+        XCTAssertEqual(vc.mode, .sub, "打 _ 進到下標的框")
+        XCTAssertEqual(vc.textView.text, "R", "_ 不會出現在字裡")
+        vc.type("12")
+        XCTAssertEqual(vc.value, "R_12", "好幾個字的下標（後面沒字不用大括號）")
+        vc.type(" ")
+        XCTAssertEqual(vc.mode, .normal, "空白回到一般的字")
+        vc.type("x")
+        XCTAssertEqual(vc.value, "R_{12}x")
+        XCTAssertEqual(CircuitText.runs(vc.value).map(\.script), [.normal, .sub, .normal])
+    }
+
+    func testTheButtonsSwitchBetweenSubscriptAndNormalText() {
+        let vc = editor()
+        vc.type("V")
+        vc.subButton.sendActions(for: .touchUpInside)
+        vc.type("in")
+        vc.exitButton.sendActions(for: .touchUpInside)
+        vc.type("+")
+        XCTAssertEqual(vc.value, "V_in+")
+        vc.supButton.sendActions(for: .touchUpInside)
+        vc.type("2")
+        XCTAssertEqual(vc.value, "V_in+^2")
+    }
+
+    func testExistingNamesShowAsSubscripts() {
+        let vc = editor("R_1")
+        XCTAssertEqual(vc.textView.text, "R1", "看到的是 R 加上下標 1，不是 R_1")
+        XCTAssertEqual(vc.mode, .sub, "游標在下標後面，接著打還是下標")
+        XCTAssertEqual(vc.value, "R_1")
+        vc.type("0")
+        XCTAssertEqual(vc.value, "R_10")
+    }
+
+    func testAPlainTextModeShowsTheRawSyntax() {
+        let vc = editor("V_{out}")
+        vc.plainToggle.sendActions(for: .touchUpInside)
+        XCTAssertTrue(vc.plain)
+        XCTAssertEqual(vc.textView.text, "V_out", "純文字：直接看到寫法")
+        vc.type("_")
+        XCTAssertEqual(vc.textView.text, "V_out_", "純文字模式打 _ 就是 _")
+        XCTAssertTrue(UserDefaults.standard.bool(forKey: CircuitNameEditorViewController.plainDefaultsKey), "下次也用純文字")
+        vc.plainToggle.sendActions(for: .touchUpInside)
+        XCTAssertFalse(vc.plain)
+        XCTAssertEqual(vc.textView.text, "Vout_", "切回來又是下標的樣子")
+    }
+
+    func testThePreviewIsLarge() {
+        let vc = editor("R_1")
+        XCTAssertGreaterThanOrEqual(vc.textView.bounds.height, 120, "預覽的框放大")
+        XCTAssertGreaterThanOrEqual(CircuitNameEditorViewController.fontSize, 40)
+        let font = vc.textView.attributedText.attribute(.font, at: 1, effectiveRange: nil) as? UIFont
+        XCTAssertGreaterThanOrEqual(font?.pointSize ?? 0, 28, "下標在 iPad 上也夠大")
+    }
+
+    func testSerializingKeepsBracesWhenTheNextLetterWouldJoin() {
+        let s = NSMutableAttributedString(attributedString: CircuitNameEditorViewController.rich("R_1"))
+        s.append(NSAttributedString(string: "2", attributes: CircuitNameEditorViewController.attributes(.normal)))
+        XCTAssertEqual(CircuitNameEditorViewController.serialize(s), "R_{1}2", "後面接著英數字要用大括號，不然 2 也變下標")
     }
 }
 
