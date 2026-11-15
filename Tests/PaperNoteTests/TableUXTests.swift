@@ -279,8 +279,14 @@ final class TableEditorUXTests: XCTestCase {
 
     func testEraserToolDoesNotTouchTables() {
         // 真的橡皮擦只擦筆跡，不會動表格
+        let before = tableAt(ref)
+        let o = origin(of: ref)
         editor.setTool(.eraser)
-        XCTAssertNil(editor.eraserTracker.onEnded)
+        editor.eraserBegan(at: CGPoint(x: o.x + 5, y: o.y + 5))
+        editor.eraserMoved([CGPoint(x: o.x + 80, y: o.y + 40), CGPoint(x: o.x + 160, y: o.y + 80)])
+        editor.eraserEnded()
+        XCTAssertEqual(tableAt(ref), before)
+        XCTAssertNotNil(editor.locate(ref), "表格還在")
     }
 
     private func tableAt(_ r: ElementRef) -> TableData {

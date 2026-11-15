@@ -41,6 +41,8 @@ final class EditHistory {
     var canUndo: Bool { !undoSteps.isEmpty }
     var canRedo: Bool { !redoSteps.isEmpty }
     var undoCount: Int { undoSteps.count }
+    /// 最上面那一步的編號
+    var topStepID: Int? { undoSteps.last?.id }
 
     /// 記下動作之前的狀態，回傳這一步的編號。newStep：不併進同一輪的前一步（之後可能要整步拿掉）
     @discardableResult

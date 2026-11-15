@@ -8,7 +8,37 @@ import PencilKit
 /// 工具列第二列是分類（縮圖用封面，沒設就是第一張），畫面下面一排是這個分類的貼紙，點一下就貼到目前這一頁
 struct StickerRecord: Codable, Equatable, Identifiable {
     var id = UUID()
+    /// 預覽圖（PNG，背景透明）
     var file: String
+    /// 筆跡做的貼紙：向量的筆跡另外存一份（貼上時是真的筆跡，放大也清楚、還能改顏色、擦掉）；nil＝圖片貼紙
+    var vector: String? = nil
+}
+
+/// 筆跡貼紙的向量內容：PencilKit 和自製筆刷的筆跡，左上角移到原點
+struct VectorSticker: Codable {
+    /// PencilKit 的筆跡（PKDrawing 的資料）
+    var drawing: Data
+    var ink: [InkStroke]
+    var size: CGSize
+
+    /// strokes、ink 是文件座標，bounds 是它們的範圍
+    init(strokes: [PKStroke], ink: [InkStroke], bounds: CGRect) {
+        let t = CGAffineTransform(translationX: -bounds.minX, y: -bounds.minY)
+        drawing = PKDrawing(strokes: strokes.map { s in
+            var s = s
+            s.transform = s.transform.concatenating(t)
+            return s
+        }).dataRepresentation()
+        self.ink = ink.map { InkGeometry.offset($0, by: CGPoint(x: -bounds.minX, y: -bounds.minY)) }
+        size = bounds.size
+    }
+
+    /// 當成套索拷貝的內容（範圍在原點），用 pasteLasso 貼上
+    func clipboard() -> LassoClipboard? {
+        guard let d = try? PKDrawing(data: drawing) else { return nil }
+        return LassoClipboard(strokes: d.strokes, elements: [], highlights: [], bounds: CGRect(origin: .zero, size: size),
+                              changeCount: -1, ink: ink)
+    }
 }
 
 struct StickerCategory: Codable, Equatable, Identifiable {
@@ -102,10 +132,21 @@ final class StickerStore {
     /// 刪除分類和裡面的貼紙
     func removeCategory(_ id: UUID) {
         guard let i = categories.firstIndex(where: { $0.id == id }) else { return }
-        for s in categories[i].stickers { try? FileManager.default.removeItem(at: directory.appendingPathComponent(s.file)) }
+        for s in categories[i].stickers { removeFiles(of: s) }
         categories.remove(at: i)
         if selectedID == id { selectedID = nil }
         persist()
+    }
+
+    private func removeFiles(of s: StickerRecord) {
+        try? FileManager.default.removeItem(at: directory.appendingPathComponent(s.file))
+        if let v = s.vector { try? FileManager.default.removeItem(at: directory.appendingPathComponent(v)) }
+    }
+
+    /// 筆跡貼紙的向量內容；圖片貼紙（或檔案讀不到）回傳 nil
+    func vector(for s: StickerRecord) -> VectorSticker? {
+        guard let v = s.vector, let data = try? Data(contentsOf: directory.appendingPathComponent(v)) else { return nil }
+        return try? JSONDecoder().decode(VectorSticker.self, from: data)
     }
 
     func image(for s: StickerRecord) -> UIImage? {
@@ -117,16 +158,22 @@ final class StickerStore {
 
     /// 存成 PNG（保留透明的背景），放在分類的最後面（第一張不會變，分類的縮圖也不會變）
     @discardableResult
-    func add(_ image: UIImage, to categoryID: UUID) -> StickerRecord? {
+    func add(_ image: UIImage, to categoryID: UUID, vector: VectorSticker? = nil) -> StickerRecord? {
         guard let ci = categories.firstIndex(where: { $0.id == categoryID }) else { return nil }
-        let file = "sticker-\(UUID().uuidString).png"
+        let name = "sticker-\(UUID().uuidString)"
+        let file = name + ".png"
         guard let data = image.pngData() else { return nil }
+        var vectorFile: String?
         do {
             try data.write(to: directory.appendingPathComponent(file), options: .atomic)
+            if let vector {
+                vectorFile = name + ".vector.json"
+                try JSONEncoder().encode(vector).write(to: directory.appendingPathComponent(name + ".vector.json"), options: .atomic)
+            }
         } catch {
             return nil
         }
-        let s = StickerRecord(file: file)
+        let s = StickerRecord(file: file, vector: vectorFile)
         cache.setObject(image, forKey: file as NSString)
         categories[ci].stickers.append(s)
         persist()
@@ -137,7 +184,7 @@ final class StickerStore {
         for ci in categories.indices {
             guard let si = categories[ci].stickers.firstIndex(where: { $0.id == stickerID }) else { continue }
             let s = categories[ci].stickers.remove(at: si)
-            try? FileManager.default.removeItem(at: directory.appendingPathComponent(s.file))
+            removeFiles(of: s)
             if categories[ci].coverID == stickerID { categories[ci].coverID = nil }
             persist()
             return
@@ -193,12 +240,6 @@ enum StickerMaker {
             DebugLog.add("sticker: subject mask failed \(error.localizedDescription)")
             return nil
         }
-    }
-
-    /// 背景（遮罩的相反）變成 alpha：畫斜線動畫的範圍
-    static func backgroundAlpha(_ mask: CIImage) -> CGImage? {
-        let bg = mask.applyingFilter("CIColorInvert").applyingFilter("CIMaskToAlpha")
-        return CIContext().createCGImage(bg, from: mask.extent)
     }
 
     /// 做成貼紙：crop（圖片像素座標，左上角為原點）裁切；mask 有值就去背（背景透明，透明的邊裁掉）
@@ -367,6 +408,15 @@ final class StickerStripView: UIView {
                 b.backgroundColor = UIColor.systemBlue.withAlphaComponent(0.15)
                 b.layer.borderWidth = 2.5
                 b.layer.borderColor = UIColor.systemBlue.cgColor
+            }
+            if s.vector != nil {
+                // 筆跡貼紙（向量）：右下角一枝筆
+                let pen = UIImageView(image: UIImage(systemName: "scribble"))
+                pen.tintColor = .secondaryLabel
+                pen.frame = CGRect(x: 66, y: 66, width: 18, height: 18)
+                pen.accessibilityIdentifier = "sticker.vector"
+                b.addSubview(pen)
+                b.accessibilityValue = L("筆跡")
             }
             if s.id == category.cover?.id {
                 // 分類封面：左上角一顆星
@@ -559,12 +609,21 @@ extension NotebookViewController {
         present(nav, animated: true)
     }
 
-    func saveSticker(_ image: UIImage, into categoryID: UUID) {
-        guard StickerStore.shared.add(image, to: categoryID) != nil else { return }
+    func saveSticker(_ image: UIImage, into categoryID: UUID, vector: VectorSticker? = nil) {
+        guard StickerStore.shared.add(image, to: categoryID, vector: vector) != nil else { return }
         StickerStore.shared.select(categoryID)
         let name = StickerStore.shared.categories.first { $0.id == categoryID }?.name ?? ""
         showToast(L("已加到貼紙「\(name)」"))
         refreshStickers()
+    }
+
+    /// 套索只圈到筆跡：也存一份向量的筆跡（貼上時是真的筆跡）。圈到物件、螢光標示就只有圖片
+    func lassoVectorSticker() -> VectorSticker? {
+        guard let sel = lassoSel, sel.elements.isEmpty, sel.highlights.isEmpty, sel.hasInk else { return nil }
+        let strokes = sel.strokeIndices.compactMap { canvas.drawing.strokes[safe: $0] }
+        let ink = inkStrokes(sel.ink)
+        guard !strokes.isEmpty || !ink.isEmpty else { return nil }
+        return VectorSticker(strokes: strokes, ink: ink, bounds: sel.bounds)
     }
 
     /// 套索圈到的東西畫成貼紙：背景透明（不含紙張、PDF），只有筆跡、物件、螢光標示
@@ -603,7 +662,14 @@ extension NotebookViewController {
     /// 留在貼紙工具可以接著貼
     @discardableResult
     func placeSticker(_ s: StickerRecord, at p: CGPoint? = nil) -> ElementRef? {
-        guard !pages.isEmpty, let img = StickerStore.shared.image(for: s) else { return nil }
+        guard !pages.isEmpty else { return nil }
+        // 筆跡貼紙：貼上真的筆跡（原本的大小），不是圖片
+        if let v = StickerStore.shared.vector(for: s), let clip = v.clipboard() {
+            let r = visibleDocRect()
+            pasteLasso(clip, center: p ?? CGPoint(x: r.midX, y: r.midY), select: false)
+            return nil
+        }
+        guard let img = StickerStore.shared.image(for: s) else { return nil }
         guard let file = session.saveImage(img, jpeg: false) else { return nil }
         let r = visibleDocRect()
         let pi = p.flatMap { pageIndex(containing: $0) } ?? currentPageIndex

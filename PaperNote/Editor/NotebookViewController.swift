@@ -320,9 +320,12 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     weak var tableCellLabel: UILabel?
 
     // 橡皮擦擦螢光標示
-    var eraserTracker: TouchTracker!
-    /// 這一次擦除橡皮擦走過的點（文件座標）：PencilKit 擦完後用來擦螢光筆
-    var eraserPath: [CGPoint] = []
+    /// 橡皮擦：App 自己擦（見 Eraser.swift），PencilKit 的橡皮擦不用
+    let eraserCapture = InkCaptureRecognizer(target: nil, action: nil)
+    /// 橡皮擦上一個位置（文件座標）：和下一個點連起來，中間經過的都擦
+    var lastEraserPoint: CGPoint?
+    /// 這一次擦除的上一步（第一次擦到東西時登記，之後併進去）
+    var eraseStep: Int?
     /// 套索改顏色時的自訂顏色選擇器
     var lassoColorPicker: ColorPickerRelay?
     /// 表格格子的拷貝（照相對位置）；剪貼簿換過內容就不算
@@ -1045,23 +1048,9 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         // 停住變直線的那一筆：交給 holdToShape 換成直線，不當成新筆跡處理
         if holdToShape.pencilKitEnded() { return }
         let gesture = strokeGesture
-        if tool == .eraser, !settings.pixelEraser, let before = gesture?.before {
-            DispatchQueue.main.async { [weak self] in self?.eraseRestOfDashes(before: before) }
-        }
-        if tool == .eraser {
-            let path = eraserPath
-            DispatchQueue.main.async { [weak self] in self?.eraseHighlighterStrokes(along: path, gesture: gesture) }
-        }
         if !tool.isDrawing {
             let before = strokeCountAtBegin
             DispatchQueue.main.async { [weak self] in self?.absorbStrayStroke(countBefore: before, gesture: gesture) }
-            return
-        }
-        if tool == .eraser && settings.eraserAutoReturn {
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.tool == .eraser else { return }
-                self.setTool(self.toolBeforeEraser)
-            }
             return
         }
         guard tool.isInking else { return }
@@ -1073,15 +1062,6 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
                 self?.processNewStroke(duration: duration, countBefore: before)
             }
         }
-    }
-
-    /// 整筆擦除碰到虛線的其中一段：同一條的其他段也拿掉（和擦掉的那一段算同一步）
-    func eraseRestOfDashes(before: PKDrawing) {
-        var d = canvas.drawing
-        let rest = DashedStroke.removingErasedDashes(from: d.strokes, before: before.strokes)
-        guard rest.count != d.strokes.count else { return }
-        d.strokes = rest
-        setDrawing(d)
     }
 
     private func processNewStroke(duration: TimeInterval, countBefore: Int) {

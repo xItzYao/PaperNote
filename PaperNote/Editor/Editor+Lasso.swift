@@ -656,8 +656,8 @@ extension NotebookViewController {
         pasteLasso(clip, center: CGPoint(x: clip.bounds.midX + 24, y: clip.bounds.midY + 24))
     }
 
-    /// 把套索拷貝的內容貼到 center（文件座標）
-    func pasteLasso(_ clip: LassoClipboard, center: CGPoint) {
+    /// 把套索拷貝的內容貼到 center（文件座標）。select：貼上後換到套索選起來（貼紙工具貼筆跡貼紙時留在貼紙工具）
+    func pasteLasso(_ clip: LassoClipboard, center: CGPoint, select: Bool = true) {
         let d = CGPoint(x: center.x - clip.bounds.midX, y: center.y - clip.bounds.midY)
         let target = pageIndex(containing: center) ?? nearestPageIndex(to: center)
         guard pages.indices.contains(target) else { return }
@@ -707,6 +707,7 @@ extension NotebookViewController {
                 newHighlights.append(HighlightRef(pageID: page.id, id: hl.id))
             }
         }
+        guard select else { return }
         // 選取工具選起的筆跡複製一份：留在選取工具
         if tool != .lasso && tool != .select { setTool(.lasso) }
         lassoSel = LassoSelection(strokeIndices: Array(base..<(base + clip.strokes.count)), elements: newElements,

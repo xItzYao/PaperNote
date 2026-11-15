@@ -192,6 +192,8 @@ final class OverlayView: UIView {
     let captureLayer = CAShapeLayer()
     /// 截圖範圍的錨點
     let captureHandleLayer = CAShapeLayer()
+    /// 橡皮擦的圓圈（局部擦除時，擦的範圍）
+    let eraserLayer = CAShapeLayer()
     let tablePlusCircles = CAShapeLayer()
     let tablePlusMarks = CAShapeLayer()
     /// 表格外側拖曳格線的圓點
@@ -388,6 +390,9 @@ final class OverlayView: UIView {
         captureHandleLayer.fillColor = UIColor.white.cgColor
         captureHandleLayer.strokeColor = UIColor.systemTeal.cgColor
         layer.addSublayer(captureHandleLayer)
+        eraserLayer.fillColor = UIColor.systemGray.withAlphaComponent(0.12).cgColor
+        eraserLayer.strokeColor = UIColor.systemGray.cgColor
+        layer.addSublayer(eraserLayer)
 
         tablePlusCircles.fillColor = UIColor.white.cgColor
         tablePlusCircles.strokeColor = UIColor.systemBlue.cgColor
@@ -468,6 +473,7 @@ final class OverlayView: UIView {
         handleLayer.lineWidth = 2 * lineScale
         captureLayer.lineWidth = 2 * lineScale
         captureHandleLayer.lineWidth = 2 * lineScale
+        eraserLayer.lineWidth = 1 * lineScale
         captureLayer.lineDashPattern = [NSNumber(value: Double(8 * lineScale)), NSNumber(value: Double(5 * lineScale))]
         tablePlusCircles.lineWidth = 1.5 * lineScale
         tablePlusMarks.lineWidth = 2 * lineScale
@@ -820,6 +826,14 @@ final class OverlayView: UIView {
         }
         textHandleLayer.lineWidth = lineWidth
         textHandleLayer.path = handles.isEmpty ? nil : h.cgPath
+        CATransaction.commit()
+    }
+
+    /// 橡皮擦的圓圈：p＝圓心（文件座標），nil 收起來
+    func showEraser(at p: CGPoint?, radius r: CGFloat) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        eraserLayer.path = p.map { UIBezierPath(ovalIn: CGRect(x: $0.x - r, y: $0.y - r, width: 2 * r, height: 2 * r)).cgPath }
         CATransaction.commit()
     }
 

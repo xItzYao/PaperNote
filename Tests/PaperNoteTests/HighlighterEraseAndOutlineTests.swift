@@ -20,13 +20,13 @@ final class HighlighterEraseTests: XCTestCase {
         let s = highlighter()
         XCTAssertTrue(NotebookViewController.isHighlighterStroke(s))
         XCTAssertEqual(s.renderBounds.height, 20, accuracy: 3, "測試前提：畫出來寬 20")
-        XCTAssertEqual(HighlighterErase.drawnHalfWidth(s.ink, CGSize(width: 12, height: 12)), 10)
+        XCTAssertEqual(StrokeEraser.drawnHalfWidth(s.ink, CGSize(width: 12, height: 12)), 10)
     }
 
     func testOldMarkerHighlightsAreErasedByTheirLongSide() throws {
         // 舊筆記的 marker：斜的筆頭，長的那邊約 1.1·size
         let s = highlighter(ink: PKInk(.marker, color: .yellow), size: 20)
-        XCTAssertNotNil(HighlighterErase.erase([s], along: [CGPoint(x: 100, y: 112)], radius: 4, partial: false))
+        XCTAssertNotNil(StrokeEraser.erase([s], along: [CGPoint(x: 100, y: 112)], radius: 4, partial: false))
     }
 
     private func pen(y: CGFloat = 100) -> PKStroke {
@@ -39,18 +39,18 @@ final class HighlighterEraseTests: XCTestCase {
 
     func testTouchingTheEdgeOfAHighlighterErasesIt() throws {
         // 橡皮擦（半徑 4）碰到螢光筆的下緣（離中心 12，線寬一半 10 + 半徑 4 = 14 以內），沒有碰到中心
-        let result = try XCTUnwrap(HighlighterErase.erase([highlighter()], along: [CGPoint(x: 100, y: 112)], radius: 4, partial: false),
+        let result = try XCTUnwrap(StrokeEraser.erase([highlighter()], along: [CGPoint(x: 100, y: 112)], radius: 4, partial: false),
                                    "碰到畫出來的範圍就擦到")
         XCTAssertTrue(result.isEmpty, "整筆擦除：拿掉整筆")
     }
 
     func testMissingTheHighlighterLeavesIt() {
-        XCTAssertNil(HighlighterErase.erase([highlighter()], along: [CGPoint(x: 100, y: 116)], radius: 4, partial: false),
+        XCTAssertNil(StrokeEraser.erase([highlighter()], along: [CGPoint(x: 100, y: 116)], radius: 4, partial: false),
                      "離畫出來的範圍還有一點距離：不擦")
     }
 
     func testPartialErasingCutsTheCentreLineWhereTheCircleTouched() throws {
-        let result = try XCTUnwrap(HighlighterErase.erase([highlighter()], along: [CGPoint(x: 100, y: 108)], radius: 4, partial: true))
+        let result = try XCTUnwrap(StrokeEraser.erase([highlighter()], along: [CGPoint(x: 100, y: 108)], radius: 4, partial: true))
         XCTAssertEqual(result.count, 2, "切成左右兩段")
         let xs = result.map { s in s.path.map { $0.location.applying(s.transform).x } }
         let left = try XCTUnwrap(xs.first { ($0.first ?? 0) < 50 })
@@ -66,33 +66,43 @@ final class HighlighterEraseTests: XCTestCase {
     func testAThinEraserLineAcrossAThickHighlighterRemovesItsWholeWidthThere() throws {
         // 螢光筆寬 20，橡皮擦半徑 2（細很多），從上面劃到下面一條線
         let line = [CGPoint(x: 100, y: 80), CGPoint(x: 100, y: 120)]
-        let result = try XCTUnwrap(HighlighterErase.erase([highlighter()], along: line, radius: 2, partial: true))
+        let result = try XCTUnwrap(StrokeEraser.erase([highlighter()], along: line, radius: 2, partial: true))
         XCTAssertEqual(result.count, 2, "擦斷成左右兩段")
         // 留下來的每個圓都碰不到橡皮擦劃過的那條線：那裡整個寬度都不見了，上下沒有殘留
         for s in result {
             for q in s.path.interpolatedPoints(by: .distance(1)) {
-                let half = HighlighterErase.drawnHalfWidth(s.ink, q.size)
+                let half = StrokeEraser.drawnHalfWidth(s.ink, q.size)
                 XCTAssertGreaterThan(abs(q.location.x - 100), half, "x=\(q.location.x) 的圓還蓋到擦過的線")
             }
         }
         // 只擦到上緣一點點也一樣：碰到的那幾個圓整個拿掉
-        let edge = try XCTUnwrap(HighlighterErase.erase([highlighter()], along: [CGPoint(x: 150, y: 89)], radius: 2, partial: true))
+        let edge = try XCTUnwrap(StrokeEraser.erase([highlighter()], along: [CGPoint(x: 150, y: 89)], radius: 2, partial: true))
         XCTAssertEqual(edge.count, 2, "碰到邊緣也擦斷，不是只擦掉邊緣")
     }
 
     func testAnEraserPathSweepingAcrossCountsEveryPoint() throws {
         // 橡皮擦從上面劃過到下面：中間經過的點都算
         let path = [CGPoint(x: 60, y: 60), CGPoint(x: 60, y: 140)]
-        let result = try XCTUnwrap(HighlighterErase.erase([highlighter()], along: path, radius: 4, partial: true))
+        let result = try XCTUnwrap(StrokeEraser.erase([highlighter()], along: path, radius: 4, partial: true))
         XCTAssertEqual(result.count, 2)
     }
 
-    func testPenStrokesAreLeftToTheNormalEraser() {
-        XCTAssertNil(HighlighterErase.erase([pen()], along: [CGPoint(x: 100, y: 100)], radius: 4, partial: false),
-                     "一般的筆照原本的橡皮擦（PencilKit）")
+    func testPenStrokesAreErasedWithinWhatTheyDraw() {
+        // 橡皮擦是 App 自己擦：一般的筆也一樣，碰到畫出來的範圍就擦到
+        XCTAssertEqual(StrokeEraser.erase([pen()], along: [CGPoint(x: 100, y: 103)], radius: 4, partial: false)?.count, 0)
+        XCTAssertNil(StrokeEraser.erase([pen()], along: [CGPoint(x: 100, y: 106)], radius: 4, partial: false), "沒碰到")
     }
 
-    func testTheEditorErasesTheHighlighterWhenTheEraserLiftsAndItCanBeUndone() throws {
+    func testStrokesFarAwayAreKeptAsTheyAre() throws {
+        var far = highlighter(y: 400)
+        far.transform = CGAffineTransform(translationX: 3, y: 0)
+        let result = try XCTUnwrap(StrokeEraser.erase([highlighter(), far], along: [CGPoint(x: 100, y: 100)], radius: 4, partial: false))
+        XCTAssertEqual(result.count, 1)
+        XCTAssertEqual(result[0].transform, far.transform, "沒碰到的那筆原樣留著")
+    }
+
+    /// 回報的問題：螢光筆要等筆尖離開螢幕才變成正確的擦除 → 擦的時候就跟著消失
+    func testTheEditorErasesWhileTheEraserIsStillDownAndItIsOneUndoStep() throws {
         let meta = LibraryStore.shared.createNotebook(title: "HighlighterErase", folder: nil, paper: .blank, landscape: false)
         defer { LibraryStore.shared.deleteNotebook(meta.id) }
         let editor = NotebookViewController(session: try NotebookSession(id: meta.id), initialPageID: nil, onClose: {})
@@ -102,21 +112,57 @@ final class HighlighterEraseTests: XCTestCase {
         defer { window.isHidden = true }
         editor.view.layoutIfNeeded()
         let savedPixel = EditorSettings.shared.pixelEraser
+        let savedReturn = EditorSettings.shared.eraserAutoReturn
         EditorSettings.shared.pixelEraser = false
-        defer { EditorSettings.shared.pixelEraser = savedPixel }
+        EditorSettings.shared.eraserAutoReturn = false
+        defer {
+            EditorSettings.shared.pixelEraser = savedPixel
+            EditorSettings.shared.eraserAutoReturn = savedReturn
+        }
 
         let o = editor.contentOrigin(0)
         var stroke = highlighter(y: 0)
         stroke.transform = CGAffineTransform(translationX: o.x + 100, y: o.y + 200)
-        editor.setDrawing(PKDrawing(strokes: [stroke]))
+        var line = pen(y: 0)
+        line.transform = CGAffineTransform(translationX: o.x + 100, y: o.y + 400)
+        editor.setDrawing(PKDrawing(strokes: [stroke, line]))
         editor.setTool(.eraser)
-        let gesture = StrokeGesture(before: editor.canvas.drawing, mark: editor.history.recordCount)
-        // 橡皮擦擦過螢光筆的上緣（PencilKit 沒擦到）
-        let edge = CGPoint(x: o.x + 200, y: o.y + 200 - 11)
-        editor.eraseHighlighterStrokes(along: [edge], gesture: gesture)
-        XCTAssertEqual(editor.canvas.drawing.strokes.count, 0, "擦掉了")
+        XCTAssertFalse(editor.canvas.drawingGestureRecognizer.isEnabled, "PencilKit 不擦，App 自己擦")
+        // 筆尖碰到螢光筆的上緣：還沒放開就擦掉了
+        editor.eraserBegan(at: CGPoint(x: o.x + 200, y: o.y + 200 - 11))
+        XCTAssertEqual(editor.canvas.drawing.strokes.count, 1, "擦的時候就消失")
+        XCTAssertTrue(editor.canvas.drawing.strokes[0].ink.inkType == .pen)
+        // 繼續往下擦到另一筆
+        editor.eraserMoved([CGPoint(x: o.x + 200, y: o.y + 300), CGPoint(x: o.x + 200, y: o.y + 402)])
+        XCTAssertEqual(editor.canvas.drawing.strokes.count, 0)
+        editor.eraserEnded()
         editor.undoTapped()
-        XCTAssertEqual(editor.canvas.drawing.strokes.count, 1, "可以復原")
+        XCTAssertEqual(editor.canvas.drawing.strokes.count, 2, "一次擦除是一步，一次復原全部回來")
+    }
+
+    func testTheEraserCatchesThePencilBeforePencilKitAndThePageScroll() throws {
+        let meta = LibraryStore.shared.createNotebook(title: "EraserGesture", folder: nil, paper: .blank, landscape: false)
+        defer { LibraryStore.shared.deleteNotebook(meta.id) }
+        let editor = NotebookViewController(session: try NotebookSession(id: meta.id), initialPageID: nil, onClose: {})
+        let window = try TestWindow.make()
+        window.rootViewController = editor
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        editor.view.layoutIfNeeded()
+        let savedFinger = EditorSettings.shared.fingerDrawing
+        EditorSettings.shared.fingerDrawing = false
+        defer { EditorSettings.shared.fingerDrawing = savedFinger }
+
+        editor.setTool(.eraser)
+        XCTAssertTrue(editor.eraserCapture.isEnabled)
+        XCTAssertTrue(editor.gestureRecognizer(editor.eraserCapture, shouldBeRequiredToFailBy: editor.canvas.panGestureRecognizer),
+                      "擦的時候頁面不會跟著捲動")
+        XCTAssertTrue(editor.gestureRecognizer(editor.eraserCapture, shouldBeRequiredToFailBy: editor.canvas.drawingGestureRecognizer))
+        XCTAssertTrue(editor.gestureRecognizer(editor.eraserCapture, shouldReceive: FakeTouch(type: .pencil)))
+        XCTAssertFalse(editor.gestureRecognizer(editor.eraserCapture, shouldReceive: FakeTouch(type: .direct)), "手指拿來捲動")
+        editor.setTool(.highlighter)
+        XCTAssertFalse(editor.eraserCapture.isEnabled)
+        XCTAssertTrue(editor.canvas.drawingGestureRecognizer.isEnabled, "換回螢光筆：PencilKit 照常書寫")
     }
 }
 

@@ -221,7 +221,8 @@ extension NotebookViewController {
     /// 套索選單的「添加至貼紙」：圈到的東西（背景透明）選分類後加進去
     func addLassoToStickers() {
         guard let img = lassoStickerImage().map(StickerMaker.trimmedTransparentEdges) else { return }
-        presentStickerCategoryPicker(img) { [weak self] img, id in self?.saveSticker(img, into: id) }
+        let vector = lassoVectorSticker()
+        presentStickerCategoryPicker(img) { [weak self] img, id in self?.saveSticker(img, into: id, vector: vector) }
     }
 
     /// 圖片選單的「變成貼紙」：選分類，再選裁切範圍、要不要去背

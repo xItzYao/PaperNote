@@ -1,8 +1,10 @@
 import UIKit
 import AVFoundation
 import CoreImage
+import Vision
 
-/// 做貼紙前先選裁切範圍、要不要去背。去背會拿掉的地方蓋上會動的灰色斜線
+/// 做貼紙前先選裁切範圍、要不要去背。去背時被選中的主體四周有一圈會動的藍色虛線；
+/// 用 Apple Pencil 塗「保留」多留一些、塗「去掉」拿掉不要的部分（手指拖裁切框）
 final class StickerEditorViewController: UIViewController {
     var onDone: ((UIImage) -> Void)?
 
@@ -12,25 +14,33 @@ final class StickerEditorViewController: UIViewController {
     var unitCrop = CGRect(x: 0, y: 0, width: 1, height: 1) {
         didSet { layoutOverlay() }
     }
-    /// 要不要去背（認不出主體時會自己關掉）
+    /// 要不要去背（認不出主體時預設關掉）
     private(set) var removeBackground = true
-    /// 主體的遮罩（白＝主體）；nil＝還沒算好或認不出來
-    private(set) var mask: CIImage?
     private(set) var maskState: MaskState = .computing
-
     enum MaskState { case computing, ready, unavailable }
+
+    /// 可以塗改的遮罩（白＝留下來），和原圖一樣大（像素）
+    private(set) var maskCanvas: StickerMaskCanvas?
+    /// 塗的是「保留」還是「去掉」
+    private(set) var brushKeeps = true
+    /// 筆刷在畫面上的粗細
+    static let brushWidth: CGFloat = 24
 
     private let container = UIView()
     private let imageView = UIImageView()
-    /// 斜線（只蓋在背景上：mask 是背景的 alpha）
-    private let stripes = CALayer()
-    private let stripeClip = CALayer()
-    private let stripeMask = CALayer()
+    /// 主體的外框：白色底線＋會動的藍色虛線
+    let outlineLayer = CAShapeLayer()
+    private let outlineBase = CAShapeLayer()
+    /// 正在塗的那一筆（放開才寫進遮罩、重算外框）
+    private let brushPreview = CAShapeLayer()
+    private var brushPoints: [CGPoint] = []
     let cropView = StickerCropView()
     let backgroundSwitch = UISwitch()
+    let brushMode = UISegmentedControl(items: [L("保留"), L("去掉")])
     private let status = UILabel()
     private let spinner = UIActivityIndicatorView(style: .medium)
-    private static let stripePeriod: CGFloat = 18
+    private(set) var brushPan: UIPanGestureRecognizer!
+    private var outlineJob = 0
 
     init(image: UIImage) {
         self.image = StickerMaker.normalized(image)
@@ -38,6 +48,9 @@ final class StickerEditorViewController: UIViewController {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    /// 主體的遮罩（白＝主體）；nil＝還沒算好、認不出來又還沒塗
+    var mask: CIImage? { maskCanvas?.ciImage }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -57,15 +70,27 @@ final class StickerEditorViewController: UIViewController {
         imageView.contentMode = .scaleToFill
         container.addSubview(imageView)
 
-        stripes.backgroundColor = UIColor(patternImage: Self.stripeTile()).cgColor
-        stripeClip.masksToBounds = true
-        stripeClip.addSublayer(stripes)
-        stripeClip.mask = stripeMask
-        stripeClip.isHidden = true
-        container.layer.addSublayer(stripeClip)
+        outlineBase.fillColor = nil
+        outlineBase.strokeColor = UIColor.white.withAlphaComponent(0.9).cgColor
+        outlineBase.lineWidth = 4
+        outlineBase.lineJoin = .round
+        outlineLayer.fillColor = nil
+        outlineLayer.strokeColor = UIColor.systemBlue.cgColor
+        outlineLayer.lineWidth = 2
+        outlineLayer.lineJoin = .round
+        outlineLayer.lineDashPattern = [7, 5]
+        brushPreview.fillColor = nil
+        brushPreview.lineCap = .round
+        brushPreview.lineJoin = .round
+        brushPreview.lineWidth = Self.brushWidth
+        for l in [outlineBase, outlineLayer, brushPreview] { container.layer.addSublayer(l) }
 
         cropView.onChange = { [weak self] r in self?.cropChanged(r) }
         container.addSubview(cropView)
+        // Pencil 塗遮罩；手指拖裁切框（開了「用手指書寫」手指也能塗）
+        brushPan = UIPanGestureRecognizer(target: self, action: #selector(handleBrush(_:)))
+        brushPan.maximumNumberOfTouches = 1
+        cropView.addGestureRecognizer(brushPan)
 
         let label = UILabel()
         label.text = L("去背")
@@ -77,12 +102,18 @@ final class StickerEditorViewController: UIViewController {
             guard let self else { return }
             self.setRemoveBackground(self.backgroundSwitch.isOn)
         }, for: .valueChanged)
+        brushMode.selectedSegmentIndex = 0
+        brushMode.accessibilityIdentifier = "sticker.brushMode"
+        brushMode.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            self.setBrushKeeps(self.brushMode.selectedSegmentIndex == 0)
+        }, for: .valueChanged)
         status.font = .preferredFont(forTextStyle: .footnote)
         status.textColor = .secondaryLabel
         status.numberOfLines = 2
         spinner.hidesWhenStopped = true
         spinner.startAnimating()
-        let bar = UIStackView(arrangedSubviews: [label, backgroundSwitch, spinner, status])
+        let bar = UIStackView(arrangedSubviews: [label, backgroundSwitch, brushMode, spinner, status])
         bar.spacing = 12
         bar.alignment = .center
         bar.translatesAutoresizingMaskIntoConstraints = false
@@ -98,8 +129,10 @@ final class StickerEditorViewController: UIViewController {
             bar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -16),
             bar.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
         ])
+        setBrushKeeps(true)
+        updateTouchRoles()
         updateStatus()
-        startStripes()
+        startMarching()
         computeMask()
     }
 
@@ -115,21 +148,20 @@ final class StickerEditorViewController: UIViewController {
         return AVMakeRect(aspectRatio: image.size, insideRect: area)
     }
 
+    private var lastOutlineRect: CGRect = .zero
+
     private func layoutOverlay() {
         guard isViewLoaded else { return }
         let r = imageRect
         imageView.frame = r
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        stripeClip.frame = r
-        stripeMask.frame = stripeClip.bounds
-        let p = Self.stripePeriod
-        stripes.frame = CGRect(x: -p, y: 0, width: r.width + 2 * p, height: r.height)
-        CATransaction.commit()
         cropView.frame = container.bounds
         cropView.bounds_ = r
         cropView.cropRect = CGRect(x: r.minX + unitCrop.minX * r.width, y: r.minY + unitCrop.minY * r.height,
                                    width: unitCrop.width * r.width, height: unitCrop.height * r.height)
+        if r != lastOutlineRect {
+            lastOutlineRect = r
+            refreshOutline()
+        }
     }
 
     private func cropChanged(_ r: CGRect) {
@@ -140,66 +172,144 @@ final class StickerEditorViewController: UIViewController {
         unitCrop = u.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
     }
 
-    private func startStripes() {
-        let a = CABasicAnimation(keyPath: "transform.translation.x")
+    /// 虛線一直往前走（像選取範圍的螞蟻線）
+    private func startMarching() {
+        let a = CABasicAnimation(keyPath: "lineDashPhase")
         a.fromValue = 0
-        a.toValue = Self.stripePeriod
-        a.duration = 0.8
+        a.toValue = -12
+        a.duration = 0.6
         a.repeatCount = .infinity
-        stripes.add(a, forKey: "march")
-    }
-
-    /// 一格斜線（左右接起來是連續的 45° 斜線）
-    static func stripeTile() -> UIImage {
-        let p = stripePeriod
-        let fmt = UIGraphicsImageRendererFormat()
-        fmt.opaque = false
-        return UIGraphicsImageRenderer(size: CGSize(width: p, height: p), format: fmt).image { rc in
-            let ctx = rc.cgContext
-            UIColor(white: 1, alpha: 0.35).setFill()
-            ctx.fill(CGRect(x: 0, y: 0, width: p, height: p))
-            UIColor.systemGray.withAlphaComponent(0.8).setStroke()
-            ctx.setLineWidth(p * 0.35)
-            for x0 in [-p, 0, p] {
-                ctx.move(to: CGPoint(x: x0, y: p))
-                ctx.addLine(to: CGPoint(x: x0 + p, y: 0))
-            }
-            ctx.strokePath()
-        }
+        outlineLayer.add(a, forKey: "march")
     }
 
     private func computeMask() {
         let img = image
         DispatchQueue.global(qos: .userInitiated).async {
             let m = StickerMaker.subjectMask(img)
-            let bg = m.flatMap { StickerMaker.backgroundAlpha($0) }
-            DispatchQueue.main.async { [weak self] in self?.maskComputed(m, background: bg) }
+            DispatchQueue.main.async { [weak self] in self?.maskComputed(m) }
         }
     }
 
-    /// 遮罩算好了（測試也直接呼叫）
-    func maskComputed(_ m: CIImage?, background: CGImage?) {
+    /// 遮罩算好了（測試也直接呼叫）。認不出主體：還是可以打開去背、用 Pencil 塗出要保留的部分
+    func maskComputed(_ m: CIImage?) {
         spinner.stopAnimating()
-        mask = m
         maskState = m == nil ? .unavailable : .ready
-        stripeMask.contents = background
-        backgroundSwitch.isEnabled = m != nil
+        let px = CGSize(width: image.size.width * image.scale, height: image.size.height * image.scale)
+        maskCanvas = StickerMaskCanvas(size: px, initial: m)
+        backgroundSwitch.isEnabled = true
         setRemoveBackground(m != nil && removeBackground)
     }
 
     func setRemoveBackground(_ on: Bool) {
         removeBackground = on
         backgroundSwitch.isOn = on
-        stripeClip.isHidden = !(on && mask != nil)
+        brushMode.isHidden = !on || maskCanvas == nil
+        updateTouchRoles()
+        refreshOutline()
         updateStatus()
+    }
+
+    func setBrushKeeps(_ keep: Bool) {
+        brushKeeps = keep
+        brushMode.selectedSegmentIndex = keep ? 0 : 1
+        brushPreview.strokeColor = (keep ? UIColor.systemBlue : UIColor.systemRed).withAlphaComponent(0.35).cgColor
+    }
+
+    /// 誰做什麼：去背時 Pencil 塗遮罩、手指拖裁切框；沒去背時都拖裁切框
+    private func updateTouchRoles() {
+        guard isViewLoaded else { return }
+        let brushing = removeBackground && maskCanvas != nil
+        let finger = EditorSettings.shared.fingerDrawing
+        var brushTypes: [UITouch.TouchType] = [.pencil]
+        if finger { brushTypes.append(.direct) }
+        brushPan.isEnabled = brushing
+        brushPan.allowedTouchTypes = brushTypes.map { NSNumber(value: $0.rawValue) }
+        let cropTypes: [UITouch.TouchType] = brushing ? (finger ? [] : [.direct]) : [.direct, .pencil]
+        cropView.panGesture.allowedTouchTypes = cropTypes.map { NSNumber(value: $0.rawValue) }
     }
 
     private func updateStatus() {
         switch maskState {
         case .computing: status.text = L("正在找主體…")
-        case .unavailable: status.text = L("認不出主體，只會裁切")
-        case .ready: status.text = removeBackground ? L("斜線的部分會變透明；拖曳框框選裁切範圍") : L("拖曳框框選裁切範圍")
+        case .unavailable:
+            status.text = removeBackground ? L("用 Pencil 塗出要保留的部分；手指拖曳框框選裁切範圍") : L("認不出主體，打開去背可以用 Pencil 自己塗")
+        case .ready:
+            status.text = removeBackground ? L("藍色虛線裡的會留下來；用 Pencil 塗「保留」「去掉」修改，手指拖曳框框選裁切範圍")
+                                           : L("拖曳框框選裁切範圍")
         }
+    }
+
+    // MARK: 塗遮罩
+
+    @objc private func handleBrush(_ g: UIPanGestureRecognizer) {
+        let p = g.location(in: cropView)
+        switch g.state {
+        case .began:
+            let t = g.translation(in: cropView)
+            brushPoints = [CGPoint(x: p.x - t.x, y: p.y - t.y), p]
+            updateBrushPreview()
+        case .changed:
+            brushPoints.append(p)
+            updateBrushPreview()
+        case .ended:
+            brushPoints.append(p)
+            paint(brushPoints, keep: brushKeeps)
+            brushPoints = []
+            updateBrushPreview()
+        default:
+            brushPoints = []
+            updateBrushPreview()
+        }
+    }
+
+    private func updateBrushPreview() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if brushPoints.isEmpty {
+            brushPreview.path = nil
+        } else {
+            let path = UIBezierPath()
+            path.move(to: brushPoints[0])
+            for q in brushPoints.dropFirst() { path.addLine(to: q) }
+            brushPreview.path = path.cgPath
+        }
+        CATransaction.commit()
+    }
+
+    /// 在畫面上（cropView 座標）塗一筆：keep＝保留（加進遮罩），否則去掉。測試也直接呼叫
+    func paint(_ points: [CGPoint], keep: Bool) {
+        let r = imageRect
+        guard let canvas = maskCanvas, r.width > 0, !points.isEmpty else { return }
+        let k = canvas.size.width / r.width
+        let px = points.map { CGPoint(x: ($0.x - r.minX) * k, y: ($0.y - r.minY) * k) }
+        canvas.stroke(px, width: Self.brushWidth * k, keep: keep)
+        refreshOutline()
+    }
+
+    /// 重算主體的外框（Vision 找遮罩的邊，背景執行緒算）
+    private func refreshOutline() {
+        outlineJob += 1
+        let job = outlineJob
+        guard removeBackground, let cg = maskCanvas?.cgImage else {
+            setOutline(nil)
+            return
+        }
+        let r = imageRect
+        DispatchQueue.global(qos: .userInitiated).async {
+            let path = StickerMaker.outline(of: cg, in: r)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, job == self.outlineJob else { return }
+                self.setOutline(path)
+            }
+        }
+    }
+
+    private func setOutline(_ path: CGPath?) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        outlineLayer.path = path
+        outlineBase.path = path
+        CATransaction.commit()
     }
 
     /// 裁切範圍（原圖的像素）
@@ -208,7 +318,7 @@ final class StickerEditorViewController: UIViewController {
         return CGRect(x: unitCrop.minX * w, y: unitCrop.minY * h, width: unitCrop.width * w, height: unitCrop.height * h)
     }
 
-    /// 照目前的裁切、去背做出貼紙
+    /// 照目前的裁切、去背（含塗改）做出貼紙
     func makeSticker() -> UIImage {
         StickerMaker.render(image, crop: pixelCrop, mask: removeBackground ? mask : nil)
     }
@@ -220,6 +330,79 @@ final class StickerEditorViewController: UIViewController {
     }
 }
 
+/// 可以塗改的遮罩：灰階點陣圖（白＝留下來），左上角為原點、單位是原圖的像素
+final class StickerMaskCanvas {
+    let size: CGSize
+    private let context: CGContext
+
+    init?(size: CGSize, initial: CIImage?) {
+        let w = Int(size.width.rounded()), h = Int(size.height.rounded())
+        guard w > 0, h > 0,
+              let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return nil }
+        self.size = CGSize(width: w, height: h)
+        context = ctx
+        ctx.setFillColor(gray: 0, alpha: 1)
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        // 先照原本的方向畫進去（還沒翻轉座標），之後塗的用左上角為原點
+        if let initial, let cg = CIContext().createCGImage(initial, from: initial.extent) {
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        }
+        ctx.translateBy(x: 0, y: CGFloat(h))
+        ctx.scaleBy(x: 1, y: -1)
+        ctx.setLineCap(.round)
+        ctx.setLineJoin(.round)
+    }
+
+    /// 塗一筆（像素座標，左上角為原點）
+    func stroke(_ points: [CGPoint], width: CGFloat, keep: Bool) {
+        guard let first = points.first else { return }
+        context.setStrokeColor(gray: keep ? 1 : 0, alpha: 1)
+        context.setFillColor(gray: keep ? 1 : 0, alpha: 1)
+        context.setLineWidth(width)
+        if points.count == 1 {
+            context.fillEllipse(in: CGRect(x: first.x - width / 2, y: first.y - width / 2, width: width, height: width))
+            return
+        }
+        context.beginPath()
+        context.move(to: first)
+        for p in points.dropFirst() { context.addLine(to: p) }
+        context.strokePath()
+    }
+
+    var cgImage: CGImage? { context.makeImage() }
+    var ciImage: CIImage? { cgImage.map { CIImage(cgImage: $0) } }
+
+    /// 這一點（像素座標，左上角為原點）會不會留下來（測試用）
+    func keeps(_ p: CGPoint) -> Bool {
+        guard let cg = cgImage, let data = cg.dataProvider?.data, let bytes = CFDataGetBytePtr(data) else { return false }
+        let x = Int(p.x), y = Int(p.y)
+        guard x >= 0, y >= 0, x < cg.width, y < cg.height else { return false }
+        return bytes[y * cg.bytesPerRow + x] > 127
+    }
+}
+
+extension StickerMaker {
+    /// 遮罩（白＝留下來）的外框，換到畫面上 rect 的位置；找不到邊回傳 nil
+    static func outline(of mask: CGImage, in rect: CGRect) -> CGPath? {
+        let request = VNDetectContoursRequest()
+        request.detectsDarkOnLight = false
+        request.contrastAdjustment = 1
+        request.maximumImageDimension = 512
+        let handler = VNImageRequestHandler(cgImage: mask, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            DebugLog.add("sticker: outline failed \(error.localizedDescription)")
+            return nil
+        }
+        guard let obs = request.results?.first, obs.contourCount > 0 else { return nil }
+        // Vision 的座標 0…1、原點在左下角
+        var t = CGAffineTransform(translationX: rect.minX, y: rect.maxY).scaledBy(x: rect.width, y: -rect.height)
+        return obs.normalizedPath.copy(using: &t)
+    }
+}
+
 /// 裁切框：框外變暗，拖曳四個角改大小、拖曳框內移動
 final class StickerCropView: UIView {
     var onChange: ((CGRect) -> Void)?
@@ -227,6 +410,7 @@ final class StickerCropView: UIView {
     var bounds_: CGRect = .zero
     var cropRect: CGRect = .zero { didSet { redraw() } }
     static let minSide: CGFloat = 40
+    private(set) var panGesture: UIPanGestureRecognizer!
 
     private let dim = CAShapeLayer()
     private let border = CAShapeLayer()
@@ -252,9 +436,9 @@ final class StickerCropView: UIView {
         handles.shadowRadius = 2
         handles.shadowOffset = .zero
         for l in [dim, border, handles] { layer.addSublayer(l) }
-        let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
-        pan.maximumNumberOfTouches = 1
-        addGestureRecognizer(pan)
+        panGesture = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+        panGesture.maximumNumberOfTouches = 1
+        addGestureRecognizer(panGesture)
         accessibilityIdentifier = "sticker.crop"
     }
 

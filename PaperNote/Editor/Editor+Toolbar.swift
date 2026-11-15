@@ -319,7 +319,7 @@ extension NotebookViewController {
     }
 
     func applyTool() {
-        canvas.drawingGestureRecognizer.isEnabled = tool.isDrawing && !previewMode
+        canvas.drawingGestureRecognizer.isEnabled = tool.isInking && !previewMode
         circuitLibrary.isHidden = tool != .circuit
         photoStrip.isHidden = tool != .image
         if tool == .image { photoStrip.reload() }
@@ -360,7 +360,7 @@ extension NotebookViewController {
     /// 筆用自製筆刷還是 PencilKit 畫（看工具和目前的筆型）：換筆、改筆型後也要重新設定
     func applyInkEngine() {
         // 只有開啟「用手指書寫」時，手指才用來截圖、選字、畫表格線、圈選；否則單指捲動
-        let fingerUsedByTool = settings.fingerDrawing && (tool.drawsWithPan || customInkActive)
+        let fingerUsedByTool = settings.fingerDrawing && (tool.drawsWithPan || customInkActive || tool == .eraser)
         canvas.panGestureRecognizer.minimumNumberOfTouches = fingerUsedByTool ? 2 : 1
         updateGestureAvailability()
         configurePencilKitGestures()

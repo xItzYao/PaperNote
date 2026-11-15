@@ -58,30 +58,14 @@ final class LostPencilTouchTests: XCTestCase {
         tracker.touchesBegan([lost], with: FakeEvent([lost]))
         lost.fakePhase = .moved   // 收走了，phase 沒再更新
 
-        editor.setTool(.eraser)
-        editor.pkUsingSince = CACurrentMediaTime() - 5   // PencilKit 開始擦了，一直沒結束
+        editor.setTool(.highlighter)
+        editor.pkUsingSince = CACurrentMediaTime() - 5   // PencilKit 開始寫了，一直沒結束
         editor.pencilDown = false
         let next = FakeTouch(type: .pencil, location: CGPoint(x: 220, y: 320))
         tracker.touchesBegan([next], with: FakeEvent([next]))
         XCTAssertTrue(editor.pencilDown, "下一筆要收到")
-        XCTAssertNil(editor.pkUsingSince, "卡在擦除中的 PencilKit 重設了，圓圈才不會卡住")
+        XCTAssertNil(editor.pkUsingSince, "卡在書寫中的 PencilKit 重設了")
         XCTAssertTrue(editor.canvas.drawingGestureRecognizer.isEnabled)
-        tracker.touchesEnded([next], with: FakeEvent([next]))
-    }
-
-    func testTheEraserTrackerAlsoDropsATouchTheSystemTookAway() throws {
-        editor.setTool(.eraser)
-        let tracker = try XCTUnwrap(editor.eraserTracker)
-        var began = 0
-        let saved = tracker.onBegan
-        defer { tracker.onBegan = saved }
-        tracker.onBegan = { _ in began += 1 }
-        let lost = FakeTouch(type: .pencil)
-        tracker.touchesBegan([lost], with: FakeEvent([lost]))
-        lost.fakePhase = .moved
-        let next = FakeTouch(type: .pencil)
-        tracker.touchesBegan([next], with: FakeEvent([next]))
-        XCTAssertEqual(began, 2, "橡皮擦接著擦")
         tracker.touchesEnded([next], with: FakeEvent([next]))
     }
 

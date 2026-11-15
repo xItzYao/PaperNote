@@ -529,9 +529,9 @@ final class EditorRequestsNov15Tests: XCTestCase {
 
     func testTheEditorCropsWithTheFrame() throws {
         let vc = loadedEditor(redSquare(margin: 0, side: 200))
-        vc.maskComputed(nil, background: nil)
-        XCTAssertFalse(vc.removeBackground, "認不出主體：不去背")
-        XCTAssertFalse(vc.backgroundSwitch.isEnabled)
+        vc.maskComputed(nil)
+        XCTAssertFalse(vc.removeBackground, "認不出主體：預設不去背")
+        XCTAssertTrue(vc.backgroundSwitch.isEnabled, "可以自己打開，用 Pencil 塗")
         let r = vc.cropView.cropRect
         XCTAssertEqual(r, vc.imageRect, "一開始框住整張")
         XCTAssertGreaterThan(r.width, 100)
@@ -552,12 +552,170 @@ final class EditorRequestsNov15Tests: XCTestCase {
     func testTheEditorCanTurnBackgroundRemovalOff() throws {
         let vc = loadedEditor(redSquare(margin: 0, side: 100))
         let m = mask(CGRect(x: 20, y: 20, width: 30, height: 30), in: CGRect(x: 0, y: 0, width: 100, height: 100))
-        vc.maskComputed(m, background: StickerMaker.backgroundAlpha(m))
+        vc.maskComputed(m)
         XCTAssertTrue(vc.removeBackground, "預設去背")
         XCTAssertTrue(vc.backgroundSwitch.isOn)
         XCTAssertEqual(try XCTUnwrap(vc.makeSticker().cgImage).width, 30)
         vc.setRemoveBackground(false)
         XCTAssertEqual(try XCTUnwrap(vc.makeSticker().cgImage).width, 100, "關掉去背就是整張")
+    }
+
+    /// 回報的需求：去背改成選中的物件邊緣包藍色移動虛線，可以用 Pencil 畫出要多保留或不要保留的部分
+    func testTheSubjectIsOutlinedWithMarchingBlueDashes() throws {
+        let vc = loadedEditor(redSquare(margin: 0, side: 100))
+        vc.maskComputed(mask(CGRect(x: 30, y: 30, width: 40, height: 40), in: CGRect(x: 0, y: 0, width: 100, height: 100)))
+        let deadline = Date().addingTimeInterval(3)
+        while vc.outlineLayer.path == nil, Date() < deadline { spin(0.05) }
+        let path = try XCTUnwrap(vc.outlineLayer.path, "主體邊緣有外框")
+        XCTAssertEqual(vc.outlineLayer.strokeColor, UIColor.systemBlue.cgColor, "藍色")
+        XCTAssertFalse(vc.outlineLayer.lineDashPattern?.isEmpty ?? true, "虛線")
+        XCTAssertNotNil(vc.outlineLayer.animation(forKey: "march"), "虛線會動")
+        // 外框在畫面上主體的位置（圖片中間 40%）
+        let r = vc.imageRect
+        let b = path.boundingBoxOfPath
+        XCTAssertEqual(b.midX, r.midX, accuracy: r.width * 0.05)
+        XCTAssertEqual(b.width, r.width * 0.4, accuracy: r.width * 0.06)
+        vc.setRemoveBackground(false)
+        XCTAssertNil(vc.outlineLayer.path, "關掉去背就沒有外框")
+    }
+
+    func testPencilPaintsWhatToKeepAndWhatToRemove() throws {
+        let vc = loadedEditor(redSquare(margin: 0, side: 100))
+        vc.maskComputed(mask(CGRect(x: 30, y: 30, width: 40, height: 40), in: CGRect(x: 0, y: 0, width: 100, height: 100)))
+        let canvas = try XCTUnwrap(vc.maskCanvas)
+        XCTAssertTrue(canvas.keeps(CGPoint(x: 50, y: 50)), "主體留下來")
+        XCTAssertFalse(canvas.keeps(CGPoint(x: 10, y: 10)), "背景去掉")
+        XCTAssertFalse(vc.brushMode.isHidden, "去背時有「保留」「去掉」")
+        XCTAssertTrue(vc.brushPan.isEnabled)
+        XCTAssertEqual(vc.brushPan.allowedTouchTypes, [NSNumber(value: UITouch.TouchType.pencil.rawValue)], "Pencil 塗")
+        let r = vc.imageRect
+        func onScreen(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: r.minX + r.width * x / 100, y: r.minY + r.height * y / 100)
+        }
+        // 塗「保留」：左上角的背景留下來
+        vc.paint([onScreen(5, 10), onScreen(20, 10)], keep: true)
+        XCTAssertTrue(canvas.keeps(CGPoint(x: 12, y: 10)), "塗過的背景留下來")
+        // 塗「去掉」：主體中間挖掉
+        vc.paint([onScreen(50, 50)], keep: false)
+        XCTAssertFalse(canvas.keeps(CGPoint(x: 50, y: 50)), "塗過的主體去掉")
+        XCTAssertTrue(canvas.keeps(CGPoint(x: 32, y: 32)), "沒塗到的主體還在")
+        // 做出來的貼紙照塗過的遮罩
+        let sticker = try XCTUnwrap(vc.makeSticker().cgImage)
+        XCTAssertLessThan(sticker.width, 100)
+        XCTAssertGreaterThan(sticker.width, 60, "左上角塗保留的部分也在貼紙裡")
+        vc.setBrushKeeps(false)
+        XCTAssertEqual(vc.brushMode.selectedSegmentIndex, 1)
+        XCTAssertFalse(vc.brushKeeps)
+    }
+
+    func testWithoutASubjectPencilCanPaintTheStickerByHand() throws {
+        let vc = loadedEditor(redSquare(margin: 0, side: 100))
+        vc.maskComputed(nil)
+        vc.setRemoveBackground(true)
+        let canvas = try XCTUnwrap(vc.maskCanvas)
+        XCTAssertFalse(canvas.keeps(CGPoint(x: 50, y: 50)), "一開始什麼都沒留")
+        let r = vc.imageRect
+        vc.paint([CGPoint(x: r.midX, y: r.midY)], keep: true)
+        XCTAssertTrue(canvas.keeps(CGPoint(x: 50, y: 50)))
+        let sticker = try XCTUnwrap(vc.makeSticker().cgImage)
+        XCTAssertLessThan(sticker.width, 60, "只有塗的那一塊")
+    }
+
+    /// 回報的需求：筆跡的貼紙分開存成向量，貼上的是真的筆跡
+    func testInkStickersAreSavedAsVectorsAndPasteRealStrokes() throws {
+        let c = testCategory()
+        let pk = ShapeRecognizer.makeStroke(points: (0...10).map { doc(120 + CGFloat($0) * 6, 260) }, preset: BrushStore.shared.current)
+        editor.setDrawing(PKDrawing(strokes: [pk]))
+        lasso(triangle)
+        let sel = try XCTUnwrap(editor.lassoSel)
+        XCTAssertEqual(sel.strokeIndices.count, 1)
+        XCTAssertEqual(sel.ink.count, 1)
+        let v = try XCTUnwrap(editor.lassoVectorSticker(), "只圈到筆跡：存一份向量")
+        XCTAssertEqual(v.size.width, sel.bounds.width, accuracy: 0.5)
+        let img = try XCTUnwrap(editor.lassoStickerImage())
+        editor.saveSticker(img, into: c.id, vector: v)
+        let s = try XCTUnwrap(StickerStore.shared.categories.first { $0.id == c.id }?.stickers.last)
+        let file = try XCTUnwrap(s.vector, "有向量檔")
+        let back = try XCTUnwrap(StickerStore.shared.vector(for: s), "讀得回來")
+        XCTAssertEqual(back.ink.count, 1)
+        XCTAssertEqual(try PKDrawing(data: back.drawing).strokes.count, 1)
+        // 下面那一排標成筆跡貼紙
+        editor.setTool(.sticker)
+        let button = try XCTUnwrap(editor.stickerStrip.stickerButtons.first { $0.accessibilityIdentifier == "sticker.\(s.id.uuidString)" })
+        XCTAssertNotNil(findView(id: "sticker.vector", in: button))
+
+        // 貼上：真的筆跡，原本的大小，中心在點的位置；不是圖片
+        let elements = editor.pages[0].elements.count
+        button.sendActions(for: .touchUpInside)
+        XCTAssertEqual(editor.stickerStrip.selectedID, s.id)
+        let at = doc(400, 600)
+        editor.handleTap(FakeTap(at))
+        XCTAssertEqual(editor.pages[0].elements.count, elements, "沒有貼圖片")
+        XCTAssertEqual(editor.canvas.drawing.strokes.count, 2, "多了一筆 PencilKit 的筆跡")
+        XCTAssertEqual(editor.pages[0].ink.count, 2, "多了一筆自製筆刷的筆跡")
+        let pasted = editor.canvas.drawing.strokes[1]
+        XCTAssertEqual(pasted.renderBounds.width, pk.renderBounds.width, accuracy: 1, "原本的大小")
+        let o = editor.contentOrigin(0)
+        let pastedInk = try XCTUnwrap(editor.pages[0].ink.last)
+        let all = pasted.renderBounds.union(InkGeometry.bounds(of: pastedInk).offsetBy(dx: o.x, dy: o.y))
+        XCTAssertEqual(all.midX, at.x, accuracy: 2)
+        XCTAssertEqual(all.midY, at.y, accuracy: 2)
+        XCTAssertEqual(editor.tool, .sticker, "留在貼紙工具，可以接著貼")
+        XCTAssertNil(editor.lassoSel)
+        editor.undoTapped()
+        XCTAssertEqual(editor.canvas.drawing.strokes.count, 1, "一次復原")
+        XCTAssertEqual(editor.pages[0].ink.count, 1)
+
+        // 刪掉貼紙：向量檔也刪掉
+        let url = StickerStore.shared.directory.appendingPathComponent(file)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        StickerStore.shared.remove(s.id)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    func testStickersWithObjectsStayImages() throws {
+        let c = testCategory()
+        let s = try XCTUnwrap(StickerStore.shared.add(redSquare(margin: 0, side: 300), to: c.id))
+        XCTAssertNil(s.vector, "相簿的貼紙是圖片")
+        editor.setTool(.sticker)
+        let placed = try XCTUnwrap(editor.placeSticker(s, at: doc(150, 300)))
+        editor.setTool(.lasso)
+        // 圈一個比貼紙大的框
+        let corners = [doc(20, 120), doc(420, 120), doc(420, 520), doc(20, 520), doc(22, 122)]
+        var box: [CGPoint] = []
+        for (a, b) in zip(corners, corners.dropFirst()) {
+            for i in 0..<10 {
+                let t = CGFloat(i) / 10
+                box.append(CGPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t))
+            }
+        }
+        lasso(box + [corners[4]])
+        let sel = try XCTUnwrap(editor.lassoSel)
+        XCTAssertEqual(sel.elements.map(\.elementID), [placed.elementID], "圈到圖片")
+        XCTAssertNil(editor.lassoVectorSticker(), "圈到物件：只存圖片")
+    }
+
+    /// 回報的需求：貼紙模式手指可以捲動頁面、放大縮小，不會貼上；只有 Apple Pencil（或開了用手指書寫）才貼
+    func testInTheStickerToolFingersScrollAndOnlyThePencilPlaces() throws {
+        let saved = EditorSettings.shared.fingerDrawing
+        defer {
+            EditorSettings.shared.fingerDrawing = saved
+            editor.applyTool()
+        }
+        EditorSettings.shared.fingerDrawing = false
+        editor.setTool(.sticker)
+        let finger = FakeTouch(type: .direct, location: doc(400, 600))
+        let pencil = FakeTouch(type: .pencil, location: doc(400, 600))
+        for g in [editor.tapGesture, editor.toolPan, editor.longPressGesture] as [UIGestureRecognizer?] {
+            let g = try XCTUnwrap(g)
+            XCTAssertFalse(editor.gestureRecognizer(g, shouldReceive: finger), "手指不會貼上、拖曳貼紙：\(g)")
+            XCTAssertTrue(editor.gestureRecognizer(g, shouldReceive: pencil), "Pencil 可以：\(g)")
+        }
+        XCTAssertTrue(editor.canvas.panGestureRecognizer.isEnabled, "手指捲動頁面")
+        XCTAssertNotNil(editor.canvas.pinchGestureRecognizer, "手指放大縮小")
+        XCTAssertTrue(editor.canvas.pinchGestureRecognizer?.isEnabled ?? false)
+        EditorSettings.shared.fingerDrawing = true
+        XCTAssertTrue(editor.gestureRecognizer(try XCTUnwrap(editor.tapGesture), shouldReceive: finger), "開了用手指書寫：手指也可以貼")
     }
 
     func testTheStickerToolShowsCategoriesAndAStripOfStickers() throws {

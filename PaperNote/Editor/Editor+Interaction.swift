@@ -36,19 +36,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         textLongPress.delegate = self
         canvas.addGestureRecognizer(textLongPress)
 
-        eraserTracker = TouchTracker(target: nil, action: nil)
-        eraserTracker.coordinateView = pagesContainer
-        eraserTracker.delegate = self
-        eraserTracker.onPoint = { [weak self] p in
-            self?.eraseHighlights(at: p)
-            self?.eraseInk(at: p)
-            self?.eraserPath.append(p)
-        }
-        eraserTracker.onBegan = { [weak self] _ in
-            self?.inkEraseUndoRegistered = []
-            self?.eraserPath = []
-        }
-        canvas.addGestureRecognizer(eraserTracker)
+        setupEraser()
 
         // 記住筆尖最後的位置（調色盤小圖示出現在這附近）
         pencilPointTracker = TouchTracker(target: nil, action: nil)
@@ -67,10 +55,10 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             let g = self.canvas.drawingGestureRecognizer
             let since = self.pkUsingSince.map { String(format: "%.1fs", CACurrentMediaTime() - $0) } ?? "nil"
             DebugLog.add("pencil down tool=\(self.tool) customInk=\(self.customInkActive) drawGR enabled=\(g.isEnabled) state=\(g.state.rawValue) pkUsing=\(since) presented=\(self.presentedViewController.map { String(describing: type(of: $0)) } ?? "nil")")
-            // 保險：書寫工具下 PencilKit 的書寫手勢一定要開著
-            if self.tool.isDrawing, !g.isEnabled { g.isEnabled = true }
-            // 上一筆一直沒收到「結束」：PencilKit 卡在書寫中，之後的筆和橡皮擦都會被忽略 → 重設書寫手勢
-            if self.tool.isDrawing, let s = self.pkUsingSince, CACurrentMediaTime() - s > 0.8 {
+            // 保險：筆、螢光筆用 PencilKit 寫時，PencilKit 的書寫手勢一定要開著（橡皮擦是 App 自己擦）
+            if self.tool.isInking, !g.isEnabled { g.isEnabled = true }
+            // 上一筆一直沒收到「結束」：PencilKit 卡在書寫中，之後的筆都會被忽略 → 重設書寫手勢
+            if self.tool.isInking, let s = self.pkUsingSince, CACurrentMediaTime() - s > 0.8 {
                 DebugLog.add("pencilkit stuck in a stroke, resetting drawing gesture")
                 self.pkUsingSince = nil
                 g.isEnabled = false
@@ -131,15 +119,15 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         inkRecognizer.isEnabled = customInkActive
         inkRecognizer.allowFinger = settings.fingerDrawing
         holdRecognizer.allowFinger = settings.fingerDrawing
-        eraserTracker.isEnabled = tool == .eraser
-        eraserTracker.allowFinger = settings.fingerDrawing
+        eraserCapture.isEnabled = tool == .eraser
+        eraserCapture.allowFinger = settings.fingerDrawing
         longPressGesture.isEnabled = tool == .select || tool == .image || tool == .sticker
         textLongPress.isEnabled = true
         textHandlePan.isEnabled = true
         // 預覽模式只能捲動、縮放
         if previewMode {
             let off: [UIGestureRecognizer] = [toolPan, tapGesture, doubleTapGesture, longPressGesture, textLongPress, textHandlePan,
-                                              holdRecognizer, inkRecognizer, eraserTracker]
+                                              holdRecognizer, inkRecognizer, eraserCapture]
             for g in off { g.isEnabled = false }
         }
     }
@@ -199,7 +187,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             return !(o === canvas.panGestureRecognizer || o === canvas.pinchGestureRecognizer)
         }
         // 被動追蹤筆尖的辨識器要和 PencilKit 同時運作
-        let passive: [UIGestureRecognizer?] = [holdRecognizer, eraserTracker, pencilPointTracker]
+        let passive: [UIGestureRecognizer?] = [holdRecognizer, pencilPointTracker]
         return passive.contains { $0 === g || $0 === other }
     }
 
@@ -221,6 +209,10 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         if g === inkRecognizer {
             return customInkActive && (other === canvas.drawingGestureRecognizer || other === canvas.panGestureRecognizer)
         }
+        // 橡皮擦也一樣：接住 Pencil 後頁面不會跟著捲動
+        if g === eraserCapture {
+            return tool == .eraser && (other === canvas.drawingGestureRecognizer || other === canvas.panGestureRecognizer)
+        }
         // 按在文字選取的控制點上：拖控制點，不捲動、不重新選
         if g === textHandlePan { return other === canvas.panGestureRecognizer || other === toolPan }
         return g === toolPan && other === canvas.panGestureRecognizer && tool.panYieldsToScroll
@@ -232,7 +224,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         // 編輯文字時，點文字框內部交給 UITextView
         if let tv = editingTextView, touch.view?.isDescendant(of: tv) == true { return false }
         // 自製筆刷只收 Pencil（開了「用手指書寫」才收手指）；沒收到觸碰就不會擋住頁面捲動
-        if g === inkRecognizer { return touch.type == .pencil || settings.fingerDrawing }
+        if g === inkRecognizer || g === eraserCapture { return touch.type == .pencil || settings.fingerDrawing }
         // 控制點：手指、Pencil 都可以拖；沒按在控制點上就不收，不會擋住捲動
         if g === textHandlePan { return textHandle(at: touch.location(in: pagesContainer)) != nil }
         if g === textLongPress {
@@ -249,6 +241,10 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         }
         if g === toolPan, toolPan.numberOfTouches == 0 {
             toolPanByDrawingTouch = touch.type == .pencil || settings.fingerDrawing
+        }
+        // 貼紙工具：只有 Pencil（開了「用手指書寫」才有手指）會貼上、拖曳貼紙；手指只捲動、縮放頁面
+        if tool == .sticker, g === tapGesture || g === toolPan || g === longPressGesture {
+            return touch.type == .pencil || settings.fingerDrawing
         }
         // 電路工具：手指可以拖元件，其他地方是捲動頁面
         if g === toolPan, tool == .circuit {

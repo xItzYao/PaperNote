@@ -555,7 +555,7 @@ extension NotebookViewController {
 
 extension NotebookViewController {
     var ownGestureRecognizers: [UIGestureRecognizer] {
-        [toolPan, tapGesture, doubleTapGesture, longPressGesture, holdRecognizer, textLongPress, textHandlePan, eraserTracker, pencilPointTracker, palmBlocker, inkRecognizer].compactMap { $0 }
+        [toolPan, tapGesture, doubleTapGesture, longPressGesture, holdRecognizer, textLongPress, textHandlePan, eraserCapture, pencilPointTracker, palmBlocker, inkRecognizer].compactMap { $0 }
     }
 
     func configurePencilKitGestures() {
@@ -571,7 +571,8 @@ extension NotebookViewController {
         for g in all where !mine.contains(ObjectIdentifier(g)) {
             if g === canvas.panGestureRecognizer || g === canvas.pinchGestureRecognizer { continue }
             if g === canvas.drawingGestureRecognizer {
-                g.isEnabled = drawingTool
+                // 橡皮擦是 App 自己擦：PencilKit 的書寫手勢只給筆、螢光筆
+                g.isEnabled = tool.isInking && !previewMode
                 continue
             }
             if !drawingTool {
