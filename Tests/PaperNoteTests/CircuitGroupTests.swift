@@ -122,7 +122,7 @@ final class CircuitGroupTests: XCTestCase {
         XCTAssertNil(editor.presentedViewController, "第一下只有選取")
         editor.handleCircuitTap(at: at(left))
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
-        let alert = try XCTUnwrap(editor.presentedViewController as? UIAlertController, "選取中再點一下：改名")
+        let alert = try XCTUnwrap(editor.presentedNameEditor, "選取中再點一下：改名")
         XCTAssertEqual(alert.title, "元件名稱")
         XCTAssertEqual(data.components.count, count, "放置模式也不會多放一個")
     }
@@ -220,9 +220,9 @@ final class CircuitGroupTests: XCTestCase {
         editor.groupCircuitSelection()
         editor.handleCircuitTap(at: at(right))
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
-        let alert = try XCTUnwrap(editor.presentedViewController as? UIAlertController)
+        let alert = try XCTUnwrap(editor.presentedNameEditor)
         XCTAssertEqual(alert.title, "元件名稱")
-        alert.dismiss(animated: false)
+        editor.presentedViewController?.dismiss(animated: false)
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
     }
 

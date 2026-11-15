@@ -18,7 +18,8 @@ final class HighlighterUndoUITests: XCTestCase {
     private var strokes: String { app.descendants(matching: .any)["pkStrokes"].label }
     private var log: String { app.descendants(matching: .any)["debugTail"].label }
 
-    private func waitForStrokes(_ n: Int, timeout: TimeInterval = 5) -> Bool {
+    /// CI 的模擬器很慢：上一步之後 PencilKit 有時隔兩秒多才送出新的一筆（看紀錄的 pk ended → pk changed），多等一點
+    private func waitForStrokes(_ n: Int, timeout: TimeInterval = 12) -> Bool {
         let p = NSPredicate(format: "label == %@", "\(n)")
         return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: p, object: app.descendants(matching: .any)["pkStrokes"])], timeout: timeout) == .completed
     }

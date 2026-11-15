@@ -67,9 +67,9 @@ final class CircuitEditingTests: XCTestCase {
     func testNamingAWire() throws {
         editor.promptWireLabel(ref, wire: wireID, near: .zero)
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
-        let alert = try XCTUnwrap(editor.presentedViewController as? UIAlertController, "選單的「導線名稱」：跳出輸入名稱")
+        let alert = try XCTUnwrap(editor.presentedNameEditor, "選單的「導線名稱」：跳出輸入名稱")
         XCTAssertEqual(alert.title, "導線名稱")
-        alert.dismiss(animated: false)
+        editor.presentedViewController?.dismiss(animated: false)
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
 
         let w0 = try XCTUnwrap(wire)
@@ -156,10 +156,10 @@ final class CircuitEditingTests: XCTestCase {
         editor.handleCircuitTap(at: editor.circuitDoc(c.position, ref))
         editor.handleCircuitTap(at: editor.circuitDoc(c.position, ref))
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
-        let alert = try XCTUnwrap(editor.presentedViewController as? UIAlertController, "再點一下：跳出輸入名稱")
+        let alert = try XCTUnwrap(editor.presentedNameEditor, "再點一下：跳出輸入名稱")
         XCTAssertEqual(alert.title, "元件名稱")
         XCTAssertEqual(editor.circuitSel, .component(c.id))
-        alert.dismiss(animated: false)
+        editor.presentedViewController?.dismiss(animated: false)
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
         XCTAssertTrue(editor.buildCircuitRibbon().contains { $0.accessibilityLabel == "元件名稱" }, "工具列也可以命名")
 

@@ -13,6 +13,13 @@ enum TestWindow {
     }
 }
 
+extension UIViewController {
+    /// 跳出來的電路名稱編輯器（放在 navigation controller 裡）
+    var presentedNameEditor: CircuitNameEditorViewController? {
+        (presentedViewController as? UINavigationController)?.topViewController as? CircuitNameEditorViewController
+    }
+}
+
 /// 測試用的觸碰（只用到種類、大小、位置）
 final class FakeTouch: UITouch {
     private let kind: UITouch.TouchType
