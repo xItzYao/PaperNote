@@ -232,6 +232,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     let circuitLibrary = CircuitLibraryView()
     /// 插入圖片工具：下方一排最近的照片
     let photoStrip = PhotoStripView()
+    /// 貼紙工具：畫面下面一排目前分類的貼紙
+    let stickerStrip = StickerStripView()
     /// 拉過最後一頁底部時出現的＋
     let addPagePull = AddPagePullView()
     /// UI 測試讀得到的除錯資訊（手指按下時卡住的手勢、畫布捲到哪裡）
@@ -347,6 +349,10 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     // 截圖
     var capturePoints: [CGPoint] = []
+    /// 截好的範圍（文件座標）：拉錨點調整大小、拖曳框內移動，放開再跳出選單
+    var captureRegion: UIBezierPath?
+    /// 正在拉的錨點（0…7，-1＝移動整個範圍）、開始的位置和範圍
+    var captureDrag: (handle: Int, start: CGPoint, path: UIBezierPath)?
 
     // 擴展頁面
     var resizePageIndex: Int?
@@ -396,6 +402,11 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         view.addSubview(pinOverlay)
 
         if ProcessInfo.processInfo.arguments.contains("-uiTestNotebook") {
+            // UI 測試讀的除錯紀錄定時更新（不是每個地方記完都會更新，例如手勢沒有走完）
+            Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] t in
+                guard let self else { return t.invalidate() }
+                self.updateUITestDump()
+            }
             let l = UILabel(frame: CGRect(x: 0, y: 0, width: 2, height: 2))
             l.accessibilityIdentifier = "gestureDump"
             l.accessibilityLabel = "-"
@@ -656,18 +667,44 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         overlay.lineScale = 1 / z
         let size = CGSize(width: docSize.width * z, height: docSize.height * z)
         if canvas.contentSize != size { canvas.contentSize = size }
-        let side = max(0, (canvas.bounds.width - size.width) / 2)
-        if canvas.contentInset.left != side || canvas.contentInset.right != side || canvas.contentInset.bottom != bottomInset {
-            canvas.contentInset = UIEdgeInsets(top: 0, left: side, bottom: bottomInset, right: side)
-        }
+        applyCanvasInsets()
         updateSelectionChrome()
         updatePageResizeChrome()
         updateVisiblePages()
     }
 
-    /// 畫布底下的留白：鍵盤擋住的高度；擴展頁面時再多留半個畫面，才拉得到最後一頁下緣的控制點
+    /// 畫布底下的留白：鍵盤擋住的高度；擴展頁面時再多留一個畫面，才拉得到最後一頁下緣的控制點
     var bottomInset: CGFloat {
-        keyboardInset + (tool == .pageResize ? max(200, canvas.bounds.height * 0.5) : 0) + (tool == .circuit ? circuitLibrary.bottomOverlap : 0)
+        keyboardInset + resizeRoom.height + (tool == .circuit ? circuitLibrary.bottomOverlap : 0)
+    }
+
+    /// 擴展頁面時四周多留的空間（各一個畫面）：頁面變大後留白也跟著往外，可以一直往任何方向捲、一直擴展
+    var resizeRoom: CGSize {
+        guard tool == .pageResize else { return .zero }
+        return CGSize(width: max(200, canvas.bounds.width * 0.9), height: max(200, canvas.bounds.height * 0.9))
+    }
+
+    /// 畫布的留白：頁面比畫面窄時左右置中；擴展頁面時四周各留一個畫面
+    var canvasInsets: UIEdgeInsets {
+        let side = max(0, (canvas.bounds.width - canvas.contentSize.width) / 2)
+        let room = resizeRoom
+        return UIEdgeInsets(top: room.height, left: max(side, room.width), bottom: bottomInset, right: max(side, room.width))
+    }
+
+    func applyCanvasInsets() {
+        let new = canvasInsets
+        let old = canvas.contentInset
+        guard new != old else { return }
+        canvas.contentInset = new
+        // 離開擴展頁面：四周的留白收回去，畫面不能停在留白裡
+        if old.top > new.top || old.left > new.left {
+            let minX = -new.left, minY = -new.top
+            let maxX = max(minX, canvas.contentSize.width - canvas.bounds.width + new.right)
+            let maxY = max(minY, canvas.contentSize.height - canvas.bounds.height + new.bottom)
+            let o = canvas.contentOffset
+            let c = CGPoint(x: min(max(o.x, minX), maxX), y: min(max(o.y, minY), maxY))
+            if c != o { canvas.contentOffset = c }
+        }
     }
 
     /// 讓文件座標 p 出現在畫面左上角

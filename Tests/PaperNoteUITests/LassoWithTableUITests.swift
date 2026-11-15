@@ -37,19 +37,25 @@ final class LassoWithTableUITests: XCTestCase {
         XCTAssertTrue(waitForLog("lasso end", after: before), "\(name)：套索要有反應｜\(log)")
     }
 
+    private func pickLasso() {
+        let before = log.components(separatedBy: "-> lasso").count - 1
+        app.buttons["套索"].tap()
+        XCTAssertTrue(waitForLog("-> lasso", after: before), "切到套索｜\(log)")
+    }
+
     func testLassoWorksWithATableOnThePage() {
         launch(table: true)
-        app.buttons["套索"].tap()
-        checkLasso("有表格", y: 0.12)
+        pickLasso()
+        checkLasso("有表格", y: 0.2)
         // 換到筆再換回套索（回報的步驟）
         app.buttons["筆"].firstMatch.tap()
-        app.buttons["套索"].tap()
-        checkLasso("換回套索", y: 0.3)
+        pickLasso()
+        checkLasso("換回套索", y: 0.35)
     }
 
     func testLassoWorksOnAPlainPage() {
         launch(table: false)
-        app.buttons["套索"].tap()
-        checkLasso("沒有表格", y: 0.12)
+        pickLasso()
+        checkLasso("沒有表格", y: 0.3)
     }
 }

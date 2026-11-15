@@ -190,6 +190,8 @@ final class OverlayView: UIView {
     /// 文字選取兩端的控制點
     let textHandleLayer = CAShapeLayer()
     let captureLayer = CAShapeLayer()
+    /// 截圖範圍的錨點
+    let captureHandleLayer = CAShapeLayer()
     let tablePlusCircles = CAShapeLayer()
     let tablePlusMarks = CAShapeLayer()
     /// 表格外側拖曳格線的圓點
@@ -383,6 +385,9 @@ final class OverlayView: UIView {
         captureLayer.strokeColor = UIColor.systemTeal.cgColor
         captureLayer.lineDashPattern = [8, 5]
         layer.addSublayer(captureLayer)
+        captureHandleLayer.fillColor = UIColor.white.cgColor
+        captureHandleLayer.strokeColor = UIColor.systemTeal.cgColor
+        layer.addSublayer(captureHandleLayer)
 
         tablePlusCircles.fillColor = UIColor.white.cgColor
         tablePlusCircles.strokeColor = UIColor.systemBlue.cgColor
@@ -462,6 +467,7 @@ final class OverlayView: UIView {
         selectionLayer.lineDashPattern = [NSNumber(value: Double(6 * lineScale)), NSNumber(value: Double(4 * lineScale))]
         handleLayer.lineWidth = 2 * lineScale
         captureLayer.lineWidth = 2 * lineScale
+        captureHandleLayer.lineWidth = 2 * lineScale
         captureLayer.lineDashPattern = [NSNumber(value: Double(8 * lineScale)), NSNumber(value: Double(5 * lineScale))]
         tablePlusCircles.lineWidth = 1.5 * lineScale
         tablePlusMarks.lineWidth = 2 * lineScale
@@ -817,10 +823,14 @@ final class OverlayView: UIView {
         CATransaction.commit()
     }
 
-    func showCapture(_ path: UIBezierPath?) {
+    func showCapture(_ path: UIBezierPath?, handles: [CGPoint] = []) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         captureLayer.path = path?.cgPath
+        let r = 7 * lineScale
+        let h = UIBezierPath()
+        for p in handles { h.append(UIBezierPath(ovalIn: CGRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r))) }
+        captureHandleLayer.path = handles.isEmpty ? nil : h.cgPath
         CATransaction.commit()
     }
 }

@@ -261,4 +261,30 @@ final class BigTableEditorTests: XCTestCase {
         editor.setTool(.pen)
         XCTAssertEqual(editor.canvas.contentInset.bottom, 0)
     }
+
+    /// 回報的需求：擴展頁面時要能往任何方向一直捲，不然一次只能往左右擴一點
+    func testPageResizeScrollsFreelyInEveryDirection() {
+        let c = editor.canvas
+        editor.setTool(.pageResize)
+        let i = c.contentInset
+        XCTAssertGreaterThan(i.top, c.bounds.height * 0.5, "上面也能捲出去")
+        XCTAssertGreaterThan(i.left, c.bounds.width * 0.5, "左邊能捲出去")
+        XCTAssertGreaterThan(i.right, c.bounds.width * 0.5, "右邊能捲出去")
+        XCTAssertGreaterThan(i.bottom, c.bounds.height * 0.5)
+        // 往右擴展之後，右邊還是有一個畫面的留白（可以再捲、再擴）
+        let page = editor.resizePageIndex ?? 0
+        let before = c.contentSize.width
+        var ins = editor.pages[page].insets
+        ins.right += 400
+        editor.applyInsets(ins, pageIndex: page, toAll: false)
+        editor.view.layoutIfNeeded()
+        XCTAssertGreaterThan(c.contentSize.width, before, "頁面變寬")
+        XCTAssertGreaterThan(c.contentInset.right, c.bounds.width * 0.5, "擴展後右邊還能再捲")
+        // 捲到最左上角的留白裡，離開擴展：畫面回到頁面上
+        c.contentOffset = CGPoint(x: -c.contentInset.left, y: -c.contentInset.top)
+        editor.setTool(.pen)
+        XCTAssertEqual(c.contentInset.top, 0)
+        XCTAssertGreaterThanOrEqual(c.contentOffset.y, 0, "不停在留白裡")
+        XCTAssertGreaterThanOrEqual(c.contentOffset.x, -c.contentInset.left)
+    }
 }

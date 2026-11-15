@@ -45,7 +45,7 @@ extension NotebookViewController {
         circuitLibrary.isHidden = true
         circuitLibrary.onLayoutChange = { [weak self] in
             guard let self else { return }
-            self.canvas.contentInset.bottom = self.bottomInset
+            self.applyCanvasInsets()
         }
         circuitLibrary.onSelectMode = { [weak self] mode in self?.selectCircuitMode(mode) }
         circuitLibrary.onDropCustom = { [weak self] id, p in self?.dropCustomCircuit(id, at: p) }
@@ -67,6 +67,7 @@ extension NotebookViewController {
         photoStrip.presenter = self
         photoStrip.onPick = { [weak self] img in self?.insertPhotoFromStrip(img) }
         photoStrip.onBrowse = { [weak self] in self?.presentPhotoPicker() }
+        setupStickerStrip()
         circuitLibrary.onDrop = { [weak self] part, p in self?.dropCircuitPart(part, at: p) }
 
         // 安全區頂端也塗上底色
@@ -322,6 +323,8 @@ extension NotebookViewController {
         circuitLibrary.isHidden = tool != .circuit
         photoStrip.isHidden = tool != .image
         if tool == .image { photoStrip.reload() }
+        stickerStrip.isHidden = tool != .sticker
+        if tool == .sticker { stickerStrip.reload() }
         if tool.isInking { BrushStore.shared.activeCategory = tool == .highlighter ? .highlighter : .pen }
         switch tool {
         case .pen, .highlighter:
@@ -334,7 +337,7 @@ extension NotebookViewController {
             break
         }
         canvas.drawingPolicy = settings.fingerDrawing ? .anyInput : .pencilOnly
-        canvas.contentInset.bottom = bottomInset
+        applyCanvasInsets()
         applyInkEngine()
 
         // 工具列沒有「選取」（套索就能選）：選起物件時亮著套索

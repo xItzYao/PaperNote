@@ -433,7 +433,11 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
                 endTextSelection()
             }
         case .capture:
-            clearCapture()
+            if let region = captureRegion, region.bounds.contains(p) {
+                finishCapture(region)
+            } else {
+                clearCapture()
+            }
         case .pageResize:
             if let i = pageIndex(containing: p) {
                 resizePageIndex = i
@@ -576,9 +580,6 @@ extension NotebookViewController: UIEditMenuInteractionDelegate {
 
     func editMenuInteraction(_ interaction: UIEditMenuInteraction, willDismissMenuFor configuration: UIEditMenuConfiguration,
                              animator: UIEditMenuInteractionAnimating) {
-        if tool == .capture {
-            animator.addCompletion { [weak self] in self?.clearCapture() }
-        }
     }
 }
 
@@ -976,10 +977,11 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
                 guard let self, let img = self.session.image(named: d.file) else { return }
                 self.pinOverlay.addPin(image: img, near: self.docRectInView(self.docFrame(of: e, pageIndex: pi)))
             })
-            items.append(UIAction(title: L("變成貼紙"), image: UIImage(systemName: "seal")) { [weak self] _ in
-                guard let self, let img = self.session.image(named: d.file) else { return }
-                self.makeStickers(from: [img])
-            })
+            // 變成貼紙：先選分類，再選裁切範圍、要不要去背
+            let file = d.file
+            items.append(UIMenu(title: L("變成貼紙"), image: UIImage(systemName: "seal"), children: stickerCategoryMenuItems(
+                source: { [weak self] in self?.session.image(named: file) },
+                then: { [weak self] img, id in self?.presentStickerEditor(img, into: id) })))
         case .circuit:
             items.append(UIAction(title: L("編輯電路"), image: UIImage(systemName: "bolt")) { [weak self] _ in
                 self?.editCircuit(ref)
@@ -1282,16 +1284,69 @@ extension NotebookViewController {
     func handleCapturePan(_ g: UIPanGestureRecognizer, _ p: CGPoint) {
         switch g.state {
         case .began:
+            // 從截好的範圍的錨點（或框裡）開始拖：調整大小（移動），不是重新截
+            let down = panTouchDownPoint(g)
+            if let region = captureRegion, let h = captureHandle(at: down, in: region.bounds) {
+                captureDrag = (h, down, region.copy() as! UIBezierPath)
+                editMenu.dismissMenu()
+                updateCaptureDrag(to: p)
+                return
+            }
+            captureRegion = nil
             capturePoints = [p]
         case .changed:
+            if captureDrag != nil { updateCaptureDrag(to: p); return }
             capturePoints.append(p)
             overlay.showCapture(currentCapturePath())
         case .ended:
+            if captureDrag != nil {
+                updateCaptureDrag(to: p)
+                captureDrag = nil
+                finishCapture(captureRegion)
+                return
+            }
             capturePoints.append(p)
             finishCapture(currentCapturePath())
         default:
             clearCapture()
         }
+    }
+
+    /// 截圖範圍的錨點（文件座標）：四個角、四邊的中點
+    static func captureHandlePoints(_ r: CGRect) -> [CGPoint] {
+        [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY), CGPoint(x: r.maxX, y: r.maxY), CGPoint(x: r.minX, y: r.maxY),
+         CGPoint(x: r.midX, y: r.minY), CGPoint(x: r.maxX, y: r.midY), CGPoint(x: r.midX, y: r.maxY), CGPoint(x: r.minX, y: r.midY)]
+    }
+
+    /// p 碰到哪個錨點（0…7）；在框裡但沒碰到錨點是 -1（移動）；都不是 nil
+    func captureHandle(at p: CGPoint, in r: CGRect) -> Int? {
+        let reach = 26 / max(canvas.zoomScale, 0.01)
+        let pts = Self.captureHandlePoints(r)
+        if let i = pts.indices.min(by: { pts[$0].distance(to: p) < pts[$1].distance(to: p) }), pts[i].distance(to: p) <= reach { return i }
+        return r.contains(p) ? -1 : nil
+    }
+
+    /// 拉錨點：只動那個角（邊）；-1 整個移動。手繪的範圍跟著縮放
+    static func resizedCaptureRect(_ r: CGRect, handle: Int, dx: CGFloat, dy: CGFloat, minSide: CGFloat = 16) -> CGRect {
+        if handle < 0 { return r.offsetBy(dx: dx, dy: dy) }
+        var minX = r.minX, minY = r.minY, maxX = r.maxX, maxY = r.maxY
+        if [0, 3, 7].contains(handle) { minX = min(minX + dx, maxX - minSide) }
+        if [1, 2, 5].contains(handle) { maxX = max(maxX + dx, minX + minSide) }
+        if [0, 1, 4].contains(handle) { minY = min(minY + dy, maxY - minSide) }
+        if [2, 3, 6].contains(handle) { maxY = max(maxY + dy, minY + minSide) }
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
+    private func updateCaptureDrag(to p: CGPoint) {
+        guard let d = captureDrag else { return }
+        let old = d.path.bounds
+        let new = Self.resizedCaptureRect(old, handle: d.handle, dx: p.x - d.start.x, dy: p.y - d.start.y)
+        let path = d.path.copy() as! UIBezierPath
+        path.apply(CGAffineTransform(translationX: new.minX, y: new.minY)
+            .scaledBy(x: new.width / max(old.width, 0.01), y: new.height / max(old.height, 0.01))
+            .translatedBy(x: -old.minX, y: -old.minY))
+        captureRegion = path
+        overlay.showCapture(path, handles: Self.captureHandlePoints(path.bounds))
     }
 
     func currentCapturePath() -> UIBezierPath? {
@@ -1309,17 +1364,47 @@ extension NotebookViewController {
 
     func clearCapture() {
         capturePoints = []
+        captureRegion = nil
+        captureDrag = nil
         overlay.showCapture(nil)
     }
 
-    private func finishCapture(_ path: UIBezierPath?) {
+    /// 截好（或調整完）：畫出範圍和錨點，跳出選單
+    func finishCapture(_ path: UIBezierPath?) {
         guard let path, path.bounds.width > 8, path.bounds.height > 8, let img = renderRegion(path) else {
             clearCapture()
             return
         }
-        overlay.showCapture(path)
+        capturePoints = []
+        captureRegion = path
+        overlay.showCapture(path, handles: Self.captureHandlePoints(path.bounds))
         let rect = path.bounds
-        presentMenu(captureMenu(img, viewRect: docRectInView(rect)), atDocPoint: CGPoint(x: rect.midX, y: rect.minY))
+        presentMenu(captureMenu(img, viewRect: docRectInView(rect)), atDocPoint: CGPoint(x: rect.midX, y: rect.minY), avoiding: rect)
+    }
+
+    /// 分享、翻譯的小視窗指的位置：截圖範圍上緣中間（放不下就下緣）的一點，限制在畫面裡。
+    /// 指著整個範圍的話，範圍很大時小視窗沒有地方放，只畫出一半
+    func captureAnchor(_ viewRect: CGRect) -> CGRect {
+        let safe = view.bounds.inset(by: view.safeAreaInsets).insetBy(dx: 20, dy: 20)
+        guard !safe.isEmpty else { return CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1) }
+        let top = viewRect.minY > safe.minY + 60 ? viewRect.minY : min(viewRect.maxY, safe.maxY)
+        let x = min(max(viewRect.midX, safe.minX), safe.maxX)
+        let y = min(max(top, safe.minY), safe.maxY)
+        return CGRect(x: x, y: y, width: 1, height: 1)
+    }
+
+    /// 等選單收起來再跳出分享（同時進行動畫會畫壞）
+    func presentShareSheet(_ items: [Any], anchor: CGRect) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.presentedViewController == nil else { return }
+            let vc = UIActivityViewController(activityItems: items, applicationActivities: nil)
+            if let pop = vc.popoverPresentationController {
+                pop.sourceView = self.view
+                pop.sourceRect = anchor
+                pop.permittedArrowDirections = .any
+            }
+            self.present(vc, animated: true)
+        }
     }
 
     /// 截圖的選單。選單列放不下時後面的會收到第二頁：分享放最前面，不用再翻
@@ -1327,32 +1412,37 @@ extension NotebookViewController {
         UIMenu(children: [
             UIAction(title: L("分享…"), image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
                 guard let self else { return }
-                let vc = UIActivityViewController(activityItems: [img], applicationActivities: nil)
-                vc.popoverPresentationController?.sourceView = self.view
-                vc.popoverPresentationController?.sourceRect = viewRect
-                self.present(vc, animated: true)
+                self.presentShareSheet([img], anchor: self.captureAnchor(viewRect))
+                self.clearCapture()
             },
             UIAction(title: L("釘選在畫面上"), image: UIImage(systemName: "pin")) { [weak self] _ in
                 self?.pinOverlay.addPin(image: img, near: viewRect)
+                self?.clearCapture()
             },
-            UIAction(title: L("拷貝"), image: UIImage(systemName: "doc.on.doc")) { _ in
+            UIAction(title: L("拷貝"), image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
                 UIPasteboard.general.image = img
+                self?.clearCapture()
             },
             UIAction(title: L("翻譯文字"), image: UIImage(systemName: "translate")) { [weak self] _ in
-                TextServices.recognizeText(in: img) { text in
+                guard let self else { return }
+                let anchor = self.captureAnchor(viewRect)
+                self.clearCapture()
+                TextServices.recognizeText(in: img) { [weak self] text in
                     guard let self else { return }
                     if text.isEmpty { self.showMessage(L("沒有辨識到文字")); return }
-                    TextServices.translate(text, from: self, anchor: viewRect)
+                    TextServices.translate(text, from: self, anchor: anchor)
                 }
             },
             UIAction(title: L("拷貝文字"), image: UIImage(systemName: "text.viewfinder")) { [weak self] _ in
+                self?.clearCapture()
                 TextServices.recognizeText(in: img) { text in
                     if text.isEmpty { self?.showMessage(L("沒有辨識到文字")); return }
                     UIPasteboard.general.string = text
                 }
             },
-            UIAction(title: L("存到照片"), image: UIImage(systemName: "photo.badge.arrow.down")) { _ in
+            UIAction(title: L("存到照片"), image: UIImage(systemName: "photo.badge.arrow.down")) { [weak self] _ in
                 UIImageWriteToSavedPhotosAlbum(img, nil, nil, nil)
+                self?.clearCapture()
             },
         ])
     }

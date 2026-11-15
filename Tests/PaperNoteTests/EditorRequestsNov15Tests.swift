@@ -140,7 +140,7 @@ final class EditorRequestsNov15Tests: XCTestCase {
     private var editor: NotebookViewController!
     private var notebookID: UUID!
     private var inkID: UUID!
-    private var addedStickers: [UUID] = []
+    private var addedCategories: [UUID] = []
 
     override func setUpWithError() throws {
         let meta = LibraryStore.shared.createNotebook(title: "Nov15Test", folder: nil, paper: .blank, landscape: false)
@@ -159,7 +159,7 @@ final class EditorRequestsNov15Tests: XCTestCase {
     }
 
     override func tearDown() {
-        for id in addedStickers { StickerStore.shared.remove(id) }
+        for id in addedCategories { StickerStore.shared.removeCategory(id) }
         window.isHidden = true
         window = nil
         editor = nil
@@ -198,6 +198,63 @@ final class EditorRequestsNov15Tests: XCTestCase {
         let titles = editor.captureMenu(redSquare(), viewRect: CGRect(x: 100, y: 100, width: 80, height: 80)).children.map(\.title)
         XCTAssertEqual(titles.first, "分享…", "分享放最前面：\(titles)")
         XCTAssertEqual(Set(titles), ["分享…", "釘選在畫面上", "拷貝", "翻譯文字", "拷貝文字", "存到照片"], "其他的都還在")
+    }
+
+    private func capture(from a: CGPoint, to b: CGPoint) {
+        TouchPan().drag(from: a, to: b) { editor.handleCapturePan($0, $0.point) }
+    }
+
+    /// 回報的需求：截圖的範圍要有錨點可以調整大小
+    func testTheCaptureRegionHasHandlesToResizeIt() throws {
+        editor.setTool(.capture)
+        capture(from: doc(100, 100), to: doc(300, 250))
+        let r0 = try XCTUnwrap(editor.captureRegion).bounds
+        XCTAssertEqual(r0.width, 200, accuracy: 0.5)
+        XCTAssertEqual(editor.overlay.captureHandleLayer.path?.boundingBox.isEmpty, false, "畫出錨點")
+        XCTAssertNotNil(editor.pendingMenu)
+        editor.pendingMenu = nil
+
+        // 拉右下角：左上角不動
+        capture(from: CGPoint(x: r0.maxX, y: r0.maxY), to: CGPoint(x: r0.maxX + 100, y: r0.maxY + 50))
+        let r1 = try XCTUnwrap(editor.captureRegion).bounds
+        XCTAssertEqual(r1.minX, r0.minX, accuracy: 0.5, "左上角不動")
+        XCTAssertEqual(r1.minY, r0.minY, accuracy: 0.5)
+        XCTAssertEqual(r1.maxX, r0.maxX + 100, accuracy: 0.5)
+        XCTAssertEqual(r1.maxY, r0.maxY + 50, accuracy: 0.5)
+        XCTAssertNotNil(editor.pendingMenu, "調整完再跳出選單")
+
+        // 拉左邊中間：只動左邊
+        capture(from: CGPoint(x: r1.minX, y: r1.midY), to: CGPoint(x: r1.minX + 30, y: r1.midY + 40))
+        let r2 = try XCTUnwrap(editor.captureRegion).bounds
+        XCTAssertEqual(r2.minX, r1.minX + 30, accuracy: 0.5)
+        XCTAssertEqual(r2.minY, r1.minY, accuracy: 0.5, "上下不動")
+        XCTAssertEqual(r2.maxY, r1.maxY, accuracy: 0.5)
+        XCTAssertEqual(r2.maxX, r1.maxX, accuracy: 0.5)
+
+        // 框裡拖：整個移動
+        capture(from: CGPoint(x: r2.midX, y: r2.midY), to: CGPoint(x: r2.midX + 20, y: r2.midY + 10))
+        let r3 = try XCTUnwrap(editor.captureRegion).bounds
+        XCTAssertEqual(r3.origin.x, r2.origin.x + 20, accuracy: 0.5)
+        XCTAssertEqual(r3.size.width, r2.size.width, accuracy: 0.5, "移動不改大小")
+
+        // 框外拖：重新截一個
+        capture(from: doc(100, 600), to: doc(170, 680))
+        XCTAssertEqual(try XCTUnwrap(editor.captureRegion).bounds.width, 70, accuracy: 0.5)
+
+        // 點框外：取消
+        editor.handleTap(FakeTap(doc(400, 400)))
+        XCTAssertNil(editor.captureRegion)
+        XCTAssertNil(editor.overlay.captureHandleLayer.path)
+    }
+
+    /// 回報的問題：截圖的分享視窗只畫出一半（指著很大的範圍，沒有地方放）
+    func testTheShareSheetPointsAtASpotOnScreen() {
+        let huge = editor.view.bounds.insetBy(dx: -50, dy: -50)
+        let a = editor.captureAnchor(huge)
+        XCTAssertEqual(a.size, CGSize(width: 1, height: 1), "指著一點，不是整個範圍")
+        XCTAssertTrue(editor.view.bounds.insetBy(dx: 10, dy: 10).contains(a.origin), "在畫面裡")
+        let small = CGRect(x: 300, y: 400, width: 100, height: 80)
+        XCTAssertEqual(editor.captureAnchor(small).origin, CGPoint(x: 350, y: 400), "範圍上緣中間")
     }
 
     // MARK: 拿掉選取工具：套索就能選
@@ -287,18 +344,54 @@ final class EditorRequestsNov15Tests: XCTestCase {
 
     // MARK: 貼紙
 
-    func testTheStickerStoreKeepsStickersAcrossLaunches() throws {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("stickers-\(UUID().uuidString)")
+    /// 測試用的分類（tearDown 刪掉，不留在 App 裡）
+    private func testCategory(_ name: String = "測試分類") -> StickerCategory {
+        let c = StickerStore.shared.addCategory(named: name)
+        addedCategories.append(c.id)
+        StickerStore.shared.select(c.id)
+        return c
+    }
+
+    private func tempDir() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("stickers-\(UUID().uuidString)")
+    }
+
+    func testStickersLiveInCategoriesThatSurviveARelaunch() throws {
+        let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = StickerStore(directory: dir)
-        let a = try XCTUnwrap(store.add(redSquare()))
-        let b = try XCTUnwrap(store.add(redSquare()))
-        XCTAssertEqual(store.stickers.map(\.id), [b.id, a.id], "新做的排最前面")
+        let animals = store.addCategory(named: "動物")
+        let food = store.addCategory(named: "  ")
+        XCTAssertEqual(food.name, "分類 2", "沒取名就用預設的名字")
+        let a = try XCTUnwrap(store.add(redSquare(), to: animals.id))
+        let b = try XCTUnwrap(store.add(redSquare(), to: animals.id))
+        XCTAssertEqual(store.categories[0].stickers.map(\.id), [a.id, b.id], "新的排在後面，第一張（預設封面）不變")
+        XCTAssertEqual(store.categories[0].cover?.id, a.id, "封面預設是第一張")
+        store.setCover(b.id)
+        store.select(food.id)
         let reopened = StickerStore(directory: dir)
-        XCTAssertEqual(reopened.stickers.map(\.id), [b.id, a.id], "重新打開 App 還在")
+        XCTAssertEqual(reopened.categories.map(\.name), ["動物", "分類 2"], "重新打開 App 分類還在")
+        XCTAssertEqual(reopened.categories[0].cover?.id, b.id, "封面還在")
+        XCTAssertEqual(reopened.selectedCategory?.id, food.id, "記得上次選的分類")
         XCTAssertNotNil(reopened.image(for: a))
-        reopened.remove(a.id)
-        XCTAssertEqual(StickerStore(directory: dir).stickers.map(\.id), [b.id])
+        reopened.remove(b.id)
+        XCTAssertEqual(reopened.categories[0].cover?.id, a.id, "刪掉封面就回到第一張")
+        reopened.removeCategory(animals.id)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent(a.file).path), "刪分類連貼紙一起刪")
+        XCTAssertEqual(StickerStore(directory: dir).categories.map(\.name), ["分類 2"])
+    }
+
+    func testStickersFromTheFirstVersionMoveIntoACategory() throws {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let old = StickerRecord(file: "sticker-old.png")
+        try XCTUnwrap(redSquare().pngData()).write(to: dir.appendingPathComponent(old.file))
+        try JSONEncoder().encode([old]).write(to: dir.appendingPathComponent("stickers.json"))
+        let store = StickerStore(directory: dir)
+        XCTAssertEqual(store.categories.map(\.name), ["我的貼紙"])
+        XCTAssertEqual(store.categories.first?.stickers, [old], "舊的貼紙沒有不見")
+        XCTAssertEqual(StickerStore(directory: dir).categories.first?.stickers, [old], "搬過去之後重新打開也還在")
     }
 
     func testTransparentEdgesAreTrimmed() throws {
@@ -308,19 +401,85 @@ final class EditorRequestsNov15Tests: XCTestCase {
         XCTAssertEqual(cg.height, 60)
     }
 
-    func testAnImageWithoutASubjectStillBecomesASticker() {
-        let out = StickerMaker.makeSticker(from: redSquare(margin: 0, side: 80))
-        XCTAssertGreaterThan(out.size.width, 0)
-        XCTAssertGreaterThan(out.size.height, 0)
+    /// 遮罩：sq 裡是白（主體），其他黑（背景）
+    private func mask(_ sq: CGRect, in full: CGRect) -> CIImage {
+        CIImage(color: .white).cropped(to: sq).composited(over: CIImage(color: .black).cropped(to: full))
+    }
+
+    func testCroppingAndRemovingTheBackground() throws {
+        let img = redSquare(margin: 0, side: 100)
+        let cropped = try XCTUnwrap(StickerMaker.render(img, crop: CGRect(x: 10, y: 20, width: 40, height: 30), mask: nil).cgImage)
+        XCTAssertEqual([cropped.width, cropped.height], [40, 30], "照裁切範圍")
+        let full = CGRect(x: 0, y: 0, width: 100, height: 100)
+        let lifted = try XCTUnwrap(StickerMaker.render(img, crop: nil, mask: mask(CGRect(x: 20, y: 20, width: 30, height: 30), in: full)).cgImage)
+        XCTAssertEqual([lifted.width, lifted.height], [30, 30], "背景透明，四周裁掉")
+    }
+
+    private func loadedEditor(_ img: UIImage) -> StickerEditorViewController {
+        let vc = StickerEditorViewController(image: img)
+        vc.view.frame = CGRect(x: 0, y: 0, width: 700, height: 700)
+        vc.view.layoutIfNeeded()
+        return vc
+    }
+
+    func testTheEditorCropsWithTheFrame() throws {
+        let vc = loadedEditor(redSquare(margin: 0, side: 200))
+        vc.maskComputed(nil, background: nil)
+        XCTAssertFalse(vc.removeBackground, "認不出主體：不去背")
+        XCTAssertFalse(vc.backgroundSwitch.isEnabled)
+        let r = vc.cropView.cropRect
+        XCTAssertEqual(r, vc.imageRect, "一開始框住整張")
+        XCTAssertGreaterThan(r.width, 100)
+        // 右下角往左上拖一半
+        vc.cropView.dragged(from: CGPoint(x: r.maxX, y: r.maxY), to: CGPoint(x: r.midX, y: r.midY), began: true)
+        XCTAssertEqual(vc.unitCrop.width, 0.5, accuracy: 0.01)
+        XCTAssertEqual(vc.unitCrop.height, 0.5, accuracy: 0.01)
+        let out = try XCTUnwrap(vc.makeSticker().cgImage)
+        XCTAssertEqual(Double(out.width), 100, accuracy: 1)
+        XCTAssertEqual(Double(out.height), 100, accuracy: 1)
+        // 框內拖曳是移動，不能拖出圖片
+        let c = vc.cropView.cropRect
+        vc.cropView.dragged(from: CGPoint(x: c.midX, y: c.midY), to: CGPoint(x: c.midX + 1000, y: c.midY), began: true)
+        XCTAssertEqual(vc.cropView.cropRect.maxX, vc.imageRect.maxX, accuracy: 0.5)
+        XCTAssertEqual(vc.cropView.cropRect.width, c.width, accuracy: 0.5, "移動不改大小")
+    }
+
+    func testTheEditorCanTurnBackgroundRemovalOff() throws {
+        let vc = loadedEditor(redSquare(margin: 0, side: 100))
+        let m = mask(CGRect(x: 20, y: 20, width: 30, height: 30), in: CGRect(x: 0, y: 0, width: 100, height: 100))
+        vc.maskComputed(m, background: StickerMaker.backgroundAlpha(m))
+        XCTAssertTrue(vc.removeBackground, "預設去背")
+        XCTAssertTrue(vc.backgroundSwitch.isOn)
+        XCTAssertEqual(try XCTUnwrap(vc.makeSticker().cgImage).width, 30)
+        vc.setRemoveBackground(false)
+        XCTAssertEqual(try XCTUnwrap(vc.makeSticker().cgImage).width, 100, "關掉去背就是整張")
+    }
+
+    func testTheStickerToolShowsCategoriesAndAStripOfStickers() throws {
+        let c = testCategory()
+        let a = try XCTUnwrap(StickerStore.shared.add(redSquare(margin: 0, side: 300), to: c.id))
+        let b = try XCTUnwrap(StickerStore.shared.add(redSquare(margin: 0, side: 300), to: c.id))
+        editor.setTool(.sticker)
+        XCTAssertNotNil(findView(id: "stickerCategory.\(c.id.uuidString)", in: editor.subBarStack), "工具列那一行是分類")
+        XCTAssertNotNil(findView(label: "新增分類", in: editor.subBarStack))
+        XCTAssertFalse(editor.stickerStrip.isHidden, "貼紙列在畫面下面")
+        XCTAssertTrue(editor.photoStrip.isHidden)
+        XCTAssertEqual(editor.stickerStrip.stickerButtons.map(\.accessibilityIdentifier),
+                       ["sticker.\(a.id.uuidString)", "sticker.\(b.id.uuidString)"])
+        let menu = try XCTUnwrap(editor.stickerStrip.stickerButtons[1].menu)
+        XCTAssertEqual(Set(menu.children.map(\.title)), ["刪除", "設為分類封面"], "長按：刪除、設為分類封面")
+        editor.stickerStrip.onSetCover?(b)
+        XCTAssertEqual(StickerStore.shared.selectedCategory?.cover?.id, b.id)
+        editor.stickerStrip.onDelete?(a)
+        XCTAssertEqual(editor.stickerStrip.stickerButtons.count, 1, "刪掉了")
+        editor.setTool(.pen)
+        XCTAssertTrue(editor.stickerStrip.isHidden, "換工具就收起來")
     }
 
     func testTappingAStickerPutsItOnThePage() throws {
-        let s = try XCTUnwrap(StickerStore.shared.add(redSquare(margin: 0, side: 300)))
-        addedStickers.append(s.id)
+        let c = testCategory()
+        let s = try XCTUnwrap(StickerStore.shared.add(redSquare(margin: 0, side: 300), to: c.id))
         editor.setTool(.sticker)
-        let views = editor.subBarStack.arrangedSubviews
-        XCTAssertTrue(views.contains { $0.accessibilityLabel == "加貼紙" }, "第二列有 ＋")
-        XCTAssertNotNil(findView(id: "sticker.\(s.id.uuidString)", in: editor.subBarStack), "第二列有這張貼紙")
         let before = editor.pages[0].elements.count
         let ref = try XCTUnwrap(editor.placeSticker(s))
         XCTAssertEqual(editor.pages[0].elements.count, before + 1)
@@ -334,18 +493,43 @@ final class EditorRequestsNov15Tests: XCTestCase {
         XCTAssertNotEqual(e2.frame.origin, e.frame.origin, "連續貼往旁邊錯開")
     }
 
+    func testTheCategoryMenuStartsWithCreatingOne() {
+        let c = testCategory("我的測試分類")
+        let titles = editor.stickerCategoryMenuItems(source: { nil }, then: { _, _ in }).map(\.title)
+        XCTAssertEqual(titles.first, "創建新分類", "第一格是創建新分類")
+        XCTAssertTrue(titles.contains(c.name), "接著是已經有的分類：\(titles)")
+    }
+
     func testAnImageOnThePageCanBecomeASticker() throws {
         editor.insertImage(redSquare(margin: 0, side: 120), jpeg: false, at: doc(300, 500))
         let e = try XCTUnwrap(editor.pages[0].elements.last)
         let ref = ElementRef(pageID: editor.pages[0].id, elementID: e.id)
-        let titles = editor.elementMenu(ref, at: doc(300, 500)).children.map(\.title)
-        XCTAssertTrue(titles.contains("變成貼紙"), "圖片的選單有「變成貼紙」：\(titles)")
-        let count = StickerStore.shared.stickers.count
-        let done = expectation(description: "貼紙做好")
-        editor.makeStickers(from: [redSquare()]) { done.fulfill() }
-        wait(for: [done], timeout: 30)
-        XCTAssertEqual(StickerStore.shared.stickers.count, count + 1, "加進貼紙")
-        if let s = StickerStore.shared.stickers.first { addedStickers.append(s.id) }
+        let item = editor.elementMenu(ref, at: doc(300, 500)).children.first { $0.title == "變成貼紙" }
+        let sub = try XCTUnwrap(item as? UIMenu, "圖片的選單有「變成貼紙」，裡面選分類")
+        XCTAssertEqual(sub.children.first?.title, "創建新分類")
+    }
+
+    func testTheLassoMenuCanAddTheSelectionToStickers() throws {
+        let c = testCategory()
+        lasso(triangle)
+        XCTAssertNotNil(editor.lassoSel)
+        editor.presentLassoMenu()
+        let menu = try XCTUnwrap(editor.pendingMenu, "點選取範圍跳出選單")
+        let item = menu.children.first { $0.title == "添加至貼紙" }
+        let sub = try XCTUnwrap(item as? UIMenu, "套索選單有「添加至貼紙」：\(menu.children.map(\.title))")
+        XCTAssertEqual(sub.children.first?.title, "創建新分類", "第一格是創建新分類")
+        XCTAssertTrue(sub.children.contains { $0.title == c.name })
+        let img = try XCTUnwrap(editor.lassoStickerImage())
+        let trimmed = StickerMaker.trimmedTransparentEdges(img)
+        XCTAssertLessThan(trimmed.size.height, trimmed.size.width / 4, "只有那一筆字，背景透明（紙張不算）")
+        editor.saveSticker(trimmed, into: c.id)
+        XCTAssertEqual(StickerStore.shared.categories.first { $0.id == c.id }?.stickers.count, 1, "加進這個分類")
+    }
+
+    private func findView(label: String, in v: UIView) -> UIView? {
+        if v.accessibilityLabel == label { return v }
+        for s in v.subviews { if let f = findView(label: label, in: s) { return f } }
+        return nil
     }
 
     private func findView(id: String, in v: UIView) -> UIView? {
