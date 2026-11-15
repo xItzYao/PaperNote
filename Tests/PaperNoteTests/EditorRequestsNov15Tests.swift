@@ -581,28 +581,118 @@ final class EditorRequestsNov15Tests: XCTestCase {
         XCTAssertTrue(editor.stickerStrip.isHidden, "換工具就收起來")
     }
 
-    func testTappingAStickerPutsItOnThePage() throws {
+    /// 回報的需求：點下面那一排的貼紙是選起來，點筆記本才貼到那個位置；選著的貼紙再點一下不反白，打開長按的選單
+    func testTappingAStickerSelectsItAndTappingThePagePlacesIt() throws {
+        let c = testCategory()
+        let s = try XCTUnwrap(StickerStore.shared.add(redSquare(margin: 0, side: 300), to: c.id))
+        let other = try XCTUnwrap(StickerStore.shared.add(redSquare(margin: 0, side: 300), to: c.id))
+        editor.setTool(.sticker)
+        let before = editor.pages[0].elements.count
+        editor.stickerStrip.stickerButtons[0].sendActions(for: .touchUpInside)
+        XCTAssertEqual(editor.pages[0].elements.count, before, "點貼紙只是選起來，還沒貼上")
+        XCTAssertEqual(editor.stickerStrip.selectedID, s.id)
+        let selected = try XCTUnwrap(editor.stickerStrip.stickerButtons.first { $0.accessibilityIdentifier == "sticker.\(s.id.uuidString)" })
+        XCTAssertTrue(selected.showsMenuAsPrimaryAction, "選著的再點一下：打開選單（和長按一樣）")
+        XCTAssertEqual(Set(selected.menu?.children.map(\.title) ?? []), ["刪除", "設為分類封面"])
+        selected.isHighlighted = true
+        XCTAssertFalse(selected.isHighlighted, "不會反白")
+        let unselected = try XCTUnwrap(editor.stickerStrip.stickerButtons.first { $0.accessibilityIdentifier == "sticker.\(other.id.uuidString)" })
+        XCTAssertFalse(unselected.showsMenuAsPrimaryAction, "沒選著的點一下是選它")
+
+        // 點頁面：貼在點的位置
+        editor.handleTap(FakeTap(doc(400, 600)))
+        XCTAssertEqual(editor.pages[0].elements.count, before + 1, "點頁面貼上")
+        let e = try XCTUnwrap(editor.pages[0].elements.last)
+        guard case let .image(d) = e.content else { return XCTFail("貼紙是圖片") }
+        XCTAssertTrue(d.file.hasSuffix(".png"), "存成 PNG，背景透明")
+        XCTAssertEqual(e.frame.midX, 400, accuracy: 1, "貼在點的位置")
+        XCTAssertEqual(e.frame.midY, 600, accuracy: 1)
+        XCTAssertEqual(max(e.frame.width, e.frame.height), NotebookViewController.stickerSide, accuracy: 1)
+        XCTAssertEqual(editor.tool, .sticker, "留在貼紙工具")
+        XCTAssertEqual(editor.stickerStrip.selectedID, s.id, "還選著，可以接著貼")
+
+        // 點剛貼上的貼紙：選它（可以拖曳），不會再貼一張
+        editor.handleTap(FakeTap(doc(400, 600)))
+        XCTAssertEqual(editor.pages[0].elements.count, before + 1)
+        XCTAssertEqual(editor.selected?.elementID, e.id)
+        // 點別的地方：再貼一張
+        editor.handleTap(FakeTap(doc(150, 200)))
+        XCTAssertEqual(editor.pages[0].elements.count, before + 2)
+        XCTAssertEqual(try XCTUnwrap(editor.pages[0].elements.last).frame.midX, 150, accuracy: 1)
+    }
+
+    func testWithoutASelectedStickerTappingThePageDoesNothing() throws {
+        let c = testCategory()
+        _ = try XCTUnwrap(StickerStore.shared.add(redSquare(margin: 0, side: 300), to: c.id))
+        editor.setTool(.sticker)
+        XCTAssertNil(editor.stickerStrip.selectedID)
+        let before = editor.pages[0].elements.count
+        editor.handleTap(FakeTap(doc(400, 600)))
+        XCTAssertEqual(editor.pages[0].elements.count, before)
+    }
+
+    func testPlacingWithoutAPointStillUsesTheMiddleOfTheScreen() throws {
         let c = testCategory()
         let s = try XCTUnwrap(StickerStore.shared.add(redSquare(margin: 0, side: 300), to: c.id))
         editor.setTool(.sticker)
-        let before = editor.pages[0].elements.count
-        let ref = try XCTUnwrap(editor.placeSticker(s))
-        XCTAssertEqual(editor.pages[0].elements.count, before + 1)
-        let e = try XCTUnwrap(editor.pages[0].elements.first { $0.id == ref.elementID })
-        guard case let .image(d) = e.content else { return XCTFail("貼紙是圖片") }
-        XCTAssertTrue(d.file.hasSuffix(".png"), "存成 PNG，背景透明")
-        XCTAssertEqual(max(e.frame.width, e.frame.height), NotebookViewController.stickerSide, accuracy: 1)
-        XCTAssertEqual(editor.tool, .sticker, "留在貼紙工具，可以接著貼")
+        let first = try XCTUnwrap(editor.placeSticker(s))
         let second = try XCTUnwrap(editor.placeSticker(s))
+        let e1 = try XCTUnwrap(editor.pages[0].elements.first { $0.id == first.elementID })
         let e2 = try XCTUnwrap(editor.pages[0].elements.first { $0.id == second.elementID })
-        XCTAssertNotEqual(e2.frame.origin, e.frame.origin, "連續貼往旁邊錯開")
+        XCTAssertNotEqual(e2.frame.origin, e1.frame.origin, "連續貼往旁邊錯開")
     }
 
-    func testTheCategoryMenuStartsWithCreatingOne() {
+    /// 回報的需求：「添加至貼紙」跳出大的浮動視窗，分類是大圖、底下是分類名稱，第一格是「創建新分類」
+    func testAddToStickersOpensALargeCategoryPicker() throws {
         let c = testCategory("我的測試分類")
-        let titles = editor.stickerCategoryMenuItems(source: { nil }, then: { _, _ in }).map(\.title)
-        XCTAssertEqual(titles.first, "創建新分類", "第一格是創建新分類")
-        XCTAssertTrue(titles.contains(c.name), "接著是已經有的分類：\(titles)")
+        _ = try XCTUnwrap(StickerStore.shared.add(redSquare(margin: 0, side: 300), to: c.id))
+        lasso(triangle)
+        XCTAssertNotNil(editor.lassoSel)
+        editor.presentLassoMenu()
+        let menu = try XCTUnwrap(editor.pendingMenu, "點選取範圍跳出選單")
+        let item = try XCTUnwrap(menu.children.first { $0.title == "添加至貼紙" }, "套索選單有「添加至貼紙」：\(menu.children.map(\.title))")
+        XCTAssertTrue(item is UIAction, "不是子選單，是跳出視窗")
+        editor.editMenu.dismissMenu()
+        spin(0.3)
+        editor.addLassoToStickers()
+        spin(0.8)
+        let picker = try XCTUnwrap(editor.presentedStickerCategoryPicker, "跳出選分類的視窗")
+        XCTAssertEqual(editor.presentedViewController?.modalPresentationStyle, .formSheet, "浮動的視窗")
+        XCTAssertGreaterThanOrEqual(picker.preferredContentSize.width, 600, "大的視窗")
+        let collection = try XCTUnwrap(picker.collection)
+        collection.layoutIfNeeded()
+        XCTAssertEqual(collection.numberOfItems(inSection: 0), StickerStore.shared.categories.count + 1)
+        let first = try XCTUnwrap(collection.cellForItem(at: IndexPath(item: 0, section: 0)) as? StickerCategoryCell)
+        XCTAssertEqual(first.title, "創建新分類", "第一格是創建新分類")
+        let row = try XCTUnwrap(StickerStore.shared.categories.firstIndex { $0.id == c.id }) + 1
+        collection.scrollToItem(at: IndexPath(item: row, section: 0), at: .centeredVertically, animated: false)
+        collection.layoutIfNeeded()
+        let cell = try XCTUnwrap(collection.cellForItem(at: IndexPath(item: row, section: 0)) as? StickerCategoryCell)
+        XCTAssertEqual(cell.title, "我的測試分類", "分類名稱在大圖底下")
+        XCTAssertGreaterThanOrEqual(cell.bounds.width, StickerCategoryPickerViewController.thumbnailSide, "分類是大圖")
+
+        picker.choose(item: row)
+        spin(0.8)
+        XCTAssertNil(editor.presentedViewController, "選好就收起來")
+        XCTAssertEqual(StickerStore.shared.categories.first { $0.id == c.id }?.stickers.count, 2, "加進這個分類")
+        XCTAssertEqual(StickerStore.shared.selectedCategory?.id, c.id)
+    }
+
+    func testThePickerCanCreateANewCategory() throws {
+        lasso(triangle)
+        editor.addLassoToStickers()
+        spin(0.8)
+        let picker = try XCTUnwrap(editor.presentedStickerCategoryPicker)
+        let count = StickerStore.shared.categories.count
+        picker.createCategory(named: "新的分類")
+        spin(0.8)
+        XCTAssertEqual(StickerStore.shared.categories.count, count + 1)
+        let made = try XCTUnwrap(StickerStore.shared.categories.last)
+        addedCategories.append(made.id)
+        XCTAssertEqual(made.name, "新的分類")
+        XCTAssertEqual(made.stickers.count, 1, "圈到的東西加進新分類")
+        let img = try XCTUnwrap(StickerStore.shared.image(for: made.stickers[0]))
+        XCTAssertLessThan(img.size.height, img.size.width / 4, "只有那一筆字，背景透明（紙張不算）")
     }
 
     func testAnImageOnThePageCanBecomeASticker() throws {
@@ -610,25 +700,11 @@ final class EditorRequestsNov15Tests: XCTestCase {
         let e = try XCTUnwrap(editor.pages[0].elements.last)
         let ref = ElementRef(pageID: editor.pages[0].id, elementID: e.id)
         let item = editor.elementMenu(ref, at: doc(300, 500)).children.first { $0.title == "變成貼紙" }
-        let sub = try XCTUnwrap(item as? UIMenu, "圖片的選單有「變成貼紙」，裡面選分類")
-        XCTAssertEqual(sub.children.first?.title, "創建新分類")
-    }
-
-    func testTheLassoMenuCanAddTheSelectionToStickers() throws {
-        let c = testCategory()
-        lasso(triangle)
-        XCTAssertNotNil(editor.lassoSel)
-        editor.presentLassoMenu()
-        let menu = try XCTUnwrap(editor.pendingMenu, "點選取範圍跳出選單")
-        let item = menu.children.first { $0.title == "添加至貼紙" }
-        let sub = try XCTUnwrap(item as? UIMenu, "套索選單有「添加至貼紙」：\(menu.children.map(\.title))")
-        XCTAssertEqual(sub.children.first?.title, "創建新分類", "第一格是創建新分類")
-        XCTAssertTrue(sub.children.contains { $0.title == c.name })
-        let img = try XCTUnwrap(editor.lassoStickerImage())
-        let trimmed = StickerMaker.trimmedTransparentEdges(img)
-        XCTAssertLessThan(trimmed.size.height, trimmed.size.width / 4, "只有那一筆字，背景透明（紙張不算）")
-        editor.saveSticker(trimmed, into: c.id)
-        XCTAssertEqual(StickerStore.shared.categories.first { $0.id == c.id }?.stickers.count, 1, "加進這個分類")
+        XCTAssertTrue(try XCTUnwrap(item, "圖片的選單有「變成貼紙」") is UIAction, "跳出選分類的視窗")
+        guard case let .image(d) = e.content else { return XCTFail() }
+        editor.makeSticker(fromImageFile: d.file)
+        spin(0.8)
+        XCTAssertNotNil(editor.presentedStickerCategoryPicker)
     }
 
     private func findView(label: String, in v: UIView) -> UIView? {

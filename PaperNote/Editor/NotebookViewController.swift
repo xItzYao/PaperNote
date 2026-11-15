@@ -321,6 +321,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     // 橡皮擦擦螢光標示
     var eraserTracker: TouchTracker!
+    /// 這一次擦除橡皮擦走過的點（文件座標）：PencilKit 擦完後用來擦螢光筆
+    var eraserPath: [CGPoint] = []
     /// 套索改顏色時的自訂顏色選擇器
     var lassoColorPicker: ColorPickerRelay?
     /// 表格格子的拷貝（照相對位置）；剪貼簿換過內容就不算
@@ -1045,6 +1047,10 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         let gesture = strokeGesture
         if tool == .eraser, !settings.pixelEraser, let before = gesture?.before {
             DispatchQueue.main.async { [weak self] in self?.eraseRestOfDashes(before: before) }
+        }
+        if tool == .eraser {
+            let path = eraserPath
+            DispatchQueue.main.async { [weak self] in self?.eraseHighlighterStrokes(along: path, gesture: gesture) }
         }
         if !tool.isDrawing {
             let before = strokeCountAtBegin

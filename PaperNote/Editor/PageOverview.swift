@@ -1,11 +1,17 @@
 import UIKit
 
-/// 全部頁面：縮圖一覽。點一下跳到那頁；長按拖曳調整順序；選取後可以複製、刪除
-final class PageOverviewController: UIViewController, UICollectionViewDataSource, UICollectionViewDelegate {
+/// 全部頁面：縮圖一覽。點一下跳到那頁；長按拖曳調整順序；選取後可以複製、刪除。
+/// 「大綱」：PDF 的大綱（書籤），點一下跳到那頁
+final class PageOverviewController: UIViewController, UICollectionViewDataSource, UICollectionViewDelegate,
+                                    UITableViewDataSource, UITableViewDelegate {
     private weak var editor: NotebookViewController?
     private var collection: UICollectionView!
     private let layout = UICollectionViewFlowLayout()
-    private let filter = UISegmentedControl(items: [L("全部頁面"), L("我的最愛")])
+    let filter = UISegmentedControl(items: [L("全部頁面"), L("我的最愛"), L("大綱")])
+    static let outlineSegment = 2
+    let outlineTable = UITableView(frame: .zero, style: .insetGrouped)
+    /// PDF 的大綱（第一次打開「大綱」時才讀）
+    private(set) var outline: [PDFOutlineEntry]?
     private var selecting = false
     private var selectedIDs = Set<UUID>()
     private let currentID: UUID?
@@ -42,6 +48,14 @@ final class PageOverviewController: UIViewController, UICollectionViewDataSource
         collection.register(PageThumbCell.self, forCellWithReuseIdentifier: "cell")
         view.addSubview(collection)
 
+        outlineTable.frame = view.bounds
+        outlineTable.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        outlineTable.dataSource = self
+        outlineTable.delegate = self
+        outlineTable.register(PDFOutlineCell.self, forCellReuseIdentifier: "outline")
+        outlineTable.isHidden = true
+        view.addSubview(outlineTable)
+
         let press = UILongPressGestureRecognizer(target: self, action: #selector(handleReorder(_:)))
         press.minimumPressDuration = 0.3
         collection.addGestureRecognizer(press)
@@ -75,8 +89,27 @@ final class PageOverviewController: UIViewController, UICollectionViewDataSource
         }
     }
 
+    var showingOutline: Bool { filter.selectedSegmentIndex == Self.outlineSegment }
+
     private func reload() {
         let pages = editor?.pages ?? []
+        collection.isHidden = showingOutline
+        outlineTable.isHidden = !showingOutline
+        if showingOutline {
+            if selecting {
+                selecting = false
+                selectedIDs.removeAll()
+            }
+            if outline == nil, let editor {
+                outline = PDFOutlineList.entries(pages: pages) { editor.session.pdfDocument($0) }
+            }
+            outlineTable.reloadData()
+            let hasPDF = pages.contains { $0.isPDFPage }
+            let empty = outline?.isEmpty ?? true
+            outlineTable.backgroundView = empty ? emptyLabel(hasPDF ? L("這份 PDF 沒有大綱") : L("這本筆記本沒有 PDF")) : nil
+            updateBars()
+            return
+        }
         let favOnly = filter.selectedSegmentIndex == 1
         items = pages.enumerated().filter { !favOnly || $0.element.favorite }.map { (index: $0.offset, page: $0.element) }
         selectedIDs.formIntersection(items.map(\.page.id))
@@ -96,6 +129,11 @@ final class PageOverviewController: UIViewController, UICollectionViewDataSource
     // MARK: 工具列
 
     private func updateBars() {
+        guard !showingOutline else {
+            navigationItem.rightBarButtonItem = nil
+            navigationController?.setToolbarHidden(true, animated: true)
+            return
+        }
         navigationItem.rightBarButtonItem = UIBarButtonItem(title: selecting ? L("完成") : L("選取"), primaryAction: UIAction { [weak self] _ in
             guard let self else { return }
             self.selecting.toggle()
@@ -267,6 +305,34 @@ final class PageOverviewController: UIViewController, UICollectionViewDataSource
         for ip in collection.indexPathsForVisibleItems {
             guard let cell = collection.cellForItem(at: ip) as? PageThumbCell, let id = cell.pageID else { continue }
             if cell.thumbnail == nil { requestThumbnail(id) }
+        }
+    }
+
+    // MARK: 大綱
+
+    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { outline?.count ?? 0 }
+
+    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "outline", for: indexPath) as! PDFOutlineCell
+        if let e = outline?[safe: indexPath.row] { cell.show(e) }
+        return cell
+    }
+
+    func tableView(_ tableView: UITableView, willSelectRowAt indexPath: IndexPath) -> IndexPath? {
+        outline?[safe: indexPath.row]?.pageIndex == nil ? nil : indexPath
+    }
+
+    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: false)
+        openOutlineEntry(indexPath.row)
+    }
+
+    /// 點大綱的第 row 行：跳到那一頁
+    func openOutlineEntry(_ row: Int) {
+        guard let i = outline?[safe: row]?.pageIndex, let editor, let id = editor.pages[safe: i]?.id else { return }
+        dismiss(animated: true) { [weak editor] in
+            guard let editor, let i = editor.pageIndex(of: id) else { return }
+            editor.scrollToPage(i, animated: false)
         }
     }
 

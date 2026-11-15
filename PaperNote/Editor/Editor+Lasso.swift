@@ -491,10 +491,8 @@ extension NotebookViewController {
                 self?.deleteLasso()
             },
             UIAction(title: L("複製一份"), image: UIImage(systemName: "plus.square.on.square")) { [weak self] _ in self?.duplicateLasso() },
-            // 添加至貼紙：第一格「創建新分類」，接著是已經有的分類
-            UIMenu(title: L("添加至貼紙"), image: UIImage(systemName: "seal"), children: stickerCategoryMenuItems(
-                source: { [weak self] in self?.lassoStickerImage().map(StickerMaker.trimmedTransparentEdges) },
-                then: { [weak self] img, id in self?.saveSticker(img, into: id) })),
+            // 添加至貼紙：跳出大的視窗選分類（第一格「創建新分類」）
+            UIAction(title: L("添加至貼紙"), image: UIImage(systemName: "seal")) { [weak self] _ in self?.addLassoToStickers() },
             UIAction(title: L("刪除"), image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in self?.deleteLasso() },
         ]
         // 圈到筆跡：可以直接改顏色

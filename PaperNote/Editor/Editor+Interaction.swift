@@ -42,8 +42,12 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         eraserTracker.onPoint = { [weak self] p in
             self?.eraseHighlights(at: p)
             self?.eraseInk(at: p)
+            self?.eraserPath.append(p)
         }
-        eraserTracker.onBegan = { [weak self] _ in self?.inkEraseUndoRegistered = [] }
+        eraserTracker.onBegan = { [weak self] _ in
+            self?.inkEraseUndoRegistered = []
+            self?.eraserPath = []
+        }
         canvas.addGestureRecognizer(eraserTracker)
 
         // 記住筆尖最後的位置（調色盤小圖示出現在這附近）
@@ -463,6 +467,9 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             }
             if let hit = hitElement(at: p), case let (pi, ei)? = locate(hit), case .image = pages[pi].elements[ei].content {
                 select(hit)
+            } else if tool == .sticker, let s = stickerStrip.selectedSticker, pageIndex(containing: p) != nil {
+                // 選著下面那一排的貼紙：點頁面就貼在那裡
+                placeSticker(s, at: p)
             } else {
                 select(nil)
             }
@@ -990,9 +997,9 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             })
             // 變成貼紙：先選分類，再選裁切範圍、要不要去背
             let file = d.file
-            items.append(UIMenu(title: L("變成貼紙"), image: UIImage(systemName: "seal"), children: stickerCategoryMenuItems(
-                source: { [weak self] in self?.session.image(named: file) },
-                then: { [weak self] img, id in self?.presentStickerEditor(img, into: id) })))
+            items.append(UIAction(title: L("變成貼紙"), image: UIImage(systemName: "seal")) { [weak self] _ in
+                self?.makeSticker(fromImageFile: file)
+            })
         case .circuit:
             items.append(UIAction(title: L("編輯電路"), image: UIImage(systemName: "bolt")) { [weak self] _ in
                 self?.editCircuit(ref)

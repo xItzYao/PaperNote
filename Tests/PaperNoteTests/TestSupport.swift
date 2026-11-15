@@ -41,6 +41,17 @@ final class FakeTouch: UITouch {
     override var view: UIView? { nil }
 }
 
+/// 測試用的觸碰事件：螢幕上還按著的觸碰
+final class FakeEvent: UIEvent {
+    private let touches: Set<UITouch>
+    init(_ touches: Set<UITouch>) {
+        self.touches = touches
+        super.init()
+    }
+    override var allTouches: Set<UITouch>? { touches }
+    override func coalescedTouches(for touch: UITouch) -> [UITouch]? { nil }
+}
+
 /// 測試用的拖曳：位置、已移動的距離可以設定（真的拖曳要移動一小段才開始，開始時位置已經離開按下的點）
 final class TouchPan: UIPanGestureRecognizer {
     var fake: UIGestureRecognizer.State = .possible

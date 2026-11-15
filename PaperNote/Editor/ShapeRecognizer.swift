@@ -148,7 +148,7 @@ final class PencilHoldRecognizer: UIGestureRecognizer {
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         // 上一筆的結束沒收到（見 UITouch.isOver）：當它取消了。不能用 finish，它會讓這一筆也失敗
-        if let old = tracked, old.isOver {
+        if let old = tracked, old.isOver(in: event) {
             timer?.invalidate()
             if triggered { onEnd?(lastPoint, true) }
             tracked = nil
@@ -244,7 +244,8 @@ final class TouchTracker: UIGestureRecognizer {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
-        if let old = tracked, old.isOver {
+        if let old = tracked, old.isOver(in: event) {
+            DebugLog.add("touch tracker: previous touch was lost (phase=\(old.phase.rawValue)), starting over")
             tracked = nil
             onEnded?()
         }
@@ -285,6 +286,14 @@ extension UITouch {
     /// 已經放開了。系統的選單開著時下筆，這一筆的「結束」不一定會送到畫布上的辨識器：
     /// 下一筆開始時看到記著的那一筆已經放開，就當它結束了，不然之後的筆都會被當成「上一筆還沒放開」而忽略
     var isOver: Bool { phase == .ended || phase == .cancelled }
+
+    /// 這次觸碰事件裡已經沒有這個觸碰（系統把它收走了，放開的消息沒送來，phase 也停在「移動中」），
+    /// 或是已經放開。螢幕上還按著的觸碰一定在 event.allTouches 裡
+    func isOver(in event: UIEvent) -> Bool {
+        if isOver { return true }
+        guard let all = event.allTouches else { return false }
+        return !all.contains(self)
+    }
 }
 
 /// 手掌防誤觸：判定為手掌的觸碰一出現就「辨識成功」，讓畫布的捲動、縮放無法開始。

@@ -260,9 +260,20 @@ final class StickerPhotoPicker: NSObject, PHPickerViewControllerDelegate {
     }
 }
 
-/// 貼紙工具：畫面下面一排目前分類的貼紙（和圖片工具的照片列一樣的位置）
+/// 不會反白的按鈕（貼紙列：點選著的貼紙是打開選單）
+final class NoHighlightButton: UIButton {
+    override var isHighlighted: Bool {
+        get { false }
+        set {}
+    }
+}
+
+/// 貼紙工具：畫面下面一排目前分類的貼紙（和圖片工具的照片列一樣的位置）。
+/// 點一下選起來，再點頁面貼到那裡；選著的貼紙再點一下打開選單（和長按一樣）
 final class StickerStripView: UIView {
     static let height: CGFloat = 112
+    /// 選著的貼紙：點頁面就貼上這張
+    private(set) var selectedID: UUID?
     var onPick: ((StickerRecord) -> Void)?
     var onAdd: (() -> Void)?
     var onDelete: ((StickerRecord) -> Void)?
@@ -331,6 +342,7 @@ final class StickerStripView: UIView {
         addButton.addAction(UIAction { [weak self] _ in self?.onAdd?() }, for: .touchUpInside)
         stack.addArrangedSubview(addButton)
         guard let category = store.selectedCategory else {
+            selectedID = nil
             addButton.isEnabled = false
             message.text = L("先在上面按「新增分類」")
             message.isHidden = false
@@ -338,28 +350,55 @@ final class StickerStripView: UIView {
         }
         message.text = L("這個分類還沒有貼紙：從相簿加入，或用套索圈起來選「添加至貼紙」")
         message.isHidden = !category.stickers.isEmpty
+        if let id = selectedID, !category.stickers.contains(where: { $0.id == id }) { selectedID = nil }
         for s in category.stickers {
-            let b = UIButton(type: .custom)
-            b.setImage(store.thumbnail(for: s, side: 88), for: .normal)
+            let b = NoHighlightButton(type: .custom)
+            b.setImage(store.thumbnail(for: s, side: 80), for: .normal)
             b.imageView?.contentMode = .scaleAspectFit
+
             b.widthAnchor.constraint(equalToConstant: 88).isActive = true
             b.heightAnchor.constraint(equalToConstant: 88).isActive = true
+            b.layer.cornerRadius = 10
             b.accessibilityLabel = L("貼紙")
             b.accessibilityIdentifier = "sticker.\(s.id.uuidString)"
-            if s.id == category.cover?.id {
-                b.layer.borderWidth = 2
-                b.layer.borderColor = UIColor.systemBlue.withAlphaComponent(0.5).cgColor
-                b.layer.cornerRadius = 8
+            let isSelected = s.id == selectedID
+            b.isSelected = isSelected
+            if isSelected {
+                b.backgroundColor = UIColor.systemBlue.withAlphaComponent(0.15)
+                b.layer.borderWidth = 2.5
+                b.layer.borderColor = UIColor.systemBlue.cgColor
             }
-            b.addAction(UIAction { [weak self] _ in self?.onPick?(s) }, for: .touchUpInside)
-            // 長按：刪除、設為分類封面
+            if s.id == category.cover?.id {
+                // 分類封面：左上角一顆星
+                let star = UIImageView(image: UIImage(systemName: "star.fill"))
+                star.tintColor = .systemYellow
+                star.frame = CGRect(x: 4, y: 4, width: 16, height: 16)
+                star.accessibilityIdentifier = "sticker.cover"
+                b.addSubview(star)
+            }
+            b.addAction(UIAction { [weak self] _ in self?.tapped(s) }, for: .touchUpInside)
+            // 長按（選著的貼紙是點一下）：刪除、設為分類封面
             b.menu = UIMenu(children: [
                 UIAction(title: L("設為分類封面"), image: UIImage(systemName: "photo")) { [weak self] _ in self?.onSetCover?(s) },
                 UIAction(title: L("刪除"), image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in self?.onDelete?(s) },
             ])
+            b.showsMenuAsPrimaryAction = isSelected
             stack.addArrangedSubview(b)
             stickerButtons.append(b)
         }
+    }
+
+    /// 點了一張貼紙：選起來（選著的那張點了是打開選單，不會走到這裡）
+    func tapped(_ s: StickerRecord) {
+        selectedID = s.id
+        reload()
+        onPick?(s)
+    }
+
+    /// 選著的貼紙
+    var selectedSticker: StickerRecord? {
+        guard let id = selectedID else { return nil }
+        return StickerStore.shared.selectedCategory?.stickers.first { $0.id == id }
     }
 }
 
@@ -379,7 +418,7 @@ extension NotebookViewController {
             stickerStrip.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -10),
             stickerStrip.heightAnchor.constraint(equalToConstant: StickerStripView.height),
         ])
-        stickerStrip.onPick = { [weak self] s in self?.placeSticker(s) }
+        stickerStrip.onPick = { [weak self] _ in self?.showToast(L("點頁面貼上這張貼紙")) }
         stickerStrip.onAdd = { [weak self] in
             guard let id = StickerStore.shared.selectedCategory?.id else { return }
             self?.presentStickerPicker(into: id)
@@ -499,25 +538,6 @@ extension NotebookViewController {
         present(a, animated: true)
     }
 
-    /// 「加到哪個分類」的選單：第一格「創建新分類」，接著是已經有的分類。
-    /// 按下去才用 source 取圖（先取好再跳出新分類的輸入框，期間選取不會被清掉），再交給 then
-    func stickerCategoryMenuItems(source: @escaping () -> UIImage?, then: @escaping (UIImage, UUID) -> Void) -> [UIMenuElement] {
-        let store = StickerStore.shared
-        var items: [UIMenuElement] = [
-            UIAction(title: L("創建新分類"), image: UIImage(systemName: "folder.badge.plus")) { [weak self] _ in
-                guard let img = source() else { return }
-                self?.promptNewStickerCategory { id in then(img, id) }
-            },
-        ]
-        for c in store.categories {
-            items.append(UIAction(title: c.name, image: c.cover.flatMap { store.thumbnail(for: $0, side: 28) } ?? UIImage(systemName: "folder")) { _ in
-                guard let img = source() else { return }
-                then(img, c.id)
-            })
-        }
-        return items
-    }
-
     func presentStickerPicker(into categoryID: UUID) {
         var config = PHPickerConfiguration()
         config.filter = .images
@@ -578,15 +598,16 @@ extension NotebookViewController {
         }
     }
 
-    /// 點貼紙：貼到畫面中央（同一頁連續貼往右下錯開），留在貼紙工具可以接著貼
+    /// 貼上貼紙：貼在 p（文件座標，點頁面的位置），沒給就貼到畫面中央（同一點連續貼往右下錯開）；
+    /// 留在貼紙工具可以接著貼
     @discardableResult
-    func placeSticker(_ s: StickerRecord) -> ElementRef? {
+    func placeSticker(_ s: StickerRecord, at p: CGPoint? = nil) -> ElementRef? {
         guard !pages.isEmpty, let img = StickerStore.shared.image(for: s) else { return nil }
         guard let file = session.saveImage(img, jpeg: false) else { return nil }
         let r = visibleDocRect()
-        let pi = currentPageIndex
+        let pi = p.flatMap { pageIndex(containing: $0) } ?? currentPageIndex
         let o = contentOrigin(pi)
-        var c = CGPoint(x: r.midX, y: r.midY)
+        var c = p ?? CGPoint(x: r.midX, y: r.midY)
         let centers = pages[pi].elements.map { CGPoint(x: $0.frame.midX + o.x, y: $0.frame.midY + o.y) }
         var k = 0
         while k < 12, centers.contains(where: { $0.distance(to: c) < 4 }) {
