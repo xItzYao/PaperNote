@@ -678,6 +678,16 @@ final class EditorRequestsNov15Tests: XCTestCase {
         XCTAssertEqual(StickerStore.shared.selectedCategory?.id, c.id)
     }
 
+    /// 回報的問題：從筆跡做的貼紙解析度不夠（照螢幕 3 倍畫，貼上時放大到 160pt 就糊了）
+    func testLassoStickersAreSharpWhenPlacedLarger() throws {
+        lasso(triangle)
+        let img = try XCTUnwrap(editor.lassoStickerImage().map(StickerMaker.trimmedTransparentEdges))
+        let cg = try XCTUnwrap(img.cgImage)
+        // 這一筆字寬 100，貼上時最長邊 160pt：每一點至少要 3 個像素（iPad 2 倍螢幕、再放大頁面也清楚）
+        XCTAssertGreaterThanOrEqual(CGFloat(cg.width) / NotebookViewController.stickerSide, 3, "寬 \(cg.width) 像素")
+        XCTAssertLessThanOrEqual(CGFloat(max(cg.width, cg.height)), StickerMaker.maxPixel + 1, "不超過貼紙的最大解析度")
+    }
+
     func testThePickerCanCreateANewCategory() throws {
         lasso(triangle)
         editor.addLassoToStickers()

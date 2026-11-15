@@ -971,6 +971,9 @@ extension NotebookViewController {
             UIAction(title: L("在此頁前新增頁面…"), image: UIImage(systemName: "doc.badge.plus")) { [weak self] _ in
                 self?.presentPaperPicker(title: L("在第 \(i + 1) 頁前新增頁面"), insertAt: i)
             },
+            UIAction(title: L("將該頁加入大綱…"), image: UIImage(systemName: "list.bullet.indent")) { [weak self] _ in
+                self?.promptAddToOutline(i)
+            },
         ]
         if !pages[i].insets.isZero {
             items.append(UIAction(title: L("移除此頁擴展"), image: UIImage(systemName: "arrow.down.right.and.arrow.up.left")) { [weak self] _ in
@@ -1084,25 +1087,34 @@ extension NotebookViewController {
     }
 
     @objc func favoriteTapped() {
-        let i = currentPageIndex
+        toggleFavorite(currentPageIndex, from: self, source: favoriteButton)
+    }
+
+    /// 星號：還不是我的最愛 → 跳出備註再加入；已經是 → 編輯備註或移除。
+    /// presenter、source：從哪個畫面、哪個按鈕跳出來（「全部頁面」的縮圖右上角也有星號）
+    func toggleFavorite(_ i: Int, from presenter: UIViewController, source: UIView, then: (() -> Void)? = nil) {
+        guard pages.indices.contains(i) else { return }
         if pages[i].favorite {
             let a = UIAlertController(title: L("第 \(i + 1) 頁"), message: pages[i].note.isEmpty ? nil : pages[i].note, preferredStyle: .actionSheet)
-            a.addAction(UIAlertAction(title: L("編輯備註"), style: .default) { [weak self] _ in self?.promptFavoriteNote(i, isNew: false) })
+            a.addAction(UIAlertAction(title: L("編輯備註"), style: .default) { [weak self, weak presenter] _ in
+                self?.promptFavoriteNote(i, isNew: false, from: presenter, then: then)
+            })
             a.addAction(UIAlertAction(title: L("從我的最愛移除"), style: .destructive) { [weak self] _ in
                 guard let self else { return }
                 self.session.document.pages[i].favorite = false
                 self.afterFavoriteChange(i)
+                then?()
             })
             a.addAction(UIAlertAction(title: L("取消"), style: .cancel))
-            a.popoverPresentationController?.sourceView = favoriteButton
-            a.popoverPresentationController?.sourceRect = favoriteButton.bounds
-            present(a, animated: true)
+            a.popoverPresentationController?.sourceView = source
+            a.popoverPresentationController?.sourceRect = source.bounds
+            presenter.present(a, animated: true)
         } else {
-            promptFavoriteNote(i, isNew: true)
+            promptFavoriteNote(i, isNew: true, from: presenter, then: then)
         }
     }
 
-    func promptFavoriteNote(_ i: Int, isNew: Bool) {
+    func promptFavoriteNote(_ i: Int, isNew: Bool, from presenter: UIViewController? = nil, then: (() -> Void)? = nil) {
         let a = UIAlertController(title: isNew ? L("加入我的最愛") : L("編輯備註"),
                                   message: L("第 \(i + 1) 頁：寫下這頁有什麼資料，之後比較好找（可留空）"),
                                   preferredStyle: .alert)
@@ -1117,8 +1129,9 @@ extension NotebookViewController {
             self.session.document.pages[i].favorite = true
             self.session.document.pages[i].note = a?.textFields?.first?.text ?? ""
             self.afterFavoriteChange(i)
+            then?()
         })
-        present(a, animated: true)
+        (presenter ?? self).present(a, animated: true)
     }
 
     func afterFavoriteChange(_ i: Int) {

@@ -572,7 +572,8 @@ extension NotebookViewController {
         guard let sel = lassoSel, !sel.bounds.isNull else { return nil }
         let rect = sel.bounds.insetBy(dx: -4, dy: -4).integral
         guard rect.width > 2, rect.height > 2 else { return nil }
-        let scale = min(3, 2048 / max(rect.width, rect.height))
+        // 筆跡是向量：照貼紙的最大解析度重畫（小小一個字放大貼上也清楚），不是照螢幕的 3 倍
+        let scale = min(16, StickerMaker.maxPixel / max(rect.width, rect.height))
         let pk = sel.strokeIndices.compactMap { canvas.drawing.strokes[safe: $0] }
         let pkImage = pk.isEmpty ? nil : PageRenderer.inkImage(PKDrawing(strokes: pk), rect: rect, scale: scale)
         let ink = inkStrokes(sel.ink)

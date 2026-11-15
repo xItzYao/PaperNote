@@ -175,6 +175,8 @@ struct NotebookDocument: Codable {
     var pages: [Page]
     /// 最近刪除的頁面（舊版存檔沒有這個欄位）
     var trash: [TrashedPage]? = nil
+    /// 自己加的大綱（「將該頁加入大綱」；舊版存檔沒有這個欄位）
+    var outline: [OutlineBookmark]? = nil
 }
 
 enum Trash {

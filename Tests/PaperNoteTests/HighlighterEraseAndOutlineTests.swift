@@ -62,6 +62,24 @@ final class HighlighterEraseTests: XCTestCase {
         XCTAssertTrue(result.allSatisfy { NotebookViewController.isHighlighterStroke($0) }, "還是螢光筆")
     }
 
+    /// 回報的需求（更正）：刪除圓心後連同整個圓都刪掉，螢光筆比橡皮擦粗，也只要擦一條線就擦斷
+    func testAThinEraserLineAcrossAThickHighlighterRemovesItsWholeWidthThere() throws {
+        // 螢光筆寬 20，橡皮擦半徑 2（細很多），從上面劃到下面一條線
+        let line = [CGPoint(x: 100, y: 80), CGPoint(x: 100, y: 120)]
+        let result = try XCTUnwrap(HighlighterErase.erase([highlighter()], along: line, radius: 2, partial: true))
+        XCTAssertEqual(result.count, 2, "擦斷成左右兩段")
+        // 留下來的每個圓都碰不到橡皮擦劃過的那條線：那裡整個寬度都不見了，上下沒有殘留
+        for s in result {
+            for q in s.path.interpolatedPoints(by: .distance(1)) {
+                let half = HighlighterErase.drawnHalfWidth(s.ink, q.size)
+                XCTAssertGreaterThan(abs(q.location.x - 100), half, "x=\(q.location.x) 的圓還蓋到擦過的線")
+            }
+        }
+        // 只擦到上緣一點點也一樣：碰到的那幾個圓整個拿掉
+        let edge = try XCTUnwrap(HighlighterErase.erase([highlighter()], along: [CGPoint(x: 150, y: 89)], radius: 2, partial: true))
+        XCTAssertEqual(edge.count, 2, "碰到邊緣也擦斷，不是只擦掉邊緣")
+    }
+
     func testAnEraserPathSweepingAcrossCountsEveryPoint() throws {
         // 橡皮擦從上面劃過到下面：中間經過的點都算
         let path = [CGPoint(x: 60, y: 60), CGPoint(x: 60, y: 140)]
@@ -160,7 +178,8 @@ final class PDFOutlineTests: XCTestCase {
         XCTAssertTrue(overview.showingOutline)
         XCTAssertFalse(overview.outlineTable.isHidden, "顯示大綱")
         XCTAssertEqual(overview.outline, [])
-        XCTAssertEqual((overview.outlineTable.backgroundView as? UILabel)?.text, "這本筆記本沒有 PDF")
+        XCTAssertEqual((overview.outlineTable.backgroundView as? UILabel)?.text,
+                       "還沒有大綱。長按「全部頁面」裡的頁面，或在頁碼的選單選「將該頁加入大綱」。")
         XCTAssertNil(overview.navigationItem.rightBarButtonItem, "大綱不能選取頁面")
         overview.filter.selectedSegmentIndex = 0
         overview.filter.sendActions(for: .valueChanged)

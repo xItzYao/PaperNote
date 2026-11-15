@@ -31,7 +31,7 @@ struct HelpView: View {
         Item(symbol: "eye", title: L("預覽模式"), detail: L("「⋯」裡的「預覽模式」把工具列收起來，只能捲動、縮放；按右上角「結束預覽」回來。")),
         Item(symbol: "star", title: L("我的最愛"), detail: L("筆記本裡的星號收藏頁面；資料庫裡筆記本旁的星星加入「我的最愛文件」，按左上角的星星打開。")),
         Item(symbol: "number", title: L("跳到頁碼"), detail: L("點第二列右邊的頁碼，輸入頁數。")),
-        Item(symbol: "list.bullet.indent", title: L("大綱"), detail: L("「全部頁面」上方切到「大綱」：列出 PDF 的大綱（書籤），點一下跳到那一頁。")),
+        Item(symbol: "list.bullet.indent", title: L("大綱"), detail: L("「全部頁面」上方切到「大綱」：列出自己加的大綱和 PDF 的大綱（書籤），點一下跳到那一頁。在「全部頁面」長按頁面（不拖曳）、或在頁碼的選單選「將該頁加入大綱」，取個名字就加進去；往左滑可以重新命名、刪除。縮圖右上角的星號可以寫備註、加入我的最愛。")),
         Item(symbol: "rectangle.stack", title: L("分頁"), detail: L("打開的筆記本排在最上面；把分頁拖到另一個分頁上可以組成群組。")),
         Item(symbol: "ellipsis.circle", title: L("設定"), detail: L("「⋯」裡有手掌防誤觸、手指書寫等設定。")),
     ]
