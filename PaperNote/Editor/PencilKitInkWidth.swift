@@ -8,8 +8,8 @@ enum PencilKitInkWidth {
     /// 這個 size 畫出來多寬（斜的筆頭算長的那邊）
     static func drawn(_ type: PKInk.InkType, size s: CGFloat) -> CGFloat {
         switch type {
-        case .pen, .monoline: return max(1, 2 * s - 4)
-        case .fountainPen: return max(1, 2 * (s - 2))
+        case .pen, .monoline: return max(0, 2 * s - 4)
+        case .fountainPen: return max(0, 2 * (s - 2))
         case .marker: return 1.1 * s
         case .pencil: return 1.45 * s
         case .crayon: return 1.25 * s
