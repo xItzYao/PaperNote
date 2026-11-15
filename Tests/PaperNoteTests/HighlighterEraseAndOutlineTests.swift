@@ -5,13 +5,28 @@ import PDFKit
 
 /// 回報的需求：螢光筆是中心一條軌跡加上很粗的線寬畫出來的，橡皮擦只要碰到畫出來的範圍就擦掉那段的軌跡中心，比較容易擦掉
 final class HighlighterEraseTests: XCTestCase {
-    /// 一條橫的螢光筆：y = 100，x 從 0 到 200，線寬 20（上下各 10）
-    private func highlighter(y: CGFloat = 100) -> PKStroke {
+    /// 一條橫的螢光筆（App 的螢光筆：半透明的 monoline）：y = 100，x 從 0 到 200。
+    /// size 12 畫出來寬 2·12 − 4 = 20（上下各 10）
+    private func highlighter(y: CGFloat = 100, ink: PKInk = PKInk(.monoline, color: UIColor.systemYellow.withAlphaComponent(0.4)),
+                             size: CGFloat = 12) -> PKStroke {
         let pts = stride(from: CGFloat(0), through: 200, by: 10).enumerated().map { i, x in
-            PKStrokePoint(location: CGPoint(x: x, y: y), timeOffset: Double(i) * 0.01, size: CGSize(width: 20, height: 20),
+            PKStrokePoint(location: CGPoint(x: x, y: y), timeOffset: Double(i) * 0.01, size: CGSize(width: size, height: size),
                           opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2)
         }
-        return PKStroke(ink: PKInk(.marker, color: .yellow), path: PKStrokePath(controlPoints: pts, creationDate: Date()))
+        return PKStroke(ink: ink, path: PKStrokePath(controlPoints: pts, creationDate: Date()))
+    }
+
+    func testTheReachMatchesWhatPencilKitDraws() {
+        let s = highlighter()
+        XCTAssertTrue(NotebookViewController.isHighlighterStroke(s))
+        XCTAssertEqual(s.renderBounds.height, 20, accuracy: 3, "測試前提：畫出來寬 20")
+        XCTAssertEqual(HighlighterErase.drawnHalfWidth(s.ink, CGSize(width: 12, height: 12)), 10)
+    }
+
+    func testOldMarkerHighlightsAreErasedByTheirLongSide() throws {
+        // 舊筆記的 marker：斜的筆頭，長的那邊約 1.1·size
+        let s = highlighter(ink: PKInk(.marker, color: .yellow), size: 20)
+        XCTAssertNotNil(HighlighterErase.erase([s], along: [CGPoint(x: 100, y: 112)], radius: 4, partial: false))
     }
 
     private func pen(y: CGFloat = 100) -> PKStroke {

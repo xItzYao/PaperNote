@@ -12,16 +12,19 @@ enum HighlighterErase {
         var changed = false
         var out: [PKStroke] = []
         for s in strokes {
+            let k = abs(s.transform.a * s.transform.d - s.transform.b * s.transform.c).squareRoot()
+            // 先用外框快速排除：外框加上碰得到的距離（斜的筆頭橫著畫時外框比較扁，要用長的那邊算）
+            let widest = s.path.map(\.size.width).max() ?? 0
+            let reach = radius + drawnHalfWidth(s.ink, CGSize(width: widest, height: widest)) * k
             guard NotebookViewController.isHighlighterStroke(s),
-                  s.renderBounds.insetBy(dx: -radius, dy: -radius).intersects(area.insetBy(dx: -1, dy: -1)) else {
+                  s.renderBounds.insetBy(dx: -reach, dy: -reach).intersects(area.insetBy(dx: -1, dy: -1)) else {
                 out.append(s)
                 continue
             }
-            let k = abs(s.transform.a * s.transform.d - s.transform.b * s.transform.c).squareRoot()
             let pts = Array(s.path.interpolatedPoints(by: .distance(2)))
             let hit = pts.map { q -> Bool in
                 let w = q.location.applying(s.transform)
-                return distance(w, to: path) <= radius + q.size.width * k / 2
+                return distance(w, to: path) <= radius + drawnHalfWidth(s.ink, q.size) * k
             }
             guard hit.contains(true) else {
                 out.append(s)
@@ -44,6 +47,16 @@ enum HighlighterErase {
             flush()
         }
         return changed ? out : nil
+    }
+
+    /// PencilKit 實際畫出來的半個線寬（和點的 size 不一樣，實測見 PencilKitInkStudy）：
+    /// 螢光筆用的 monoline 畫出來寬 2·size − 4；舊筆記的 marker 是斜的筆頭，長的那邊約 1.1·size（用長的那邊，比較好擦）
+    static func drawnHalfWidth(_ ink: PKInk, _ size: CGSize) -> CGFloat {
+        switch ink.inkType {
+        case .monoline, .pen: return max(0, size.width - 2)
+        case .marker: return size.width * 0.55
+        default: return size.width / 2
+        }
     }
 
     /// 點到橡皮擦走過的折線的距離
