@@ -191,6 +191,15 @@ final class EditorRequestsNov15Tests: XCTestCase {
         XCTAssertFalse(editor.canvas.scrollsToTop, "點狀態列不能捲回最上面（常常誤觸）")
     }
 
+    // MARK: 截圖的分享
+
+    /// 回報的需求：截圖的「分享」不要藏到第二頁（選單列放不下時後面的會收到下一頁）
+    func testShareIsFirstInTheCaptureMenu() {
+        let titles = editor.captureMenu(redSquare(), viewRect: CGRect(x: 100, y: 100, width: 80, height: 80)).children.map(\.title)
+        XCTAssertEqual(titles.first, "分享…", "分享放最前面：\(titles)")
+        XCTAssertEqual(Set(titles), ["分享…", "釘選在畫面上", "拷貝", "翻譯文字", "拷貝文字", "存到照片"], "其他的都還在")
+    }
+
     // MARK: 拿掉選取工具：套索就能選
 
     func testTheToolbarHasStickersButNoSelect() {

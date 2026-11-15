@@ -1317,8 +1317,19 @@ extension NotebookViewController {
         }
         overlay.showCapture(path)
         let rect = path.bounds
-        let viewRect = docRectInView(rect)
-        let menu = UIMenu(children: [
+        presentMenu(captureMenu(img, viewRect: docRectInView(rect)), atDocPoint: CGPoint(x: rect.midX, y: rect.minY))
+    }
+
+    /// 截圖的選單。選單列放不下時後面的會收到第二頁：分享放最前面，不用再翻
+    func captureMenu(_ img: UIImage, viewRect: CGRect) -> UIMenu {
+        UIMenu(children: [
+            UIAction(title: L("分享…"), image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
+                guard let self else { return }
+                let vc = UIActivityViewController(activityItems: [img], applicationActivities: nil)
+                vc.popoverPresentationController?.sourceView = self.view
+                vc.popoverPresentationController?.sourceRect = viewRect
+                self.present(vc, animated: true)
+            },
             UIAction(title: L("釘選在畫面上"), image: UIImage(systemName: "pin")) { [weak self] _ in
                 self?.pinOverlay.addPin(image: img, near: viewRect)
             },
@@ -1341,15 +1352,7 @@ extension NotebookViewController {
             UIAction(title: L("存到照片"), image: UIImage(systemName: "photo.badge.arrow.down")) { _ in
                 UIImageWriteToSavedPhotosAlbum(img, nil, nil, nil)
             },
-            UIAction(title: L("分享…"), image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
-                guard let self else { return }
-                let vc = UIActivityViewController(activityItems: [img], applicationActivities: nil)
-                vc.popoverPresentationController?.sourceView = self.view
-                vc.popoverPresentationController?.sourceRect = viewRect
-                self.present(vc, animated: true)
-            },
         ])
-        presentMenu(menu, atDocPoint: CGPoint(x: rect.midX, y: rect.minY))
     }
 
     /// 把文件座標中的區域（含 PDF、物件、筆跡）畫成圖片
