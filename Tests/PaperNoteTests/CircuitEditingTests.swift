@@ -565,8 +565,7 @@ final class CircuitEditingTests: XCTestCase {
         XCTAssertTrue(titles.contains("匯出 SVG"), "長按電路圖也能匯出")
         XCTAssertTrue(titles.contains("拷貝網表給 AI"))
         editor.copyCircuitNetlist(ref)
-        XCTAssertTrue(UIPasteboard.general.string?.hasSuffix(".end
-") ?? false, "拷貝的是網表")
+        XCTAssertTrue(UIPasteboard.general.string?.hasSuffix(".end\n") ?? false, "拷貝的是網表")
     }
 
     /// 回報的需求：「選取」「接線」放在第二列工具列，不放說明文字
