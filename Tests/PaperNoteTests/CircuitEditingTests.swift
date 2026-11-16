@@ -558,10 +558,15 @@ final class CircuitEditingTests: XCTestCase {
     }
 
     func testExportButtonIsOnTheToolbarAndInTheMenu() {
-        let labels = editor.buildCircuitRibbon().compactMap(\.accessibilityLabel)
-        XCTAssertTrue(labels.contains("匯出 SVG"), "電路工具列有「匯出 SVG」")
+        let button = editor.buildCircuitRibbon().compactMap { $0 as? UIButton }.first { $0.accessibilityLabel == "匯出電路圖" }
+        let exports = button?.menu?.children.map(\.title) ?? []
+        XCTAssertEqual(exports, ["匯出 SVG", "匯出網表（netlist）", "拷貝網表給 AI"], "電路工具列的「匯出」：SVG、網表")
         let titles = editor.elementMenu(ref, at: frame.center).children.map(\.title)
         XCTAssertTrue(titles.contains("匯出 SVG"), "長按電路圖也能匯出")
+        XCTAssertTrue(titles.contains("拷貝網表給 AI"))
+        editor.copyCircuitNetlist(ref)
+        XCTAssertTrue(UIPasteboard.general.string?.hasSuffix(".end
+") ?? false, "拷貝的是網表")
     }
 
     /// 回報的需求：「選取」「接線」放在第二列工具列，不放說明文字

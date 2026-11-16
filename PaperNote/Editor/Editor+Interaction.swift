@@ -242,15 +242,9 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         if g === toolPan, toolPan.numberOfTouches == 0 {
             toolPanByDrawingTouch = touch.type == .pencil || settings.fingerDrawing
         }
-        // 貼紙工具：只有 Pencil（開了「用手指書寫」才有手指）會貼上、拖曳貼紙；手指只捲動、縮放頁面
-        if tool == .sticker, g === tapGesture || g === toolPan || g === longPressGesture {
+        // 貼紙、電路工具：只有 Pencil（開了「用手指書寫」才有手指）會放、選、拖曳；手指只捲動、縮放頁面
+        if tool == .sticker || tool == .circuit, g === tapGesture || g === toolPan || g === longPressGesture {
             return touch.type == .pencil || settings.fingerDrawing
-        }
-        // 電路工具：手指可以拖元件，其他地方是捲動頁面
-        if g === toolPan, tool == .circuit {
-            let finger = touch.type == .direct && !settings.fingerDrawing
-            if toolPan.numberOfTouches == 0 { circuitPanByFinger = finger }
-            return !finger || circuitAcceptsFinger(at: touch.location(in: pagesContainer))
         }
         // 截圖、PDF 文字、手繪表格、套索：沒開「用手指書寫」時只接受 Pencil，手指只用來捲動
         if g === toolPan, tool.drawsWithPan {
@@ -1015,9 +1009,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             items.append(UIAction(title: L("編輯電路"), image: UIImage(systemName: "bolt")) { [weak self] _ in
                 self?.editCircuit(ref)
             })
-            items.append(UIAction(title: L("匯出 SVG"), image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
-                self?.exportCircuitSVG(ref)
-            })
+            items.append(contentsOf: circuitExportMenu(ref) { nil })
         }
         items.append(UIMenu(options: .displayInline, children: [
             UIAction(title: L("拷貝"), image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in self?.copyElement(ref) },

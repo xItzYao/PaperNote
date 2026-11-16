@@ -87,28 +87,88 @@ final class CircuitGroupTests: XCTestCase {
         marquee(CGRect(x: a.x - 60, y: a.y - 40, width: b.x - a.x + 110, height: 80))
     }
 
-    // MARK: 手指拖元件
+    // MARK: 手指：只捲動、縮放
 
-    func testFingerDragsAComponentInEveryModeButOnlyAComponent() throws {
-        editor.circuitPanByFinger = true
-        defer { editor.circuitPanByFinger = false }
-        XCTAssertTrue(editor.circuitAcceptsFinger(at: at(left)))
-        XCTAssertFalse(editor.circuitAcceptsFinger(at: onWire(bridge)), "手指按在導線上是捲動頁面")
-        XCTAssertFalse(editor.circuitAcceptsFinger(at: CGPoint(x: at(left).x - 90, y: at(left).y)), "空白處是捲動頁面")
-        XCTAssertFalse(editor.circuitPanShouldBegin(at: onWire(bridge)))
-
+    /// 回報的需求（改了）：電路圖模式手指負責放大縮小、捲動；開了「用手指書寫」才能放、選元件
+    func testFingersScrollAndOnlyThePencilPlacesOrSelects() throws {
+        let saved = EditorSettings.shared.fingerDrawing
+        defer { EditorSettings.shared.fingerDrawing = saved }
+        EditorSettings.shared.fingerDrawing = false
+        let finger = FakeTouch(type: .direct, location: at(left))
+        let pencil = FakeTouch(type: .pencil, location: at(left))
         for mode: CircuitMode in [.select, .wire, .place(.capacitor)] {
             editor.selectCircuitMode(mode)
-            XCTAssertTrue(editor.circuitPanShouldBegin(at: at(right)))
-            let before = at(right), count = data.wires.count
-            pan(before, by: CGPoint(x: 0, y: 40))
-            XCTAssertEqual(at(right).y - before.y, 40, accuracy: 0.5, "元件跟著手指走")
-            XCTAssertEqual(data.wires.count, count, "接線模式也不會多畫一條線")
-            XCTAssertEqual(editor.circuitMode, mode, "模式不變")
-            XCTAssertTrue(CircuitGeometry.pins(try XCTUnwrap(part(right))).contains(try XCTUnwrap(wire(outside)?.points[0])), "導線跟著接腳走")
+            for g in [editor.tapGesture, editor.toolPan, editor.longPressGesture] as [UIGestureRecognizer?] {
+                let g = try XCTUnwrap(g)
+                XCTAssertFalse(editor.gestureRecognizer(g, shouldReceive: finger), "手指按在元件上也是捲動頁面：\(mode)")
+                XCTAssertTrue(editor.gestureRecognizer(g, shouldReceive: pencil), "Pencil 照常：\(mode)")
+            }
         }
-        editor.selectCircuitMode(.erase)
-        XCTAssertFalse(editor.circuitAcceptsFinger(at: at(left)), "橡皮擦不用手指拖")
+        EditorSettings.shared.fingerDrawing = true
+        XCTAssertTrue(editor.gestureRecognizer(try XCTUnwrap(editor.tapGesture), shouldReceive: finger), "開了用手指書寫：手指可以放、選")
+        XCTAssertTrue(editor.gestureRecognizer(try XCTUnwrap(editor.toolPan), shouldReceive: finger))
+    }
+
+    // MARK: 元件放在導線上
+
+    /// 回報的需求：元件的接腳放在導線上會變成跨線，要直接接上變共點
+    func testAComponentPlacedOnAWireConnectsToIt() throws {
+        let count = data.wires.count
+        editor.selectCircuitMode(.place(.resistor))
+        // 外面那條線的直的那段是 (330, 100)…(330, 160)：電阻的左接腳放在 (330, 130)
+        editor.placeComponent(.resistor, at: editor.circuitDoc(CGPoint(x: 360, y: 130), ref))
+        let placed = try XCTUnwrap(data.components.last)
+        let pin = CircuitGeometry.pins(placed)[0]
+        XCTAssertTrue(data.wires.contains { w in w.points.first == pin || w.points.last == pin }, "接腳在線上")
+        XCTAssertEqual(data.wires.count, count + 1, "那條線在接腳那裡切成兩條")
+        XCTAssertEqual(data.wires.filter { $0.points.first == pin || $0.points.last == pin }.count, 2, "兩條線的線頭都停在接腳上")
+        XCTAssertTrue(data.crossings().isEmpty, "不是跨線")
+        XCTAssertTrue(data.junctions().contains(pin), "分岔的地方有圓點")
+        let nets = data.nets()
+        let rightPins = CircuitGeometry.pins(try XCTUnwrap(part(right)))
+        let rightIndex = data.components.firstIndex { $0.id == right }! * 2
+        let placedIndex = (data.components.count - 1) * 2
+        XCTAssertEqual(rightPins.count, 2)
+        XCTAssertEqual(nets.pins[placedIndex], nets.pins[rightIndex + 1], "網表裡和右邊電阻的右接腳是同一個節點")
+
+        // 再拖到別的地方、拖回來：照樣接上；導線原本就從接腳經過的不切
+        editor.selectCircuitMode(.select)
+        let wiresNow = data.wires.count
+        pan(at(placed.id), by: CGPoint(x: 0, y: 0))
+        XCTAssertEqual(data.wires.count, wiresNow, "沒有移動：不會多切")
+    }
+
+    // MARK: 自訂元件放進分類
+
+    /// 回報的需求：自製的元件可以加入現有的元件分類，預設在自製元件區
+    func testCustomPartsCanMoveIntoALibraryCategory() throws {
+        let c = CustomCircuitStore.shared.add(name: "我的電阻", data: data.extracted([left]))
+        XCTAssertNil(c.section, "預設在自訂區")
+        let lib = CircuitLibraryView(frame: CGRect(x: 0, y: 0, width: 600, height: 200))
+        func has(_ v: UIView) -> Bool {
+            v.accessibilityLabel == "我的電阻" || v.subviews.contains(where: has)
+        }
+        let passive = try XCTUnwrap(CircuitLibraryView.sections.firstIndex { $0.key == "passive" })
+        XCTAssertTrue(has(lib.customBody))
+        XCTAssertFalse(has(lib.sectionBodies[passive]))
+        let button = try XCTUnwrap(lib.visibleTiles.first { $0.accessibilityLabel == "我的電阻" } ?? findButton("我的電阻", in: lib))
+        let move = try XCTUnwrap(button.menu?.children.compactMap { $0 as? UIMenu }.first { $0.title == "移到分類" }, "長按選單有「移到分類」")
+        XCTAssertEqual(move.children.count, CircuitLibraryView.sections.count + 1, "自訂區＋每個分類")
+
+        CustomCircuitStore.shared.move(c.id, toSection: "passive")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertTrue(has(lib.sectionBodies[passive]), "放進被動元件")
+        XCTAssertFalse(has(lib.customBody), "自訂區就沒有了")
+        XCTAssertEqual(CircuitLibraryView.customCircuits(in: "passive", from: CustomCircuitStore.shared.circuits).map(\.id), [c.id])
+        // 分類不存在了（例如改版拿掉）：回到自訂區
+        CustomCircuitStore.shared.move(c.id, toSection: "沒有這個分類")
+        XCTAssertEqual(CircuitLibraryView.customCircuits(in: nil, from: CustomCircuitStore.shared.circuits).map(\.id), [c.id])
+    }
+
+    private func findButton(_ label: String, in v: UIView) -> UIButton? {
+        if let b = v as? UIButton, b.accessibilityLabel == label { return b }
+        for s in v.subviews { if let b = findButton(label, in: s) { return b } }
+        return nil
     }
 
     // MARK: 改名
@@ -426,7 +486,7 @@ final class CircuitGroupTests: XCTestCase {
     // MARK: 新元件
 
     func testEveryPartHasASymbolPinsOnTheGridAndAPlaceInTheLibrary() {
-        let listed = CircuitLibraryView.sections.flatMap(\.1)
+        let listed = CircuitLibraryView.sections.flatMap(\.parts)
         XCTAssertEqual(listed.count, Set(listed).count, "不重複")
         XCTAssertEqual(Set(listed), Set(CircuitPart.builtIn), "每個元件都在元件庫裡")
         for part in CircuitPart.builtIn {

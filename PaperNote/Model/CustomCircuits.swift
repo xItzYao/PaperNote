@@ -5,6 +5,8 @@ struct CustomCircuit: Codable, Equatable, Identifiable {
     var id = UUID()
     var name: String
     var data: CircuitData
+    /// 放在元件庫的哪個分類（CircuitLibraryView.sections 的 key）；nil＝自訂電路圖那一區
+    var section: String? = nil
 
     /// 自己畫的元件（不是存起來的一段電路）
     var symbol: CircuitSymbol? {
@@ -65,6 +67,13 @@ final class CustomCircuitStore {
     func rename(_ id: UUID, to name: String) {
         guard let i = circuits.firstIndex(where: { $0.id == id }) else { return }
         circuits[i].name = name
+        persist()
+    }
+
+    /// 移到元件庫的另一個分類（nil＝自訂電路圖那一區）
+    func move(_ id: UUID, toSection key: String?) {
+        guard let i = circuits.firstIndex(where: { $0.id == id }) else { return }
+        circuits[i].section = key
         persist()
     }
 

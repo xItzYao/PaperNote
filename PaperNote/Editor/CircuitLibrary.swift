@@ -16,19 +16,27 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
     var onDeleteCustom: ((UUID) -> Void)?
     var currentMode: CircuitMode = .select { didSet { refreshHighlight() } }
 
-    /// 分類參考 CircuiTikZ
-    static let sections: [(String, [CircuitPart])] = [
-        (L("被動元件"), [.resistor, .capacitor, .inductor, .potentiometer, .variableResistor, .polarCapacitor, .variableCapacitor, .transformer, .fuse]),
-        (L("接地、電源"), [.ground, .vdd, .vss, .signalGround, .chassisGround]),
-        (L("訊號源"), [.voltageSource, .currentSource, .battery, .sineSource, .squareSource, .controlledVoltageSource, .controlledCurrentSource]),
-        (L("二極體"), [.diode, .schottky, .zener, .tunnelDiode, .led, .photodiode, .varicap]),
-        (L("電晶體"), [.nmos, .pmos, .nmos4, .pmos4, .npn, .pnp, .njfet, .pjfet, .nigbt, .pigbt]),
-        (L("放大器"), [.opAmp, .fdOpAmp, .ota]),
-        (L("開關、儀表"), [.switchOpen, .switchClosed, .pushButton, .spdt, .ammeter, .voltmeter, .ohmmeter, .lamp]),
-        (L("邏輯閘"), [.andGate, .orGate, .notGate, .bufferGate, .nandGate, .norGate, .xorGate, .xnorGate]),
-        (L("數位方塊"), [.dFlipFlop, .dLatch, .mux, .decoder, .encoder, .alu, .adc, .dac]),
-        (L("其他"), [.mixer, .antenna]),
+    /// 分類參考 CircuiTikZ。key 不隨語言改變（自訂元件記住放在哪個分類用）
+    static let sections: [(key: String, name: String, parts: [CircuitPart])] = [
+        ("passive", L("被動元件"), [.resistor, .capacitor, .inductor, .potentiometer, .variableResistor, .polarCapacitor, .variableCapacitor, .transformer, .fuse]),
+        ("supply", L("接地、電源"), [.ground, .vdd, .vss, .signalGround, .chassisGround]),
+        ("sources", L("訊號源"), [.voltageSource, .currentSource, .battery, .sineSource, .squareSource, .controlledVoltageSource, .controlledCurrentSource]),
+        ("diodes", L("二極體"), [.diode, .schottky, .zener, .tunnelDiode, .led, .photodiode, .varicap]),
+        ("transistors", L("電晶體"), [.nmos, .pmos, .nmos4, .pmos4, .npn, .pnp, .njfet, .pjfet, .nigbt, .pigbt]),
+        ("amplifiers", L("放大器"), [.opAmp, .fdOpAmp, .ota]),
+        ("switches", L("開關、儀表"), [.switchOpen, .switchClosed, .pushButton, .spdt, .ammeter, .voltmeter, .ohmmeter, .lamp]),
+        ("logic", L("邏輯閘"), [.andGate, .orGate, .notGate, .bufferGate, .nandGate, .norGate, .xorGate, .xnorGate]),
+        ("digital", L("數位方塊"), [.dFlipFlop, .dLatch, .mux, .decoder, .encoder, .alu, .adc, .dac]),
+        ("other", L("其他"), [.mixer, .antenna]),
     ]
+
+    /// 放在這個分類的自訂元件（nil＝自訂電路圖那一區：沒選分類、或分類已經不存在的）
+    static func customCircuits(in key: String?, from all: [CustomCircuit]) -> [CustomCircuit] {
+        all.filter { c in
+            guard let key else { return !sections.contains { $0.key == c.section } }
+            return c.section == key
+        }
+    }
     static let customSectionName = L("自訂電路圖")
     /// 收起來的分類（記在本機）
     private static let collapsedKey = "circuitLibrary.collapsedSections"
@@ -64,8 +72,11 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
     private var modeButtons: [(CircuitMode, UIButton)] = []
     private var ghost: UIImageView?
     /// 自訂電路圖那一區（放左邊、放下面各一份），內容會變
-    private let customBody = UIStackView()
+    private(set) var customBody = UIStackView()
     private let customColumns = UIStackView()
+    /// 各分類的元件（放左邊、放下面各一份；和 sections 同順序）：自訂元件可以放進來，內容會變
+    private(set) var sectionBodies: [UIStackView] = []
+    private var sectionColumns: [UIStackView] = []
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -116,22 +127,19 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
         ])
         // 各分類：標題列可以點開、收起，元件兩欄
         let collapsedNames = Set(UserDefaults.standard.stringArray(forKey: Self.collapsedKey) ?? [])
-        for (name, parts) in Self.sections {
+        for s in Self.sections {
             let body = UIStackView()
             body.axis = .vertical
             body.spacing = 4
-            var i = 0
-            while i < parts.count {
-                let pair = parts[i..<min(i + 2, parts.count)].map(partButton)
-                body.addArrangedSubview(row(pair.count == 2 ? pair : pair + [UIView()]))
-                i += 2
-            }
-            body.isHidden = collapsedNames.contains(name)
+            body.isHidden = collapsedNames.contains(s.name)
             // 動畫中途內容不要畫到下面的分類上
             body.clipsToBounds = true
-            stack.addArrangedSubview(sectionHeader(name, body: body))
+            stack.addArrangedSubview(sectionHeader(s.name, body: body))
             stack.addArrangedSubview(body)
-            bottomStack.addArrangedSubview(bottomSection(name, parts))
+            let columns = UIStackView()
+            bottomStack.addArrangedSubview(bottomSection(s.name, columns: columns))
+            sectionBodies.append(body)
+            sectionColumns.append(columns)
         }
         // 自訂電路圖：排在最後
         customBody.axis = .vertical
@@ -219,13 +227,18 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
         collapseButton.accessibilityLabel = collapsed ? L("展開元件庫") : L("收合元件庫")
     }
 
-    /// 放下面時的一個分類：標題，底下元件由上往下排滿兩列再換下一行
-    private func bottomSection(_ name: String, _ parts: [CircuitPart]) -> UIView {
-        let columns = UIStackView()
-        fillBottomColumns(columns, parts.map(partButton))
-        return bottomSection(name, columns: columns)
+    /// 放左邊時：兩個一排
+    private func fillRows(_ body: UIStackView, _ tiles: [UIView]) {
+        body.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        var i = 0
+        while i < tiles.count {
+            let pair = Array(tiles[i..<min(i + 2, tiles.count)])
+            body.addArrangedSubview(row(pair.count == 2 ? pair : pair + [UIView()]))
+            i += 2
+        }
     }
 
+    /// 放下面時的一個分類：底下元件由上往下排滿兩列再換下一行
     private func fillBottomColumns(_ columns: UIStackView, _ tiles: [UIView]) {
         columns.arrangedSubviews.forEach { $0.removeFromSuperview() }
         columns.spacing = 4
@@ -347,20 +360,30 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
         reloadCustomCircuits()
     }
 
-    /// 放左邊、放下面的按鈕各做一份
+    /// 放左邊、放下面的按鈕各做一份。自訂元件排在它所在分類的最後
     func reloadCustomCircuits() {
-        modeButtons.removeAll { if case .placeCustom = $0.0 { return true }; return false }
+        modeButtons.removeAll()
         let circuits = CustomCircuitStore.shared.circuits
-        customBody.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        let left = circuits.map(customButton) + [drawSymbolButton(), addCustomButton()]
-        var i = 0
-        while i < left.count {
-            let pair = Array(left[i..<min(i + 2, left.count)])
-            customBody.addArrangedSubview(row(pair.count == 2 ? pair : pair + [UIView()]))
-            i += 2
+        for (i, s) in Self.sections.enumerated() {
+            let customs = Self.customCircuits(in: s.key, from: circuits)
+            fillRows(sectionBodies[i], s.parts.map(partButton) + customs.map(customButton))
+            fillBottomColumns(sectionColumns[i], s.parts.map(partButton) + customs.map(customButton))
         }
-        fillBottomColumns(customColumns, circuits.map(customButton) + [drawSymbolButton(), addCustomButton()])
+        let mine = Self.customCircuits(in: nil, from: circuits)
+        fillRows(customBody, mine.map(customButton) + [drawSymbolButton(), addCustomButton()])
+        fillBottomColumns(customColumns, mine.map(customButton) + [drawSymbolButton(), addCustomButton()])
         refreshHighlight()
+    }
+
+    /// 長按選單的「移到分類」：自訂電路圖那一區或任何一個元件分類
+    private func moveMenu(_ c: CustomCircuit) -> UIMenu {
+        let current = Self.sections.contains { $0.key == c.section } ? c.section : nil
+        let targets: [(key: String?, name: String)] = [(nil, Self.customSectionName)] + Self.sections.map { ($0.key, $0.name) }
+        return UIMenu(title: L("移到分類"), image: UIImage(systemName: "folder"), children: targets.map { t in
+            UIAction(title: t.name, state: t.key == current ? .on : .off) { _ in
+                CustomCircuitStore.shared.move(c.id, toSection: t.key)
+            }
+        })
     }
 
     private func drawSymbolButton() -> UIButton {
@@ -389,6 +412,7 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
         let edit = c.symbol == nil ? [] : [UIAction(title: L("編輯符號"), image: UIImage(systemName: "pencil.and.outline")) { [weak self] _ in self?.onDrawSymbol?(c.id) }]
         b.menu = UIMenu(children: edit + [
             UIAction(title: L("改名"), image: UIImage(systemName: "pencil")) { [weak self] _ in self?.onRenameCustom?(c.id) },
+            moveMenu(c),
             UIAction(title: L("刪除"), image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in self?.onDeleteCustom?(c.id) },
         ])
         modeButtons.append((.placeCustom(c.id), b))

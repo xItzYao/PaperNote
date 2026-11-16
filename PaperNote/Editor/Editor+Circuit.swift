@@ -222,20 +222,6 @@ extension NotebookViewController {
         }
     }
 
-    /// 手指拖得動的東西：元件（群組就是整組）。導線、控制點要用 Pencil，手指按在上面是捲動頁面
-    private func circuitFingerDragTarget(at p: CGPoint) -> (ElementRef, CircuitDragKind)? {
-        guard circuitMode != .erase, let hit = circuitHit(at: p), let info = circuitInfo(hit.ref) else { return nil }
-        switch circuitSelection(for: hit.selection, in: hit.ref, data: info.data) {
-        case let .items(ids): return (hit.ref, .items(ids))
-        case let .component(id): return (hit.ref, .component(id))
-        case .wire: return nil
-        }
-    }
-
-    func circuitAcceptsFinger(at p: CGPoint) -> Bool {
-        circuitFingerDragTarget(at: p) != nil
-    }
-
     // MARK: 存檔（整理邊界）
 
     /// 依內容重新計算物件外框，內容座標保持對齊格點
@@ -349,6 +335,8 @@ extension NotebookViewController {
         if let ref = circuitAt(p, margin: 60), var d = circuitInfo(ref)?.data {
             comp.position = CircuitData.snap(circuitLocal(p, ref))
             d.components.append(comp)
+            // 接腳放在導線上：接上（共點），不是跨線
+            d.connectPins(CircuitGeometry.pins(comp))
             circuitTarget = ref
             updateCircuit(ref, data: d)
         } else {
@@ -373,6 +361,8 @@ extension NotebookViewController {
             stamp.offset(by: CircuitData.snap(circuitLocal(p, ref)))
             d.components += stamp.components
             d.wires += stamp.wires
+            // 接腳放在原本的導線上：接上（一起放上來的線照原樣）
+            d.connectPins(stamp.pins(of: Set(stamp.components.map(\.id))), ignoring: Set(stamp.wires.map(\.id)))
             circuitTarget = ref
             circuitSel = sel
             updateCircuit(ref, data: d)
@@ -473,7 +463,6 @@ extension NotebookViewController {
         // 點在小圓鈕、鎖頭上：當成點擊
         if let h = circuitPartHandleCenters(), [h.rotate, h.flip, h.copy, h.delete].contains(where: { p.distance(to: $0) <= h.radius }) { return false }
         if lockIconHit(at: p) != nil { return false }
-        if circuitPanByFinger { return circuitAcceptsFinger(at: p) }
         switch circuitMode {
         // 選取模式從空白處開始是框選
         case .wire, .erase, .select: return true
@@ -501,11 +490,6 @@ extension NotebookViewController {
         if g.state == .began {
             // 起點用筆尖剛碰到的位置，接線才會從碰到的那條線開始
             let start = panTouchDownPoint(g)
-            // 手指一律是拖元件，不管現在是什麼模式
-            if circuitPanByFinger {
-                handleSelectDrag(g, start)
-                return
-            }
             switch circuitMode {
             case .wire:
                 wireDraft = WireDraft(ref: circuitAt(start, margin: 80), ink: [start])
@@ -640,7 +624,7 @@ extension NotebookViewController {
     private func handleSelectDrag(_ g: UIPanGestureRecognizer, _ p: CGPoint) {
         switch g.state {
         case .began:
-            guard case let (ref, kind)? = circuitPanByFinger ? circuitFingerDragTarget(at: p) : circuitDragTarget(at: p),
+            guard case let (ref, kind)? = circuitDragTarget(at: p),
                   let info = circuitInfo(ref), let origin = circuitOrigin(ref) else { return }
             circuitTarget = ref
             let sel: CircuitSelection
@@ -694,9 +678,13 @@ extension NotebookViewController {
             // 導線跟著接腳走
             guard let ci = data.components.firstIndex(where: { $0.id == id }) else { return nil }
             let oldPins = CircuitGeometry.pins(data.components[ci])
+            let through = oldPins.map(data.wiresThrough)
             let orig = data.components[ci].position
             data.components[ci].position = CircuitData.snap(CGPoint(x: orig.x + delta.x, y: orig.y + delta.y))
-            data.reattach(from: oldPins, to: CircuitGeometry.pins(data.components[ci]))
+            let newPins = CircuitGeometry.pins(data.components[ci])
+            data.reattach(from: oldPins, to: newPins)
+            // 接腳放到導線上：接上（共點）
+            data.connectPins(newPins, before: through)
         case let .wireSegment(id, i):
             guard let wi = data.wires.firstIndex(where: { $0.id == id }), i + 1 < data.wires[wi].points.count else { return nil }
             let pts = data.wires[wi].points
@@ -727,7 +715,9 @@ extension NotebookViewController {
             guard let ci = data.components.firstIndex(where: { $0.id == id }), let b = data.components[ci].nameBounds else { return nil }
             data.components[ci].nameSize = CircuitText.resized(data.components[ci].nameFont, bounds: b, drag: delta)
         case let .items(ids):
+            let through = data.pins(of: ids).map(data.wiresThrough)
             data.moveItems(ids, by: gridDelta)
+            data.connectPins(data.pins(of: ids), before: through)
         }
         data.wires.removeAll { $0.points.count < 2 }
         var e = d.original
@@ -873,6 +863,7 @@ extension NotebookViewController {
         circuitPartStyle[new.part] = (new.rotation, new.flipH, new.flipV)
         if new.part.hasVariableInputs { circuitGateInputs[new.part] = new.inputs }
         let oldPins = CircuitGeometry.pins(old), newPins = CircuitGeometry.pins(new)
+        var through = oldPins.map(data.wiresThrough)
         if oldPins.count == newPins.count {
             data.reattach(from: oldPins, to: newPins)
         } else {
@@ -886,7 +877,10 @@ extension NotebookViewController {
                 }
             }
             data.reattach(from: from, to: to)
+            through = newNames.map { name in oldNames.firstIndex(of: name).map { through[$0] } ?? [] }
         }
+        // 旋轉、翻轉後接腳落在導線上：接上（共點）
+        data.connectPins(newPins, before: through)
         updateCircuit(ref, data: data)
     }
 
@@ -1118,6 +1112,48 @@ extension NotebookViewController {
         present(vc, animated: true)
     }
 
+    /// 網表（給 AI 看接線最清楚）：存成文字檔分享
+    func exportCircuitNetlist(_ ref: ElementRef, from source: UIView? = nil) {
+        guard let info = circuitInfo(ref) else { return }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(L("電路圖網表.txt"))
+        do {
+            try info.data.netlist().write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            showMessage(L("匯出失敗"), error.localizedDescription)
+            return
+        }
+        let vc = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        if let source {
+            vc.popoverPresentationController?.sourceView = source
+            vc.popoverPresentationController?.sourceRect = source.bounds
+        } else {
+            vc.popoverPresentationController?.sourceView = view
+            vc.popoverPresentationController?.sourceRect = docRectInView(docFrame(of: info.element, pageIndex: info.pi))
+        }
+        present(vc, animated: true)
+    }
+
+    /// 網表拷貝到剪貼簿：直接貼給 AI
+    func copyCircuitNetlist(_ ref: ElementRef) {
+        guard let info = circuitInfo(ref) else { return }
+        UIPasteboard.general.string = info.data.netlist()
+    }
+
+    /// 匯出的選單：SVG、網表
+    func circuitExportMenu(_ ref: ElementRef, from source: @escaping () -> UIView?) -> [UIMenuElement] {
+        [
+            UIAction(title: L("匯出 SVG"), image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
+                self?.exportCircuitSVG(ref, from: source())
+            },
+            UIAction(title: L("匯出網表（netlist）"), image: UIImage(systemName: "list.bullet.rectangle")) { [weak self] _ in
+                self?.exportCircuitNetlist(ref, from: source())
+            },
+            UIAction(title: L("拷貝網表給 AI"), image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
+                self?.copyCircuitNetlist(ref)
+            },
+        ]
+    }
+
     var selectedCircuitComponent: CircuitComponent? {
         guard let ref = circuitTarget, case let .component(id)? = circuitSel else { return nil }
         return circuitInfo(ref)?.data.components.first { $0.id == id }
@@ -1255,9 +1291,11 @@ extension NotebookViewController {
         }
         if let ref = circuitTarget, circuitInfo(ref) != nil {
             views.append(toolbarSeparator())
-            let b = makeButton(symbol: "square.and.arrow.up", title: L("匯出 SVG"), action: nil)
-            b.accessibilityLabel = L("匯出 SVG")
-            b.addAction(UIAction { [weak self, weak b] _ in self?.exportCircuitSVG(ref, from: b) }, for: .touchUpInside)
+            // 匯出：SVG、網表（給 AI）
+            let b = makeButton(symbol: "square.and.arrow.up", title: L("匯出"), action: nil)
+            b.accessibilityLabel = L("匯出電路圖")
+            b.menu = UIMenu(children: circuitExportMenu(ref) { [weak b] in b })
+            b.showsMenuAsPrimaryAction = true
             views.append(b)
         }
         return views

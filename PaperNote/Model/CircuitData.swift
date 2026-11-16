@@ -957,6 +957,41 @@ extension CircuitData {
     /// 所有接腳位置
     var allPins: [CGPoint] { components.flatMap { CircuitGeometry.pins($0) } }
 
+    /// 這幾個元件的接腳（照元件的順序）
+    func pins(of ids: Set<UUID>) -> [CGPoint] {
+        components.filter { ids.contains($0.id) }.flatMap { CircuitGeometry.pins($0) }
+    }
+
+    /// 從中間經過 p 的導線（線頭、轉角停在 p 的不算）
+    func wiresThrough(_ p: CGPoint) -> Set<UUID> {
+        Set(wires.filter { w in zip(w.points, w.points.dropFirst()).contains { Self.segment($0, $1, contains: p) } }.map(\.id))
+    }
+
+    /// 元件放上去、移動、旋轉後，接腳落在導線中間：在接腳那裡把線切成兩條，兩個線頭都停在接腳上，就接上了（共點）。
+    /// 原本就從這支接腳中間經過的線（before，和 pins 一一對應；例如 NAND 裡跨過 PMOS 接腳的輸入線）照樣是跨線，不切；
+    /// ignoring 裡的線（一起放上來的）也不切
+    mutating func connectPins(_ pins: [CGPoint], before: [Set<UUID>]? = nil, ignoring: Set<UUID> = []) {
+        for (i, p) in pins.enumerated() {
+            let kept = before.flatMap { $0.indices.contains(i) ? $0[i] : nil } ?? []
+            for id in wiresThrough(p).subtracting(kept).subtracting(ignoring) { splitWire(id, at: p) }
+        }
+    }
+
+    /// 在 p（某一段的中間）把導線切成兩條；名稱留在前半段
+    private mutating func splitWire(_ id: UUID, at p: CGPoint) {
+        guard let wi = wires.firstIndex(where: { $0.id == id }) else { return }
+        let pts = wires[wi].points
+        guard let k = (0..<max(0, pts.count - 1)).first(where: { Self.segment(pts[$0], pts[$0 + 1], contains: p) }) else { return }
+        var second = wires[wi]
+        second.id = UUID()
+        second.points = [p] + pts[(k + 1)...]
+        second.label = nil
+        second.labelPosition = nil
+        second.labelSize = nil
+        wires[wi].points = Array(pts[0...k]) + [p]
+        wires.insert(second, at: wi + 1)
+    }
+
     /// 某一點上接在一起的情形：碰到這點的導線與接腳分成幾組，同一組的才算接上
     private struct Node {
         /// 導線編號 → 在這點往外走的方向
@@ -1022,6 +1057,163 @@ extension CircuitData {
     /// 導線的頭尾、轉角與接腳的位置（分岔只會出現在這些點）
     private func vertexPoints(_ pins: [(point: CGPoint, lead: CGPoint)]) -> Set<PointKey> {
         Set(wires.flatMap { $0.points }.map(PointKey.init) + pins.map { PointKey($0.point) })
+    }
+
+    // MARK: 網表（netlist）
+
+    /// 電氣上接在一起的分組（和畫面上的接點、跨線同一套規則）：每支接腳（照元件、接腳的順序）、每條導線屬於哪一組
+    func nets() -> (pins: [Int], wires: [Int]) {
+        let pins = pinsWithLeads
+        var parent = Array(0..<(wires.count + pins.count))
+        func find(_ x: Int) -> Int {
+            var x = x
+            while parent[x] != x { parent[x] = parent[parent[x]]; x = parent[x] }
+            return x
+        }
+        for key in vertexPoints(pins) {
+            let n = node(at: key.point, pins: pins)
+            for (x, g) in n.group { parent[find(x)] = find(g) }
+        }
+        let roots = (0..<parent.count).map(find)
+        return (Array(roots[wires.count...]), Array(roots[..<wires.count]))
+    }
+
+    /// 網表用的接腳名稱：電晶體 G/D/S、B/C/E，二極體 A/K，電源 +/-，運算放大器 IN-/IN+/OUT…；其他照元件的接腳名稱
+    static func netlistPinNames(_ c: CircuitComponent) -> [String] {
+        let generic = CircuitGeometry.pinNames(c)
+        let named: [String]?
+        switch c.part {
+        case .nmos, .pmos, .njfet, .pjfet: named = ["G", "D", "S"]
+        case .nmos4, .pmos4: named = ["G", "D", "S", "B"]
+        case .npn, .pnp: named = ["B", "C", "E"]
+        case .nigbt, .pigbt: named = ["G", "C", "E"]
+        case .diode, .schottky, .zener, .tunnelDiode, .led, .photodiode, .varicap: named = ["A", "K"]
+        case .voltageSource, .controlledVoltageSource, .battery, .polarCapacitor, .currentSource, .controlledCurrentSource:
+            named = ["+", "-"]
+        case .opAmp, .ota: named = ["IN-", "IN+", "OUT"]
+        case .fdOpAmp: named = ["IN-", "IN+", "OUT+", "OUT-"]
+        case .potentiometer: named = ["1", "2", "W"]
+        case .transformer: named = ["P1", "P2", "S1", "S2"]
+        case .spdt: named = ["COM", "A", "B"]
+        case .mixer: named = ["IN", "OUT", "LO"]
+        default:
+            named = c.part.isGate || generic.contains(where: { !$0.hasPrefix("P") }) ? nil : generic.indices.map { String($0 + 1) }
+        }
+        guard let named, named.count == generic.count else { return generic }
+        return named
+    }
+
+    /// 自動命名用的開頭字母（SPICE 慣例）
+    private static func netlistPrefix(_ part: CircuitPart) -> String {
+        switch part {
+        case .resistor, .potentiometer, .variableResistor: return "R"
+        case .capacitor, .polarCapacitor, .variableCapacitor: return "C"
+        case .inductor: return "L"
+        case .voltageSource, .battery, .sineSource, .squareSource: return "V"
+        case .controlledVoltageSource: return "E"
+        case .currentSource: return "I"
+        case .controlledCurrentSource: return "G"
+        case .diode, .schottky, .zener, .tunnelDiode, .led, .photodiode, .varicap: return "D"
+        case .nmos, .pmos, .nmos4, .pmos4: return "M"
+        case .npn, .pnp, .nigbt, .pigbt: return "Q"
+        case .njfet, .pjfet: return "J"
+        case .switchOpen, .switchClosed, .pushButton, .spdt: return "S"
+        case .fuse: return "F"
+        case .transformer: return "T"
+        default: return "U"
+        }
+    }
+
+    /// 接地、電源符號：不是元件，是幫那個節點命名
+    private static func supplyNetName(_ part: CircuitPart) -> String? {
+        switch part {
+        case .ground, .signalGround, .chassisGround: return "0"
+        case .vdd: return "VDD"
+        case .vss: return "VSS"
+        default: return nil
+        }
+    }
+
+    /// 名稱裡的下標、上標記號拿掉（R_1 → R1、V_{DD} → VDD），空白換成底線
+    private static func netlistName(_ s: String) -> String {
+        let t = s.filter { !"_^{}".contains($0) }.trimmingCharacters(in: .whitespaces)
+        return t.replacingOccurrences(of: " ", with: "_")
+    }
+
+    /// 給 AI（或 SPICE）看的網表：每個元件一行「名稱 種類 接腳=節點 …」，節點 0 是接地；最後列出每個節點接到哪些接腳。
+    /// 節點名稱：接地 0、電源符號 VDD／VSS、導線名稱，其他照順序 N1、N2…
+    func netlist(title: String = "PaperNote circuit") -> String {
+        let (pinNet, wireNet) = nets()
+        // 節點名稱
+        var names: [Int: String] = [:]
+        var pinIndex = 0
+        for c in components {
+            let count = CircuitGeometry.pins(c).count
+            if let s = Self.supplyNetName(c.part) {
+                for k in pinIndex..<(pinIndex + count) where names[pinNet[k]] != "0" { names[pinNet[k]] = s }
+            }
+            pinIndex += count
+        }
+        for (wi, w) in wires.enumerated() {
+            guard let label = w.label.map(Self.netlistName), !label.isEmpty, names[wireNet[wi]] == nil else { continue }
+            names[wireNet[wi]] = label
+        }
+        // 不同節點同名：加上 _2、_3
+        var used: [String: Int] = [:]
+        for net in names.keys.sorted() {
+            guard let n = names[net] else { continue }
+            used[n, default: 0] += 1
+            if used[n]! > 1 { names[net] = "\(n)_\(used[n]!)" }
+        }
+        var auto = 0
+        func netName(_ net: Int) -> String {
+            if let n = names[net] { return n }
+            repeat { auto += 1 } while names.values.contains("N\(auto)")
+            names[net] = "N\(auto)"
+            return names[net]!
+        }
+        // 元件名稱：有取名的照名稱，沒有的照 SPICE 慣例自動編號
+        var taken = Set(components.compactMap { $0.name.map(Self.netlistName) }.filter { !$0.isEmpty })
+        var counters: [String: Int] = [:]
+        var lines = ["* \(title) netlist",
+                     "* Format: <name> <type> <pin>=<node> ...  (node 0 = ground)",
+                     "* Pins: MOSFET/JFET G D S [B], BJT B C E, IGBT G C E, diode A(anode) K(cathode),",
+                     "*       sources and polarized parts + -, current source arrow points from + to -, op-amp IN- IN+ OUT"]
+        var members: [Int: [String]] = [:]
+        var order: [Int] = []
+        pinIndex = 0
+        for c in components {
+            let count = CircuitGeometry.pins(c).count
+            defer { pinIndex += count }
+            if Self.supplyNetName(c.part) != nil { continue }
+            var name = c.name.map(Self.netlistName) ?? ""
+            if name.isEmpty {
+                let prefix = Self.netlistPrefix(c.part)
+                repeat {
+                    counters[prefix, default: 0] += 1
+                    name = "\(prefix)\(counters[prefix]!)"
+                } while taken.contains(name)
+                taken.insert(name)
+            }
+            var type = c.part.rawValue
+            if c.part.hasVariableInputs { type += "(\(c.inputs))" }
+            let pinNames = Self.netlistPinNames(c)
+            var fields = [name, type]
+            for (k, pn) in pinNames.enumerated() {
+                let net = pinNet[pinIndex + k]
+                if members[net] == nil { order.append(net) }
+                members[net, default: []].append("\(name).\(pn)")
+                fields.append("\(pn)=\(netName(net))")
+            }
+            lines.append(fields.joined(separator: " "))
+        }
+        lines.append("")
+        lines.append("* Nodes")
+        for net in order.sorted(by: { netName($0).localizedStandardCompare(netName($1)) == .orderedAscending }) {
+            lines.append("* \(netName(net)): \(members[net]!.joined(separator: ", "))")
+        }
+        lines.append(".end")
+        return lines.joined(separator: "\n") + "\n"
     }
 
     /// 需要畫實心圓點的接點：接在一起的線在這裡分成 3 個以上的方向（分岔的地方）。
