@@ -427,6 +427,7 @@ extension NotebookViewController {
                 circuitTarget = hit.ref
                 circuitSel = sel
                 deleteCircuitSelection()
+                returnFromCircuitEraserIfNeeded()
             }
         case .select, .wire:
             let old = circuitSel, oldTarget = circuitTarget
@@ -573,6 +574,7 @@ extension NotebookViewController {
         case .ended:
             markForErasing(to: p)
             commitCircuitErase()
+            returnFromCircuitEraserIfNeeded()
         default:
             clearCircuitErasing()
         }
@@ -598,6 +600,12 @@ extension NotebookViewController {
         for ref in changed {
             pageViews[ref.pageID]?.setCircuitErasing(ref.elementID, circuitErasing[ref] ?? [])
         }
+    }
+
+    /// 設定「電路圖橡皮擦擦完切回」：擦完一筆（或點一下刪掉）就回到原本的模式
+    private func returnFromCircuitEraserIfNeeded() {
+        guard settings.circuitEraserAutoReturn, circuitMode == .erase else { return }
+        selectCircuitMode(circuitModeBeforeErase)
     }
 
     /// 筆尖離開：真的刪掉（一次復原）
@@ -1012,6 +1020,8 @@ extension NotebookViewController {
               let c = data.components.first(where: { $0.id == id }) else { return }
         var copy = c
         copy.id = UUID()
+        // 之後放的同種元件也照這個方向、鏡像
+        circuitPartStyle[c.part] = (c.rotation, c.flipH, c.flipV)
         let g = CircuitData.grid
         copy.position.y += ((CircuitGeometry.bounds(c).height + g) / g).rounded(.up) * g
         data.components.append(copy)
@@ -1229,6 +1239,19 @@ extension NotebookViewController {
         // 選取、接線、橡皮擦（從元件庫點的元件也是一種模式：都不亮）
         var views: [UIView] = [circuitModeButton("cursorarrow", L("選取"), .select), circuitModeButton("line.diagonal", L("接線"), .wire),
                                circuitModeButton("eraser", L("橡皮擦"), .erase)]
+        if circuitMode == .erase {
+            // 橡皮擦：擦完一筆要不要切回原本的模式
+            let label = hintLabel(L("擦完切回"))
+            label.textColor = .label
+            let toggle = UISwitch()
+            toggle.isOn = settings.circuitEraserAutoReturn
+            toggle.accessibilityLabel = L("電路圖橡皮擦擦完切回")
+            toggle.addAction(UIAction { [weak self, weak toggle] _ in
+                self?.settings.circuitEraserAutoReturn = toggle?.isOn ?? false
+            }, for: .valueChanged)
+            views.append(label)
+            views.append(toggle)
+        }
         func action(_ symbol: String, _ label: String, _ handler: @escaping () -> Void) -> UIButton {
             let b = makeButton(symbol: symbol, title: nil, action: nil)
             b.accessibilityLabel = label
@@ -1328,18 +1351,15 @@ extension NotebookViewController {
         circuitLibrary.setOnLeft(left)
     }
 
+    /// 切換模式不跳提示（按鈕會亮起來）
     func selectCircuitMode(_ mode: CircuitMode) {
+        // 記住橡皮擦之前的模式：筆身再點兩下、或擦完自動切回時回到這裡
+        if mode == .erase, circuitMode != .erase { circuitModeBeforeErase = circuitMode }
         circuitMode = mode
-        if case let .place(part) = mode {
-            circuitSel = nil
-            showToast(settings.circuitContinuousPlace ? L("連續點頁面放置\(part.title)，按「選取」結束") : L("點頁面放置\(part.title)"))
+        switch mode {
+        case .place, .placeCustom, .erase: circuitSel = nil
+        case .select, .wire: break
         }
-        if case let .placeCustom(id) = mode {
-            circuitSel = nil
-            let name = CustomCircuitStore.shared.circuit(id)?.name ?? L("自訂電路")
-            showToast(settings.circuitContinuousPlace ? L("連續點頁面放置\(name)，按「選取」結束") : L("點頁面放置\(name)"))
-        }
-        if mode == .erase { circuitSel = nil }
         rebuildSubBar()
         updateCircuitChrome()
     }

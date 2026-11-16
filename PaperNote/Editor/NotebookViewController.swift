@@ -139,6 +139,11 @@ final class EditorSettings {
         get { bool("circuitContinuousPlace", true) }
         set { d.set(newValue, forKey: "circuitContinuousPlace") }
     }
+    /// 電路圖的橡皮擦擦完一筆就切回原本的模式（選取、接線或放置元件）
+    var circuitEraserAutoReturn: Bool {
+        get { bool("circuitEraserAutoReturn", false) }
+        set { d.set(newValue, forKey: "circuitEraserAutoReturn") }
+    }
     /// 電路元件庫放左邊；預設放下面
     var circuitLibraryOnLeft: Bool {
         get { bool("circuitLibraryOnLeft", false) }
@@ -245,7 +250,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var uiTestInk: UILabel?
     /// PencilKit 開始書寫的時間（收尾後清掉）；下筆時還沒清掉就代表上一筆卡住了
     var pkUsingSince: CFTimeInterval?
-    /// 筆身點兩下切到橡皮擦前的模式（再點兩下切回來）
+    /// 切到橡皮擦前的模式（筆身再點兩下、或擦完自動切回時回到這裡）
     var circuitModeBeforeErase: CircuitMode = .select
     /// 橡皮擦這一筆擦到的元件和導線：筆尖離開才刪
     var circuitErasing: [ElementRef: Set<UUID>] = [:]

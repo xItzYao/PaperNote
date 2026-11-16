@@ -309,6 +309,20 @@ final class CircuitGroupTests: XCTestCase {
         XCTAssertGreaterThan(data.subset(ids).contentBounds.minY - (data.subset([left, right, bridge]).contentBounds.maxY - bottom), bottom - 1, "放在下面、不重疊")
     }
 
+    /// 複製一整組：每個元件的方向、鏡像都和原本的一樣
+    func testCopyingAGroupKeepsEachPartsOrientation() throws {
+        marqueeBothResistors()
+        editor.transformCircuitSelection(.rotate)
+        editor.transformCircuitSelection(.flipH)
+        let originals = data.components.filter { [left, right].contains($0.id) }
+        editor.copySelectedComponent()
+        guard case let .items(ids)? = editor.circuitSel else { return XCTFail("選起新的") }
+        let copies = data.components.filter { ids.contains($0.id) }
+        XCTAssertEqual(copies.count, 2)
+        XCTAssertEqual(Set(copies.map { "\($0.rotation) \($0.flipH) \($0.flipV)" }),
+                       Set(originals.map { "\($0.rotation) \($0.flipH) \($0.flipV)" }))
+    }
+
     func testGroupWiresAreNotJoinedWithOutsideWires() {
         var d = CircuitData()
         var a = CircuitWire(points: [CGPoint(x: 0, y: 0), CGPoint(x: 50, y: 0)])

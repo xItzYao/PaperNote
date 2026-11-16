@@ -493,6 +493,97 @@ final class CircuitEditingTests: XCTestCase {
         }
     }
 
+    /// 回報的需求：電路圖的橡皮擦可以設定擦完就換回去
+    func testEraserCanSwitchBackAfterErasing() throws {
+        let saved = editor.settings.circuitEraserAutoReturn
+        defer { editor.settings.circuitEraserAutoReturn = saved }
+        editor.settings.circuitEraserAutoReturn = false
+        editor.selectCircuitMode(.wire)
+        // 工具列的橡皮擦按鈕（不是筆身點兩下）也記得原本的模式
+        try XCTUnwrap(editor.buildCircuitRibbon().compactMap { $0 as? UIButton }.first { $0.accessibilityLabel == "橡皮擦" })
+            .sendActions(for: .touchUpInside)
+        XCTAssertEqual(editor.circuitMode, .erase)
+        let toggle = try XCTUnwrap(editor.buildCircuitRibbon().compactMap { $0 as? UISwitch }.first { $0.accessibilityLabel == "電路圖橡皮擦擦完切回" },
+                                   "橡皮擦旁邊可以調")
+        XCTAssertFalse(toggle.isOn)
+        toggle.isOn = true
+        toggle.sendActions(for: .valueChanged)
+        XCTAssertTrue(editor.settings.circuitEraserAutoReturn)
+
+        TouchPan().drag(from: onWire(20), to: onWire(60)) { editor.handleCircuitPan($0, $0.location(in: nil)) }
+        XCTAssertNil(wire, "照樣擦掉")
+        XCTAssertEqual(editor.circuitMode, .wire, "擦完一筆切回接線")
+        XCTAssertFalse(editor.buildCircuitRibbon().contains { $0 is UISwitch }, "不是橡皮擦就沒有這個開關")
+
+        // 點一下刪掉也一樣；放置元件的模式也回得去
+        editor.selectCircuitMode(.place(.capacitor))
+        editor.selectCircuitMode(.erase)
+        let c = try XCTUnwrap(part)
+        editor.handleCircuitTap(at: editor.circuitDoc(c.position, ref))
+        XCTAssertNil(editor.circuitInfo(ref), "刪掉了")
+        XCTAssertEqual(editor.circuitMode, .place(.capacitor))
+    }
+
+    func testEraserStaysWhenSwitchingBackIsOff() throws {
+        let saved = editor.settings.circuitEraserAutoReturn
+        defer { editor.settings.circuitEraserAutoReturn = saved }
+        editor.settings.circuitEraserAutoReturn = false
+        editor.selectCircuitMode(.wire)
+        editor.selectCircuitMode(.erase)
+        TouchPan().drag(from: onWire(20), to: onWire(60)) { editor.handleCircuitPan($0, $0.location(in: nil)) }
+        XCTAssertNil(wire)
+        XCTAssertEqual(editor.circuitMode, .erase)
+    }
+
+    /// 回報的需求：切換電路圖的工具不要跳下面的提示
+    func testSwitchingCircuitModesShowsNoToast() throws {
+        let toast = { self.editor.view.viewWithTag(9_001) }
+        toast()?.removeFromSuperview()
+        for mode: CircuitMode in [.wire, .erase, .place(.resistor), .select] {
+            editor.selectCircuitMode(mode)
+            XCTAssertNil(toast(), "\(mode)")
+        }
+        if UIPencilInteraction.preferredTapAction != .ignore {
+            editor.handlePencilDoubleTap()
+            XCTAssertEqual(editor.circuitMode, .erase)
+            XCTAssertNil(toast(), "筆身點兩下切到橡皮擦也不跳")
+        }
+    }
+
+    /// 回報的需求：複製出來的元件方向、鏡像和原本的一樣
+    func testCopyKeepsRotationAndMirroring() throws {
+        for (rotation, flipH, flipV) in [(90, true, false), (180, false, true), (270, true, true)] {
+            var d = try XCTUnwrap(data)
+            d.components[0].rotation = rotation
+            d.components[0].flipH = flipH
+            d.components[0].flipV = flipV
+            editor.updateCircuit(ref, data: d)
+            let c = try XCTUnwrap(part)
+            editor.circuitSel = nil
+            editor.handleCircuitTap(at: editor.circuitDoc(c.position, ref))
+            XCTAssertEqual(editor.circuitSel, .component(c.id))
+            let h = try XCTUnwrap(editor.circuitPartHandleCenters())
+            editor.handleCircuitTap(at: h.copy)
+            let copy = try XCTUnwrap(data?.components.first { $0.id != c.id })
+            XCTAssertEqual(copy.rotation, rotation)
+            XCTAssertEqual(copy.flipH, flipH)
+            XCTAssertEqual(copy.flipV, flipV)
+            XCTAssertEqual(try XCTUnwrap(part).rotation, rotation, "原本的不動")
+            // 接著放同一種元件也照這個方向
+            editor.selectCircuitMode(.place(.resistor))
+            editor.handleCircuitTap(at: CGPoint(x: frame.maxX + 30, y: frame.midY))
+            let placed = try XCTUnwrap(data?.components.last)
+            XCTAssertEqual(data?.components.count, 3, "放在同一張電路圖")
+            XCTAssertEqual([placed.rotation], [rotation])
+            XCTAssertEqual(placed.flipH, flipH)
+            XCTAssertEqual(placed.flipV, flipV)
+            editor.selectCircuitMode(.select)
+            var cleaned = try XCTUnwrap(data)
+            cleaned.components = [try XCTUnwrap(cleaned.components.first { $0.id == c.id })]
+            editor.updateCircuit(ref, data: cleaned)
+        }
+    }
+
     func testEraserButtonIsOnTheSecondRow() throws {
         let eraser = try XCTUnwrap(editor.buildCircuitRibbon().compactMap { $0 as? UIButton }.first { $0.accessibilityLabel == "橡皮擦" })
         eraser.sendActions(for: .touchUpInside)

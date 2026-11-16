@@ -1037,6 +1037,10 @@ extension NotebookViewController {
             UIAction(title: L("連續放置元件"), image: UIImage(systemName: "square.on.square"), state: s.circuitContinuousPlace ? .on : .off) { _ in
                 s.circuitContinuousPlace.toggle()
             },
+            UIAction(title: L("電路圖橡皮擦擦完切回"), image: UIImage(systemName: "eraser"), state: s.circuitEraserAutoReturn ? .on : .off) { [weak self] _ in
+                s.circuitEraserAutoReturn.toggle()
+                if self?.tool == .circuit { self?.rebuildSubBar() }
+            },
             UIAction(title: L("電路元件庫放左邊"), image: UIImage(systemName: "sidebar.left"), state: s.circuitLibraryOnLeft ? .on : .off) { [weak self] _ in
                 self?.setCircuitLibraryOnLeft(!s.circuitLibraryOnLeft)
             },

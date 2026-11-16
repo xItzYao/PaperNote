@@ -371,13 +371,7 @@ extension NotebookViewController: UIPencilInteractionDelegate {
         }
         // 電路工具：在橡皮擦和原本的模式（選取、接線或放置元件）之間切換
         if tool == .circuit {
-            if circuitMode == .erase {
-                selectCircuitMode(circuitModeBeforeErase)
-            } else {
-                circuitModeBeforeErase = circuitMode
-                selectCircuitMode(.erase)
-                showToast(L("橡皮擦（筆身點兩下切回）"))
-            }
+            selectCircuitMode(circuitMode == .erase ? circuitModeBeforeErase : .erase)
             return
         }
         if tool == .eraser {
