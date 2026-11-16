@@ -163,7 +163,11 @@ final class CircuitValueNumberingTests: XCTestCase {
         vc.setValuePrefix("n")
         vc.valueField.text = "100"
         vc.finish()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.6))
+        // 關掉視窗的動畫結束才存（模擬器慢的時候要等久一點）
+        let deadline = Date().addingTimeInterval(3)
+        while data?.components.first?.valueText == nil, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
         XCTAssertEqual(data?.components.first?.valueText, "100n")
     }
 
@@ -190,7 +194,8 @@ final class CircuitValueNumberingTests: XCTestCase {
         d.components = [r, far]
         d.wires = [w]
         // 只圈到電阻右半邊和導線的一段
-        let box = [CGPoint(x: 110, y: 160), CGPoint(x: 110, y: 80), CGPoint(x: 150, y: 80), CGPoint(x: 150, y: 160)]
+        // 左上 → 左下 → 右下 → 右上：逆時針
+        let box = [CGPoint(x: 110, y: 80), CGPoint(x: 110, y: 160), CGPoint(x: 150, y: 160), CGPoint(x: 150, y: 80)]
         XCTAssertFalse(CircuitData.lassoIsClockwise(box))
         XCTAssertEqual(d.touched(byLasso: box), [r.id, w.id])
         // 圈在元件裡面（沒有碰到外框）也算
