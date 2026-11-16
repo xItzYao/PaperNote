@@ -117,7 +117,7 @@ final class CircuitNetlistTests: XCTestCase {
         XCTAssertTrue(lines.contains("V1 voltageSource +=N1 -=VOUT"), text)
         XCTAssertTrue(lines.contains("R1 resistor 1=VOUT 2=0"), "接地是節點 0：\(text)")
         XCTAssertTrue(lines.contains { $0.hasPrefix("Min nmos G=") && $0.contains(" D=VOUT ") }, "有名字的照名字（下標記號拿掉）：\(text)")
-        XCTAssertFalse(lines.contains { $0.contains(" ground") }, "接地符號不是元件")
+        XCTAssertFalse(lines.contains { !$0.hasPrefix("*") && $0.contains(" ground") }, "接地符號不是元件（說明那行的 ground 不算）")
         XCTAssertTrue(lines.contains("* VOUT: V1.-, R1.1, Min.D"), "每個節點接到哪些接腳：\(text)")
         XCTAssertEqual(lines.last, ".end")
     }
