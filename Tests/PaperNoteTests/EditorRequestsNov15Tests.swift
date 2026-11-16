@@ -628,6 +628,42 @@ final class EditorRequestsNov15Tests: XCTestCase {
         XCTAssertEqual(Double(sticker.width), 20, accuracy: 2, "只有圈起來的那一塊")
     }
 
+    /// 回報的問題（11/16）：新畫的「保留」圈整個包在已經圈好的那塊裡面，要以新畫的為準（之前是留下比較大的）
+    func testAKeepLoopDrawnInsideAnotherOneReplacesIt() throws {
+        let vc = loadedEditor(redSquare(margin: 0, side: 100))
+        vc.maskComputed(nil)
+        vc.setRemoveBackground(true)
+        let canvas = try XCTUnwrap(vc.maskCanvas)
+        let r = vc.imageRect
+        func onScreen(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: r.minX + r.width * x / 100, y: r.minY + r.height * y / 100)
+        }
+        func square(_ x0: CGFloat, _ y0: CGFloat, _ x1: CGFloat, _ y1: CGFloat) -> [CGPoint] {
+            [onScreen(x0, y0), onScreen(x1, y0), onScreen(x1, y1), onScreen(x0, y1)]
+        }
+        vc.keepLasso(square(20, 20, 80, 80))
+        XCTAssertTrue(canvas.keeps(CGPoint(x: 25, y: 50)))
+        // 在裡面圈小的：只留小的
+        vc.keepLasso(square(40, 40, 60, 60))
+        XCTAssertTrue(canvas.keeps(CGPoint(x: 50, y: 50)), "新圈的留下來")
+        XCTAssertFalse(canvas.keeps(CGPoint(x: 25, y: 50)), "外面那圈大的換成新圈的")
+        XCTAssertFalse(canvas.keeps(CGPoint(x: 70, y: 70)))
+        // 另外圈一塊（沒有包在裡面）：加進去，原本的還在
+        vc.keepLasso(square(5, 5, 15, 15))
+        XCTAssertTrue(canvas.keeps(CGPoint(x: 10, y: 10)))
+        XCTAssertTrue(canvas.keeps(CGPoint(x: 50, y: 50)), "另外圈的不影響原本的")
+        // 圈到一半在外面：加大（照舊）
+        vc.keepLasso(square(55, 45, 90, 55))
+        XCTAssertTrue(canvas.keeps(CGPoint(x: 85, y: 50)))
+        XCTAssertTrue(canvas.keeps(CGPoint(x: 45, y: 45)), "原本的還在")
+        // 再往裡面圈：又換成更小的；旁邊另外圈的那塊不受影響
+        vc.keepLasso(square(46, 46, 52, 52))
+        XCTAssertTrue(canvas.keeps(CGPoint(x: 49, y: 49)))
+        XCTAssertFalse(canvas.keeps(CGPoint(x: 42, y: 42)))
+        XCTAssertFalse(canvas.keeps(CGPoint(x: 85, y: 50)), "連在一起的那一整塊都換掉")
+        XCTAssertTrue(canvas.keeps(CGPoint(x: 10, y: 10)), "沒連在一起的那塊還在")
+    }
+
     /// 回報的需求：筆跡的貼紙分開存成向量，貼上的是真的筆跡
     func testInkStickersAreSavedAsVectorsAndPasteRealStrokes() throws {
         let c = testCategory()

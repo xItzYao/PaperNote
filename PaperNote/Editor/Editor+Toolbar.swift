@@ -53,6 +53,7 @@ extension NotebookViewController {
         circuitLibrary.onDrawSymbol = { [weak self] id in self?.presentSymbolEditor(editing: id) }
         circuitLibrary.onRenameCustom = { [weak self] id in self?.promptRenameCustomCircuit(id) }
         circuitLibrary.onDeleteCustom = { [weak self] id in self?.deleteCustomCircuit(id) }
+        circuitLibrary.onNewCategory = { [weak self] id in self?.promptNewCircuitCategory(moving: id) }
 
         // 插入圖片：一排照片浮在畫布下方，只在圖片工具顯示
         photoStrip.translatesAutoresizingMaskIntoConstraints = false
@@ -1037,6 +1038,14 @@ extension NotebookViewController {
             UIAction(title: L("連續放置元件"), image: UIImage(systemName: "square.on.square"), state: s.circuitContinuousPlace ? .on : .off) { _ in
                 s.circuitContinuousPlace.toggle()
             },
+            UIMenu(title: L("電路圖選取模式"), image: UIImage(systemName: "lasso"), children: [
+                ("default", L("預設選取模式"), L("順時針圈：完整圈到才選；逆時針圈：碰到就選")),
+                ("reversed", L("反轉選取模式"), L("順時針圈：碰到就選；逆時針圈：完整圈到才選")),
+                ("window", L("僅窗選"), L("不管方向，完整圈到才選")),
+                ("crossing", L("僅交集選取"), L("不管方向，碰到就選")),
+            ].map { mode in
+                UIAction(title: mode.1, subtitle: mode.2, state: s.circuitLassoMode == mode.0 ? .on : .off) { _ in s.circuitLassoMode = mode.0 }
+            }),
             UIAction(title: L("電路圖橡皮擦擦完切回"), image: UIImage(systemName: "eraser"), state: s.circuitEraserAutoReturn ? .on : .off) { [weak self] _ in
                 s.circuitEraserAutoReturn.toggle()
                 if self?.tool == .circuit { self?.rebuildSubBar() }

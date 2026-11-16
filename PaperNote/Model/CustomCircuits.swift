@@ -23,6 +23,12 @@ struct CustomCircuit: Codable, Equatable, Identifiable {
     }
 }
 
+/// 使用者自己加的元件分類（key 是 "user." 開頭，和內建分類的 key 分開）
+struct CustomCircuitCategory: Codable, Equatable {
+    var key: String
+    var name: String
+}
+
 extension Notification.Name {
     static let customCircuitsChanged = Notification.Name("customCircuitsChanged")
 }
@@ -31,18 +37,28 @@ extension Notification.Name {
 final class CustomCircuitStore {
     static let shared = CustomCircuitStore()
     private let key = "customCircuits"
+    private let categoriesKey = "customCircuitCategories"
     private(set) var circuits: [CustomCircuit] = []
+    /// 自己加的分類（排在內建分類後面）
+    private(set) var categories: [CustomCircuitCategory] = []
 
     private init() {
         if let data = UserDefaults.standard.data(forKey: key),
            let saved = try? JSONDecoder().decode([CustomCircuit].self, from: data) {
             circuits = saved
         }
+        if let data = UserDefaults.standard.data(forKey: categoriesKey),
+           let saved = try? JSONDecoder().decode([CustomCircuitCategory].self, from: data) {
+            categories = saved
+        }
     }
 
     private func persist() {
         if let data = try? JSONEncoder().encode(circuits) {
             UserDefaults.standard.set(data, forKey: key)
+        }
+        if let data = try? JSONEncoder().encode(categories) {
+            UserDefaults.standard.set(data, forKey: categoriesKey)
         }
         NotificationCenter.default.post(name: .customCircuitsChanged, object: nil)
     }
@@ -79,6 +95,22 @@ final class CustomCircuitStore {
 
     func remove(_ id: UUID) {
         circuits.removeAll { $0.id == id }
+        persist()
+    }
+
+    /// 新增分類，回傳它的 key
+    @discardableResult
+    func addCategory(_ name: String) -> String {
+        let c = CustomCircuitCategory(key: "user." + UUID().uuidString, name: name)
+        categories.append(c)
+        persist()
+        return c.key
+    }
+
+    /// 刪掉自己加的分類：裡面的自訂元件回到自訂電路圖那一區
+    func removeCategory(_ key: String) {
+        categories.removeAll { $0.key == key }
+        for i in circuits.indices where circuits[i].section == key { circuits[i].section = nil }
         persist()
     }
 }

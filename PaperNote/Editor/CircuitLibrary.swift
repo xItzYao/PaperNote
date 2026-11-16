@@ -14,6 +14,8 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
     var onDrawSymbol: ((UUID?) -> Void)?
     var onRenameCustom: ((UUID) -> Void)?
     var onDeleteCustom: ((UUID) -> Void)?
+    /// 長按自訂元件選「新增分類…」：取名字，建好就把這個元件移過去
+    var onNewCategory: ((UUID) -> Void)?
     var currentMode: CircuitMode = .select { didSet { refreshHighlight() } }
 
     /// 分類參考 CircuiTikZ。key 不隨語言改變（自訂元件記住放在哪個分類用）
@@ -30,10 +32,16 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
         ("other", L("其他"), [.mixer, .antenna]),
     ]
 
+    /// 內建分類，加上自己加的分類（沒有內建元件）
+    static var allSections: [(key: String, name: String, parts: [CircuitPart])] {
+        sections + CustomCircuitStore.shared.categories.map { ($0.key, $0.name, [CircuitPart]()) }
+    }
+
     /// 放在這個分類的自訂元件（nil＝自訂電路圖那一區：沒選分類、或分類已經不存在的）
     static func customCircuits(in key: String?, from all: [CustomCircuit]) -> [CustomCircuit] {
-        all.filter { c in
-            guard let key else { return !sections.contains { $0.key == c.section } }
+        let keys = Set(allSections.map(\.key))
+        return all.filter { c in
+            guard let key else { return !keys.contains(c.section ?? "") }
             return c.section == key
         }
     }
@@ -125,9 +133,24 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
             stack.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: 6),
             stack.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -6),
         ])
-        // 各分類：標題列可以點開、收起，元件兩欄
+        buildSections()
+        NotificationCenter.default.addObserver(self, selector: #selector(customCircuitsChanged), name: .customCircuitsChanged, object: nil)
+        refreshChrome()
+        refreshHighlight()
+    }
+
+    /// 目前畫出來的分類（自己加了分類要重新排）
+    private var builtSectionKeys: [String] = []
+
+    /// 各分類：標題列可以點開、收起，元件兩欄；自訂電路圖排在最後
+    private func buildSections() {
+        for v in stack.arrangedSubviews + bottomStack.arrangedSubviews { v.removeFromSuperview() }
+        sectionBodies = []
+        sectionColumns = []
+        let all = Self.allSections
+        builtSectionKeys = all.map(\.key)
         let collapsedNames = Set(UserDefaults.standard.stringArray(forKey: Self.collapsedKey) ?? [])
-        for s in Self.sections {
+        for s in all {
             let body = UIStackView()
             body.axis = .vertical
             body.spacing = 4
@@ -149,10 +172,7 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
         stack.addArrangedSubview(sectionHeader(Self.customSectionName, body: customBody))
         stack.addArrangedSubview(customBody)
         bottomStack.addArrangedSubview(bottomSection(Self.customSectionName, columns: customColumns))
-        reloadCustomCircuits()
-        NotificationCenter.default.addObserver(self, selector: #selector(customCircuitsChanged), name: .customCircuitsChanged, object: nil)
-        refreshChrome()
-        refreshHighlight()
+        fillSections()
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -362,9 +382,18 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
 
     /// 放左邊、放下面的按鈕各做一份。自訂元件排在它所在分類的最後
     func reloadCustomCircuits() {
+        // 分類變了（新增、刪除）：整個重排
+        if Self.allSections.map(\.key) != builtSectionKeys {
+            buildSections()
+        } else {
+            fillSections()
+        }
+    }
+
+    private func fillSections() {
         modeButtons.removeAll()
         let circuits = CustomCircuitStore.shared.circuits
-        for (i, s) in Self.sections.enumerated() {
+        for (i, s) in Self.allSections.enumerated() where sectionBodies.indices.contains(i) {
             let customs = Self.customCircuits(in: s.key, from: circuits)
             fillRows(sectionBodies[i], s.parts.map(partButton) + customs.map(customButton))
             fillBottomColumns(sectionColumns[i], s.parts.map(partButton) + customs.map(customButton))
@@ -375,15 +404,21 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
         refreshHighlight()
     }
 
-    /// 長按選單的「移到分類」：自訂電路圖那一區或任何一個元件分類
+    /// 自訂元件可以放的地方：自訂電路圖那一區、內建分類、自己加的分類
+    static var sectionChoices: [(key: String?, name: String)] {
+        [(nil, customSectionName)] + allSections.map { ($0.key, $0.name) }
+    }
+
+    /// 長按選單的「移到分類」：自訂電路圖那一區或任何一個元件分類，最後是「新增分類…」
     private func moveMenu(_ c: CustomCircuit) -> UIMenu {
-        let current = Self.sections.contains { $0.key == c.section } ? c.section : nil
-        let targets: [(key: String?, name: String)] = [(nil, Self.customSectionName)] + Self.sections.map { ($0.key, $0.name) }
-        return UIMenu(title: L("移到分類"), image: UIImage(systemName: "folder"), children: targets.map { t in
+        let current = Self.allSections.contains { $0.key == c.section } ? c.section : nil
+        let moves: [UIMenuElement] = Self.sectionChoices.map { t in
             UIAction(title: t.name, state: t.key == current ? .on : .off) { _ in
                 CustomCircuitStore.shared.move(c.id, toSection: t.key)
             }
-        })
+        }
+        let add = UIAction(title: L("新增分類…"), image: UIImage(systemName: "folder.badge.plus")) { [weak self] _ in self?.onNewCategory?(c.id) }
+        return UIMenu(title: L("移到分類"), image: UIImage(systemName: "folder"), children: moves + [add])
     }
 
     private func drawSymbolButton() -> UIButton {

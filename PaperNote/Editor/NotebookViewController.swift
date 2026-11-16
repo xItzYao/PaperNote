@@ -139,6 +139,11 @@ final class EditorSettings {
         get { bool("circuitContinuousPlace", true) }
         set { d.set(newValue, forKey: "circuitContinuousPlace") }
     }
+    /// 電路圖用 Pencil 圈選的方式：default 順時針窗選、逆時針交集；reversed 反過來；window 只有窗選；crossing 只有交集
+    var circuitLassoMode: String {
+        get { d.string(forKey: "circuitLassoMode") ?? "default" }
+        set { d.set(newValue, forKey: "circuitLassoMode") }
+    }
     /// 電路元件自動編號（R1、R2…，每一頁各自從 1 開始）；預設關
     var circuitAutoNumber: Bool {
         get { bool("circuitAutoNumber", false) }
@@ -662,8 +667,21 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         updateZoomLayout()
     }
 
-    func updateZoomLayout() {
+    /// followZoomAnimation：縮放本身在動畫裡（放到最大再拉、放開後回彈；程式的動畫縮放）。
+    /// 系統用同一個動畫一起改縮放和捲動位置，頁面也要跟著這個動畫縮放、移動；
+    /// 不跟的話頁面一下就變成最後的大小，捲動位置卻還在動畫裡，畫面會先偏到角落再跳回來
+    func updateZoomLayout(followZoomAnimation: Bool = false) {
         let z = canvas.zoomScale
+        if followZoomAnimation, pagesContainer.bounds.size == docSize {
+            let t = CGAffineTransform(scaleX: z, y: z)
+            let c = CGPoint(x: docSize.width * z / 2, y: docSize.height * z / 2)
+            pagesContainer.transform = t
+            pagesContainer.center = c
+            inkContainer.transform = t
+            inkContainer.center = c
+            finishZoomLayout(z)
+            return
+        }
         // 頁面的位置、縮放不做動畫：鍵盤跳出來時系統在鍵盤的動畫裡通知，
         // 這裡先把縮放歸零再設回去，跟著動畫的話頁面會縮小再放大（閃一下）
         UIView.performWithoutAnimation {
@@ -677,6 +695,10 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             inkContainer.center = pagesContainer.center
             overlay.frame = CGRect(origin: .zero, size: docSize)
         }
+        finishZoomLayout(z)
+    }
+
+    private func finishZoomLayout(_ z: CGFloat) {
         // PencilKit 之後才加的 view 也要在筆跡底下
         if canvas.subviews.last !== inkContainer { canvas.bringSubviewToFront(inkContainer) }
         overlay.lineScale = 1 / z
@@ -800,7 +822,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     }
 
     func scrollViewDidZoom(_ scrollView: UIScrollView) {
-        updateZoomLayout()
+        // 在動畫裡（回彈、動畫縮放）：頁面跟著同一個動畫
+        updateZoomLayout(followZoomAnimation: UIView.inheritedAnimationDuration > 0)
         let s = elementContentScale
         for v in pageViews.values { v.inkView.setRenderScale(s) }
     }

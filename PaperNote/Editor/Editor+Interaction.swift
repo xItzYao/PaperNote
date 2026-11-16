@@ -142,7 +142,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
                 // 用手指剛碰到的位置判斷：拖曳要移動一小段才開始，那時手指已經離開格線了
                 let q = panTouchDownPoint(g)
                 guard editingTextView == nil else { return false }
-                if dragTarget(at: q) != nil || (tool == .select && lassoGrab(at: q) != nil) { return true }
+                if dragTarget(at: q) != nil || ((tool == .select || tool == .sticker) && lassoGrab(at: q) != nil) { return true }
                 // 選著物件時工具列亮的是套索：Pencil 從空白處拖就是用套索圈（手指照樣捲動頁面）
                 return tool == .select && toolPanByDrawingTouch
             case .pageResize:
@@ -242,9 +242,11 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         if g === toolPan, toolPan.numberOfTouches == 0 {
             toolPanByDrawingTouch = touch.type == .pencil || settings.fingerDrawing
         }
-        // 貼紙、電路工具：只有 Pencil（開了「用手指書寫」才有手指）會放、選、拖曳；手指只捲動、縮放頁面
-        if tool == .sticker || tool == .circuit, g === tapGesture || g === toolPan || g === longPressGesture {
-            return touch.type == .pencil || settings.fingerDrawing
+        // 手指（沒開「用手指書寫」）：只能拖動、點已經選起來的東西（和旁邊的控制點、按鈕），不能選新的；
+        // 其他地方交給捲動、縮放頁面
+        if touch.type == .direct, !settings.fingerDrawing,
+           g === tapGesture || g === toolPan || g === longPressGesture || g === doubleTapGesture {
+            return fingerReachesSelection(at: touch.location(in: pagesContainer))
         }
         // 截圖、PDF 文字、手繪表格、套索：沒開「用手指書寫」時只接受 Pencil，手指只用來捲動
         if g === toolPan, tool.drawsWithPan {
@@ -255,11 +257,25 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         // 套索模式下 Pencil 或手指點鎖頭都可以
         if g === tapGesture, tool == .lasso, lockIconHit(at: touch.location(in: pagesContainer)) != nil { return true }
         if g === tapGesture, tool.isDrawing {
-            // 只有手指點在表格／圖片／文字框上才接手，其餘交給 PencilKit
-            guard touch.type == .direct, !settings.fingerDrawing else { return false }
-            return hitElement(at: touch.location(in: pagesContainer)) != nil
+            // 筆、螢光筆：Pencil 的點交給 PencilKit（手指已經在上面處理）
+            return false
         }
         return true
+    }
+
+    /// 手指按的地方是不是已經選起來的東西：選起來的物件（含表格的標頭、＋、控制點）、套索圈起來的範圍和縮放把手、
+    /// 選起來的電路元件／導線和旁邊的按鈕；鎖頭也可以點
+    func fingerReachesSelection(at p: CGPoint) -> Bool {
+        if lockIconHit(at: p) != nil { return true }
+        if lassoGrab(at: p) != nil { return true }
+        if tool == .circuit { return circuitSelectionHit(at: p) }
+        if dragTarget(at: p) != nil { return true }
+        guard let s = selected, case let (pi, ei)? = locate(s) else { return false }
+        // 點到別的物件：不能用手指選
+        if let hit = hitElement(at: p), hit != s { return false }
+        // 選起來的物件，和旁邊一圈（表格的標頭、＋在外框外面）
+        let m = 60 / canvas.zoomScale
+        return docFrame(of: pages[pi].elements[ei], pageIndex: pi).insetBy(dx: -m, dy: -m).contains(p)
     }
 
     /// 工具列的選單開著時滑頁面：頁面跟著捲、選單也看不見了，但系統沒有真的把選單關完（選單的容器還留在視窗裡），
@@ -964,10 +980,13 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         guard case let (pi, ei)? = locate(ref) else { return UIMenu() }
         let e = pages[pi].elements[ei]
         var items: [UIMenuElement] = []
-        items.append(UIAction(title: e.locked ? L("解除固定") : L("固定位置"),
-                              image: UIImage(systemName: e.locked ? "lock.open" : "lock")) { [weak self] _ in
-            self?.modifyElement(ref) { $0.locked.toggle() }
-        })
+        // 圖片、電路圖左上角有鎖頭，選單就不重複放「固定位置」
+        if !(e.isImage || e.isCircuit) {
+            items.append(UIAction(title: e.locked ? L("解除固定") : L("固定位置"),
+                                  image: UIImage(systemName: e.locked ? "lock.open" : "lock")) { [weak self] _ in
+                self?.modifyElement(ref) { $0.locked.toggle() }
+            })
+        }
         switch e.content {
         case let .table(t):
             // 長按的格子不在選取範圍裡：改選這一格

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 @main
@@ -32,6 +33,8 @@ struct RootView: View {
     @State private var importSummary: String?
     /// 從別的 App 分享進來、還沒選好要放哪個資料夾的檔案
     @State private var pendingImport: ShareItem?
+    /// 選好資料夾了：等選資料夾的視窗真的收起來再匯入、打開（視窗還在收的時候打開筆記本，全螢幕的筆記本跳不出來）
+    @State private var importAfterDismiss: (url: URL, folder: UUID?)?
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -40,13 +43,13 @@ struct RootView: View {
                     FolderView(folderID: route.id, open: open)
                 }
         }
-        .sheet(isPresented: importPickerShown(inEditor: false)) { importPicker }
+        .sheet(isPresented: importPickerShown(inEditor: false), onDismiss: runImportAfterDismiss) { importPicker }
         .fullScreenCover(isPresented: $showEditor) {
             TabsHost { showEditor = false }
                 .ignoresSafeArea(.keyboard)
                 .ignoresSafeArea(.container, edges: .bottom)
                 // 筆記本開著的時候分享進來：選資料夾的視窗從筆記本上面跳出來
-                .sheet(isPresented: importPickerShown(inEditor: true)) { importPicker }
+                .sheet(isPresented: importPickerShown(inEditor: true), onDismiss: runImportAfterDismiss) { importPicker }
         }
         .onAppear {
             BackupManager.shared.start()
@@ -63,6 +66,16 @@ struct RootView: View {
                     s.save()
                 }
                 open(meta.id, nil)
+            }
+            // UI 測試：模擬從別的 App 用 PaperNote 打開一個 PDF
+            if ProcessInfo.processInfo.arguments.contains("-uiTestSharePDF") {
+                let url = FileManager.default.temporaryDirectory.appendingPathComponent("Shared Test.pdf")
+                let data = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 595, height: 842)).pdfData { ctx in
+                    ctx.beginPage()
+                    ("Shared PDF" as NSString).draw(at: CGPoint(x: 60, y: 60), withAttributes: [.font: UIFont.systemFont(ofSize: 32)])
+                }
+                try? data.write(to: url)
+                pendingImport = ShareItem(url: url)
             }
         }
         .onOpenURL { url in
@@ -95,14 +108,20 @@ struct RootView: View {
     private var importPicker: some View {
         if let item = pendingImport {
             FolderPickerSheet(title: L("匯入「\(item.url.deletingPathExtension().lastPathComponent)」到…"), confirmTitle: L("匯入")) { dest in
+                // 視窗收完（onDismiss）才匯入、打開筆記本
+                importAfterDismiss = (item.url, dest)
                 pendingImport = nil
-                // 等選資料夾的視窗收起來再打開筆記本
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { importShared(item.url, into: dest) }
             } onCancel: {
                 pendingImport = nil
             }
             .environmentObject(store)
         }
+    }
+
+    private func runImportAfterDismiss() {
+        guard let job = importAfterDismiss else { return }
+        importAfterDismiss = nil
+        importShared(job.url, into: job.folder)
     }
 
     private func importShared(_ url: URL, into folder: UUID?) {

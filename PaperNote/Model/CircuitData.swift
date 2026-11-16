@@ -780,6 +780,19 @@ extension CircuitData {
         }
         reattach(from: from, to: to)
         stretchTouchingPins(from: pinsFrom, to: pinsTo, moving: ids)
+        // 一起動的導線，線頭原本接在沒動的元件接腳、或沒動的導線上（T 字）：從原本的位置拉一條線過去，不會脫開
+        let staying = components.filter { !ids.contains($0.id) }.flatMap { CircuitGeometry.pins($0) }
+        var bridged: [CGPoint] = []
+        for w in moved {
+            for end in [w.points.first, w.points.last].compactMap({ $0 }) where !bridged.contains(end) {
+                let target = f(end)
+                guard target != end, staying.contains(end) || wires.contains(where: { Self.polyline($0.points, contains: end) }) else { continue }
+                let pts = Self.orthogonalize([end, target])
+                guard pts.count >= 2 else { continue }
+                wires.append(CircuitWire(points: pts))
+                bridged.append(end)
+            }
+        }
         wires += moved.map { w in
             var w = w
             w.points = w.points.map(f)

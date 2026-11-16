@@ -311,7 +311,9 @@ final class StickerEditorViewController: UIViewController {
         let r = imageRect
         guard let canvas = maskCanvas, r.width > 0, points.count > 2 else { return }
         let k = canvas.size.width / r.width
-        canvas.fill(points.map { CGPoint(x: ($0.x - r.minX) * k, y: ($0.y - r.minY) * k) }, keep: true)
+        let px = points.map { CGPoint(x: ($0.x - r.minX) * k, y: ($0.y - r.minY) * k) }
+        // 圈在已經留下來的一整塊裡面：以新圈的為準（那一塊換成這個圈）；不然加進去
+        if !canvas.replaceRegion(enclosing: px) { canvas.fill(px, keep: true) }
         refreshOutline()
     }
 
@@ -418,6 +420,33 @@ final class StickerMaskCanvas {
         context.addLines(between: polygon)
         context.closePath()
         context.fillPath()
+    }
+
+    /// 新圈的整個在已經留下來的同一塊裡面（每個點都在那一塊上）：那一塊拿掉，改成只留這個圈。回傳有沒有換
+    func replaceRegion(enclosing polygon: [CGPoint]) -> Bool {
+        guard polygon.count > 2, let data = context.data?.assumingMemoryBound(to: UInt8.self) else { return false }
+        let w = context.width, h = context.height, bpr = context.bytesPerRow
+        func kept(_ x: Int, _ y: Int) -> Bool { data[y * bpr + x] > 127 }
+        let pts = polygon.map { (x: Int($0.x), y: Int($0.y)) }
+        guard pts.allSatisfy({ $0.x >= 0 && $0.y >= 0 && $0.x < w && $0.y < h && kept($0.x, $0.y) }), let start = pts.first else { return false }
+        // 從第一個點往外找連在一起、留下來的那一塊
+        var region = [Bool](repeating: false, count: w * h)
+        var stack = [start.y * w + start.x]
+        region[stack[0]] = true
+        while let i = stack.popLast() {
+            let x = i % w, y = i / w
+            for (nx, ny) in [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)] where nx >= 0 && ny >= 0 && nx < w && ny < h {
+                let j = ny * w + nx
+                if !region[j], kept(nx, ny) {
+                    region[j] = true
+                    stack.append(j)
+                }
+            }
+        }
+        guard pts.allSatisfy({ region[$0.y * w + $0.x] }) else { return false }
+        for i in region.indices where region[i] { data[(i / w) * bpr + i % w] = 0 }
+        fill(polygon, keep: true)
+        return true
     }
 
     var cgImage: CGImage? { context.makeImage() }

@@ -197,6 +197,20 @@ extension NotebookViewController {
     }
 
     /// 選取模式下，從這個位置拖曳會動到什麼
+    /// 手指按在選起來的電路元件、導線（含名稱、控制點）或旁邊的旋轉、翻轉、複製、刪除上
+    func circuitSelectionHit(at p: CGPoint) -> Bool {
+        if let h = circuitPartHandleCenters(), [h.rotate, h.flip, h.copy, h.delete].contains(where: { p.distance(to: $0) <= h.radius }) {
+            return true
+        }
+        guard let ref = circuitTarget, let sel = circuitSel, let (hitRef, kind) = circuitDragTarget(at: p), hitRef == ref else { return false }
+        switch kind {
+        case let .items(ids): return ids.allSatisfy(sel.contains)
+        case let .component(id), let .componentName(id), let .componentNameSize(id),
+             let .wireSegment(id, _), let .wireCorner(id, _), let .wireEnd(id, _), let .wireLabel(id), let .wireLabelSize(id):
+            return sel.contains(id)
+        }
+    }
+
     private func circuitDragTarget(at p: CGPoint) -> (ElementRef, CircuitDragKind)? {
         if let l = selectedLabelRect(), let h = labelResizePoint(), p.distance(to: h) <= 16 / canvas.zoomScale {
             switch l.selection {
@@ -524,6 +538,11 @@ extension NotebookViewController {
         if g.state == .began {
             // 起點用筆尖剛碰到的位置，接線才會從碰到的那條線開始
             let start = panTouchDownPoint(g)
+            // 手指只會按在選起來的東西上（見 shouldReceive）：一律是拖動
+            if !toolPanByDrawingTouch, g === toolPan {
+                handleSelectDrag(g, start)
+                return
+            }
             switch circuitMode {
             case .wire:
                 wireDraft = WireDraft(ref: circuitAt(start, margin: 80), ink: [start])
@@ -557,8 +576,8 @@ extension NotebookViewController {
             }
         case .changed:
             circuitMarquee?.append(p)
-            // 逆時針（碰到就選）是綠色，順時針（完整圈到才選）是藍色
-            overlay.showLassoPath(circuitMarquee, crossing: circuitMarquee.map { !CircuitData.lassoIsClockwise($0) } ?? false)
+            // 碰到就選（交集）是綠色，完整圈到才選（窗選）是藍色
+            overlay.showLassoPath(circuitMarquee, crossing: circuitMarquee.map(circuitLassoIsCrossing) ?? false)
         case .ended:
             circuitMarquee?.append(p)
             finishCircuitMarquee()
@@ -568,7 +587,18 @@ extension NotebookViewController {
         }
     }
 
-    /// 像 AutoCAD：順時針圈，整個在圈裡的元件和導線才選；逆時針圈，碰到就選。碰到群組的一員就是整組。圈到好幾張電路圖時選東西最多的那張
+    /// 這一圈是交集選取（碰到就選）還是窗選（完整圈到才選）：看「⋯」的「電路圖選取模式」和圈的方向
+    func circuitLassoIsCrossing(_ pts: [CGPoint]) -> Bool {
+        let clockwise = CircuitData.lassoIsClockwise(pts)
+        switch settings.circuitLassoMode {
+        case "reversed": return clockwise
+        case "window": return false
+        case "crossing": return true
+        default: return !clockwise
+        }
+    }
+
+    /// 像 AutoCAD：順時針圈，整個在圈裡的元件和導線才選；逆時針圈，碰到就選（「⋯」可以反過來、或只用其中一種）。碰到群組的一員就是整組。圈到好幾張電路圖時選東西最多的那張
     private func finishCircuitMarquee() {
         let pts = circuitMarquee ?? []
         circuitMarquee = nil
@@ -579,7 +609,7 @@ extension NotebookViewController {
         for q in pts.dropFirst() { path.addLine(to: q) }
         path.close()
         let b = path.bounds
-        let crossing = !CircuitData.lassoIsClockwise(pts)
+        let crossing = circuitLassoIsCrossing(pts)
         var best: (ref: ElementRef, ids: Set<UUID>)?
         for ref in circuitsAt(CGPoint(x: b.midX, y: b.midY), margin: max(b.width, b.height)) {
             guard let data = circuitInfo(ref)?.data, let t = circuitTransform(ref) else { continue }
@@ -1003,8 +1033,15 @@ extension NotebookViewController {
     /// 畫新的自訂元件，或改元件庫裡已經有的（頁面上已經放好的不受影響）
     func presentSymbolEditor(editing id: UUID? = nil) {
         let existing = id.flatMap { CustomCircuitStore.shared.circuit($0) }
+        // 新的元件：畫完就問要放在哪個分類
+        var section: String?
         let editor = CircuitSymbolEditorViewController(name: existing?.name ?? "", symbol: existing?.symbol) { [weak self] name, symbol in
-            self?.saveCustomSymbol(id: id, name: name, symbol: symbol)
+            self?.saveCustomSymbol(id: id, name: name, symbol: symbol, section: section)
+        }
+        if id == nil {
+            editor.sectionChoices = CircuitLibraryView.sectionChoices
+            editor.onChooseSection = { section = $0 }
+            editor.onNewSection = { CustomCircuitStore.shared.addCategory($0) }
         }
         let nav = UINavigationController(rootViewController: editor)
         nav.modalPresentationStyle = .formSheet
@@ -1013,7 +1050,7 @@ extension NotebookViewController {
     }
 
     /// 沒打名稱就編號
-    func saveCustomSymbol(id: UUID?, name: String, symbol: CircuitSymbol) {
+    func saveCustomSymbol(id: UUID?, name: String, symbol: CircuitSymbol, section: String? = nil) {
         let store = CustomCircuitStore.shared
         let t = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let data = CustomCircuit.symbolData(symbol)
@@ -1021,8 +1058,26 @@ extension NotebookViewController {
             store.update(id, name: t.isEmpty ? store.circuit(id)?.name ?? L("自訂元件") : t, data: data)
         } else {
             let c = store.add(name: t.isEmpty ? L("自訂元件 \(store.circuits.count + 1)") : t, data: data)
+            if let section { store.move(c.id, toSection: section) }
             showToast(L("已加入「\(c.name)」"))
         }
+    }
+
+    /// 長按自訂元件選「新增分類…」：取名字，建好就把它移過去
+    func promptNewCircuitCategory(moving id: UUID) {
+        let a = UIAlertController(title: L("新增分類…"), message: nil, preferredStyle: .alert)
+        a.addTextField { tf in
+            tf.placeholder = L("分類名稱")
+            tf.clearButtonMode = .whileEditing
+        }
+        a.addAction(UIAlertAction(title: L("取消"), style: .cancel))
+        a.addAction(UIAlertAction(title: L("加入"), style: .default) { [weak a] _ in
+            let name = (a?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { return }
+            let store = CustomCircuitStore.shared
+            store.move(id, toSection: store.addCategory(name))
+        })
+        present(a, animated: true)
     }
 
     func promptRenameCustomCircuit(_ id: UUID) {
