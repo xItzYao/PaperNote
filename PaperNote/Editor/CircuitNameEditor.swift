@@ -4,6 +4,8 @@ import UIKit
 /// 打空白或按「→」回到一般的字。勾「純文字」改成直接打 R_{12}、x^2 這種寫法。存起來一律是純文字的寫法
 final class CircuitNameEditorViewController: UIViewController, UITextViewDelegate {
     var onDone: ((String) -> Void)?
+    /// 元件：名稱、數值、單位前綴（"" ＝沒有）
+    var onDoneComponent: ((String, String, String) -> Void)?
 
     static let fontSize: CGFloat = 44
     static let scriptKey = NSAttributedString.Key("circuitScript")
@@ -15,6 +17,12 @@ final class CircuitNameEditorViewController: UIViewController, UITextViewDelegat
     let subButton = UIButton(type: .system)
     let supButton = UIButton(type: .system)
     let exitButton = UIButton(type: .system)
+    /// 元件的數值和後面的單位前綴下拉選單（只有元件有）
+    let valueField = UITextField()
+    let prefixButton = UIButton(type: .system)
+    private(set) var valuePrefix = ""
+    private let hasValue: Bool
+    private let initialValue: String
     /// 下標、上標的虛線框
     private let box = CAShapeLayer()
     private let initial: String
@@ -25,10 +33,14 @@ final class CircuitNameEditorViewController: UIViewController, UITextViewDelegat
     private(set) var mode: CircuitText.Script = .normal { didSet { updateChrome() } }
     private(set) var plain: Bool
 
-    init(title: String, text: String, placeholder: String, hint: String? = nil) {
+    /// value：元件的數值和單位前綴；nil＝沒有數值這一欄（導線名稱）
+    init(title: String, text: String, placeholder: String, hint: String? = nil, value: (number: String, prefix: String)? = nil) {
         initial = text
         self.hint = hint
         self.placeholder = placeholder
+        hasValue = value != nil
+        initialValue = value?.number ?? ""
+        valuePrefix = value?.prefix ?? ""
         plain = UserDefaults.standard.bool(forKey: Self.plainDefaultsKey)
         super.init(nibName: nil, bundle: nil)
         self.title = title
@@ -168,7 +180,36 @@ final class CircuitNameEditorViewController: UIViewController, UITextViewDelegat
         hintLabel.textColor = .secondaryLabel
         hintLabel.numberOfLines = 0
         hintLabel.isHidden = hint == nil
-        let stack = UIStackView(arrangedSubviews: [textView, keys, plainToggle, hintLabel])
+        // 數值：輸入格後面接單位前綴的下拉選單（預設沒有）
+        let valueLabel = UILabel()
+        valueLabel.text = L("數值")
+        valueLabel.font = .preferredFont(forTextStyle: .body)
+        valueLabel.setContentHuggingPriority(.required, for: .horizontal)
+        valueField.text = initialValue
+        valueField.placeholder = "10"
+        valueField.borderStyle = .roundedRect
+        valueField.font = .systemFont(ofSize: 24)
+        valueField.keyboardType = .numbersAndPunctuation
+        valueField.autocorrectionType = .no
+        valueField.autocapitalizationType = .none
+        valueField.accessibilityIdentifier = "circuitName.value"
+        valueField.accessibilityLabel = L("數值")
+        valueField.addAction(UIAction { [weak self] _ in self?.finish() }, for: .editingDidEndOnExit)
+        var bc = UIButton.Configuration.tinted()
+        bc.image = UIImage(systemName: "chevron.up.chevron.down")
+        bc.imagePlacement = .trailing
+        bc.imagePadding = 6
+        bc.buttonSize = .large
+        prefixButton.configuration = bc
+        prefixButton.accessibilityIdentifier = "circuitName.prefix"
+        prefixButton.showsMenuAsPrimaryAction = true
+        prefixButton.setContentHuggingPriority(.required, for: .horizontal)
+        setValuePrefix(valuePrefix)
+        let valueRow = UIStackView(arrangedSubviews: [valueLabel, valueField, prefixButton])
+        valueRow.spacing = 10
+        valueRow.alignment = .center
+        valueRow.isHidden = !hasValue
+        let stack = UIStackView(arrangedSubviews: [textView, keys, plainToggle, valueRow, hintLabel])
         stack.axis = .vertical
         stack.spacing = 14
         stack.alignment = .fill
@@ -182,7 +223,7 @@ final class CircuitNameEditorViewController: UIViewController, UITextViewDelegat
             // 預覽的框放大：下標在 iPad 上才看得清楚、點得到
             textView.heightAnchor.constraint(equalToConstant: 130),
         ])
-        preferredContentSize = CGSize(width: 540, height: 360)
+        preferredContentSize = CGSize(width: 540, height: hasValue ? 430 : 360)
         load(initial)
         setPlain(plain)
     }
@@ -195,6 +236,18 @@ final class CircuitNameEditorViewController: UIViewController, UITextViewDelegat
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         updateBox()
+    }
+
+    /// 單位前綴的選單：沒有、p、n、µ、m、K、M、G
+    func setValuePrefix(_ p: String) {
+        valuePrefix = CircuitValuePrefix.all.contains(p) ? p : ""
+        prefixButton.configuration?.title = valuePrefix.isEmpty ? L("無") : CircuitValuePrefix.display(valuePrefix)
+        prefixButton.accessibilityValue = valuePrefix
+        prefixButton.accessibilityLabel = L("單位前綴")
+        prefixButton.menu = UIMenu(children: CircuitValuePrefix.all.map { option in
+            UIAction(title: option.isEmpty ? L("無") : CircuitValuePrefix.display(option),
+                     state: option == valuePrefix ? .on : .off) { [weak self] _ in self?.setValuePrefix(option) }
+        })
     }
 
     private func load(_ text: String) {
@@ -331,11 +384,16 @@ final class CircuitNameEditorViewController: UIViewController, UITextViewDelegat
         }
     }
 
-    private func finish() {
+    func finish() {
         let v = value
-        let done = onDone
+        let done = onDone, doneComponent = onDoneComponent
+        let number = (valueField.text ?? "").trimmingCharacters(in: .whitespaces), prefix = valuePrefix
         textView.resignFirstResponder()
-        dismiss(animated: true) { done?(v) }
+        valueField.resignFirstResponder()
+        dismiss(animated: true) {
+            done?(v)
+            doneComponent?(v, number, prefix)
+        }
     }
 }
 
@@ -344,6 +402,18 @@ extension UIViewController {
     func presentCircuitNameEditor(title: String, text: String?, placeholder: String, hint: String? = nil, done: @escaping (String) -> Void) {
         let editor = CircuitNameEditorViewController(title: title, text: text ?? "", placeholder: placeholder, hint: hint)
         editor.onDone = done
+        presentNameEditor(editor)
+    }
+
+    /// 元件：名稱加上數值（後面選單位前綴）
+    func presentComponentEditor(name: String?, value: String?, prefix: String?, done: @escaping (String, String, String) -> Void) {
+        let editor = CircuitNameEditorViewController(title: L("元件名稱"), text: name ?? "", placeholder: "R1",
+                                                     hint: L("留空就拿掉名稱、數值"), value: (value ?? "", prefix ?? ""))
+        editor.onDoneComponent = done
+        presentNameEditor(editor)
+    }
+
+    private func presentNameEditor(_ editor: CircuitNameEditorViewController) {
         let nav = UINavigationController(rootViewController: editor)
         nav.modalPresentationStyle = .formSheet
         nav.preferredContentSize = CGSize(width: 540, height: 400)

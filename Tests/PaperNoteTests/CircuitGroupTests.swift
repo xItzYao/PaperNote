@@ -71,9 +71,13 @@ final class CircuitGroupTests: XCTestCase {
         TouchPan().drag(from: from, to: CGPoint(x: from.x + d.x, y: from.y + d.y)) { editor.handleCircuitPan($0, $0.location(in: nil)) }
     }
     /// 用 Pencil 圈一個方框（在空白處開始）
-    private func marquee(_ r: CGRect) {
-        let pts = [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY), CGPoint(x: r.maxX, y: r.maxY),
-                   CGPoint(x: r.minX, y: r.maxY), CGPoint(x: r.minX, y: r.minY + 2), CGPoint(x: r.minX + 1, y: r.minY + 1)]
+    /// 預設順時針（左上 → 右上 → 右下）；counterclockwise 反過來繞
+    private func marquee(_ r: CGRect, counterclockwise: Bool = false) {
+        let pts = counterclockwise
+            ? [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.minX, y: r.maxY), CGPoint(x: r.maxX, y: r.maxY),
+               CGPoint(x: r.maxX, y: r.minY), CGPoint(x: r.minX + 2, y: r.minY), CGPoint(x: r.minX + 1, y: r.minY + 1)]
+            : [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY), CGPoint(x: r.maxX, y: r.maxY),
+               CGPoint(x: r.minX, y: r.maxY), CGPoint(x: r.minX, y: r.minY + 2), CGPoint(x: r.minX + 1, y: r.minY + 1)]
         let g = TouchPan()
         for (i, p) in pts.enumerated() {
             g.point = p
@@ -321,6 +325,21 @@ final class CircuitGroupTests: XCTestCase {
         XCTAssertEqual(copies.count, 2)
         XCTAssertEqual(Set(copies.map { "\($0.rotation) \($0.flipH) \($0.flipV)" }),
                        Set(originals.map { "\($0.rotation) \($0.flipH) \($0.flipV)" }))
+    }
+
+    /// 回報的需求：像 AutoCAD，順時針圈要完整圈到元件才選，逆時針圈碰到就選
+    func testLassoDirectionDecidesWindowOrCrossing() {
+        let a = at(left)
+        // 只圈到左邊電阻的右半邊
+        let half = CGRect(x: a.x, y: a.y - 40, width: 10, height: 80)
+        marquee(half)
+        XCTAssertNil(editor.circuitSel, "順時針：沒有完整圈到就不選")
+        marquee(half, counterclockwise: true)
+        XCTAssertEqual(editor.circuitSel, .component(left), "逆時針：碰到就選")
+        // 逆時針圈到兩個電阻的一部分和中間的線
+        let b = at(right)
+        marquee(CGRect(x: a.x, y: a.y - 40, width: b.x - a.x, height: 80), counterclockwise: true)
+        XCTAssertEqual(editor.circuitSel, .items([left, right, bridge]))
     }
 
     func testGroupWiresAreNotJoinedWithOutsideWires() {

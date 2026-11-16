@@ -529,9 +529,13 @@ final class OverlayView: UIView {
 
     // MARK: 套索
 
-    func showLassoPath(_ pts: [CGPoint]?) {
+    /// crossing：電路圖逆時針圈（碰到就選）畫成綠色
+    func showLassoPath(_ pts: [CGPoint]?, crossing: Bool = false) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        let color: UIColor = crossing ? .systemGreen : .systemBlue
+        lassoPathLayer.strokeColor = color.cgColor
+        lassoPathLayer.fillColor = color.withAlphaComponent(crossing ? 0.08 : 0.05).cgColor
         if let pts, let first = pts.first {
             let path = UIBezierPath()
             path.move(to: first)

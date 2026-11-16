@@ -320,6 +320,35 @@ extension NotebookViewController {
         return ElementRef(pageID: pages[pi].id, elementID: merged.id)
     }
 
+    // MARK: 自動編號
+
+    /// 開了自動編號：沒有名稱（或是 R1 這種自動編號樣子的名稱）的元件，照這一頁已經用掉的號碼接著編
+    func autoNumbered(_ comps: [CircuitComponent], pageIndex pi: Int) -> [CircuitComponent] {
+        guard settings.circuitAutoNumber, pages.indices.contains(pi) else { return comps }
+        var used: [String] = []
+        for e in pages[pi].elements {
+            if case let .circuit(d) = e.content { used += d.components.compactMap(\.name) }
+        }
+        var out = comps
+        CircuitData.autoNumber(&out, used: used)
+        return out
+    }
+
+    func autoNumbered(_ comps: [CircuitComponent], in ref: ElementRef) -> [CircuitComponent] {
+        guard let pi = circuitInfo(ref)?.pi else { return comps }
+        return autoNumbered(comps, pageIndex: pi)
+    }
+
+    func autoNumbered(_ comps: [CircuitComponent], at p: CGPoint) -> [CircuitComponent] {
+        autoNumbered(comps, pageIndex: pageIndex(containing: p) ?? nearestPageIndex(to: p))
+    }
+
+    /// 工具列的「自動編號」開關
+    func setCircuitAutoNumber(_ on: Bool) {
+        settings.circuitAutoNumber = on
+        rebuildSubBar()
+    }
+
     // MARK: 放置元件
 
     func placeComponent(_ part: CircuitPart, at p: CGPoint) {
@@ -334,6 +363,7 @@ extension NotebookViewController {
         }
         if let ref = circuitAt(p, margin: 60), var d = circuitInfo(ref)?.data {
             comp.position = CircuitData.snap(circuitLocal(p, ref))
+            comp = autoNumbered([comp], in: ref)[0]
             d.components.append(comp)
             // 接腳放在導線上：接上（共點），不是跨線
             d.connectPins(CircuitGeometry.pins(comp))
@@ -342,6 +372,7 @@ extension NotebookViewController {
         } else {
             var d = CircuitData.newCircuit
             comp.position = CGPoint(x: 60, y: 60)
+            comp = autoNumbered([comp], at: p)[0]
             d.components = [comp]
             circuitTarget = createCircuit(at: p, data: d)
         }
@@ -359,6 +390,7 @@ extension NotebookViewController {
         let sel: CircuitSelection = custom.symbol != nil && !stamp.components.isEmpty ? .component(stamp.components[0].id) : .items(stamp.itemIDs)
         if let ref = circuitAt(p, margin: 60), var d = circuitInfo(ref)?.data {
             stamp.offset(by: CircuitData.snap(circuitLocal(p, ref)))
+            stamp.components = autoNumbered(stamp.components, in: ref)
             d.components += stamp.components
             d.wires += stamp.wires
             // 接腳放在原本的導線上：接上（一起放上來的線照原樣）
@@ -369,6 +401,7 @@ extension NotebookViewController {
         } else {
             var d = CircuitData.newCircuit
             stamp.offset(by: CGPoint(x: 60, y: 60))
+            stamp.components = autoNumbered(stamp.components, at: p)
             d.components = stamp.components
             d.wires = stamp.wires
             circuitSel = sel
@@ -524,7 +557,8 @@ extension NotebookViewController {
             }
         case .changed:
             circuitMarquee?.append(p)
-            overlay.showLassoPath(circuitMarquee)
+            // 逆時針（碰到就選）是綠色，順時針（完整圈到才選）是藍色
+            overlay.showLassoPath(circuitMarquee, crossing: circuitMarquee.map { !CircuitData.lassoIsClockwise($0) } ?? false)
         case .ended:
             circuitMarquee?.append(p)
             finishCircuitMarquee()
@@ -534,7 +568,7 @@ extension NotebookViewController {
         }
     }
 
-    /// 整個在圈裡的元件和導線選起來；碰到群組的一員就是整組。圈到好幾張電路圖時選東西最多的那張
+    /// 像 AutoCAD：順時針圈，整個在圈裡的元件和導線才選；逆時針圈，碰到就選。碰到群組的一員就是整組。圈到好幾張電路圖時選東西最多的那張
     private func finishCircuitMarquee() {
         let pts = circuitMarquee ?? []
         circuitMarquee = nil
@@ -545,12 +579,17 @@ extension NotebookViewController {
         for q in pts.dropFirst() { path.addLine(to: q) }
         path.close()
         let b = path.bounds
+        let crossing = !CircuitData.lassoIsClockwise(pts)
         var best: (ref: ElementRef, ids: Set<UUID>)?
         for ref in circuitsAt(CGPoint(x: b.midX, y: b.midY), margin: max(b.width, b.height)) {
             guard let data = circuitInfo(ref)?.data, let t = circuitTransform(ref) else { continue }
             var ids = Set<UUID>()
-            for c in data.components where LassoGeometry.encloses(CircuitGeometry.bounds(c).applying(t), path: path) { ids.insert(c.id) }
-            for w in data.wires where w.points.allSatisfy({ path.contains($0.applying(t)) }) { ids.insert(w.id) }
+            if crossing {
+                ids = data.touched(byLasso: pts.map { $0.applying(t.inverted()) })
+            } else {
+                for c in data.components where LassoGeometry.encloses(CircuitGeometry.bounds(c).applying(t), path: path) { ids.insert(c.id) }
+                for w in data.wires where w.points.allSatisfy({ path.contains($0.applying(t)) }) { ids.insert(w.id) }
+            }
             for id in ids { ids.formUnion(data.groupMembers(of: id) ?? []) }
             if ids.count > (best?.ids.count ?? 0) { best = (ref, ids) }
         }
@@ -1013,6 +1052,7 @@ extension NotebookViewController {
             var copy = data.subset(ids).withFreshIDs()
             let g = CircuitData.grid
             copy.offset(by: CGPoint(x: 0, y: ((copy.contentBounds.height + g) / g).rounded(.up) * g))
+            copy.components = autoNumbered(copy.components, in: ref)
             data.components += copy.components
             data.wires += copy.wires
             circuitSel = .items(copy.itemIDs)
@@ -1028,6 +1068,7 @@ extension NotebookViewController {
         circuitPartStyle[c.part] = (c.rotation, c.flipH, c.flipV)
         let g = CircuitData.grid
         copy.position.y += ((CircuitGeometry.bounds(c).height + g) / g).rounded(.up) * g
+        copy = autoNumbered([copy], in: ref)[0]
         data.components.append(copy)
         circuitSel = .component(copy.id)
         updateCircuit(ref, data: data)
@@ -1054,23 +1095,31 @@ extension NotebookViewController {
     /// 輸入元件名稱（例如 R1、U2）：選取中的元件再點一下（見 handleCircuitTap）、或工具列的「元件名稱」
     func promptComponentName(_ ref: ElementRef, component id: UUID) {
         guard let c = circuitInfo(ref)?.data.components.first(where: { $0.id == id }) else { return }
-        presentCircuitNameEditor(title: L("元件名稱"), text: c.name, placeholder: "R1", hint: L("留空就拿掉名稱")) { [weak self] text in
-            self?.setComponentName(ref, component: id, to: text)
+        presentComponentEditor(name: c.name, value: c.value, prefix: c.valuePrefix) { [weak self] name, value, prefix in
+            self?.setComponentLabel(ref, component: id, name: name, value: value, prefix: prefix)
         }
     }
 
-    /// 改元件名稱（空字串＝拿掉）；新名稱放在元件上方
+    /// 改元件名稱（空字串＝拿掉），數值不變
     func setComponentName(_ ref: ElementRef, component id: UUID, to text: String) {
+        guard let c = circuitInfo(ref)?.data.components.first(where: { $0.id == id }) else { return }
+        setComponentLabel(ref, component: id, name: text, value: c.value ?? "", prefix: c.valuePrefix ?? "")
+    }
+
+    /// 改元件名稱和數值（空字串＝拿掉；prefix 是單位前綴，"" ＝沒有）；新的名稱、數值放在元件上方
+    func setComponentLabel(_ ref: ElementRef, component id: UUID, name text: String, value: String, prefix: String) {
         guard var data = circuitInfo(ref)?.data, let ci = data.components.firstIndex(where: { $0.id == id }) else { return }
         let old = data.components[ci]
         let name = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if name.isEmpty {
-            data.components[ci].name = nil
+        let number = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        data.components[ci].name = name.isEmpty ? nil : name
+        data.components[ci].value = number.isEmpty ? nil : number
+        data.components[ci].valuePrefix = number.isEmpty || prefix.isEmpty ? nil : prefix
+        if name.isEmpty && number.isEmpty {
             data.components[ci].nameOffset = nil
             data.components[ci].nameSize = nil
-        } else {
-            data.components[ci].name = name
-            if old.nameOffset == nil { data.components[ci].nameOffset = CircuitComponent.defaultNameOffset(old) }
+        } else if old.nameOffset == nil {
+            data.components[ci].nameOffset = CircuitComponent.defaultNameOffset(old)
         }
         guard data.components[ci] != old else { return }
         circuitTarget = ref
@@ -1243,6 +1292,20 @@ extension NotebookViewController {
         // 選取、接線、橡皮擦（從元件庫點的元件也是一種模式：都不亮）
         var views: [UIView] = [circuitModeButton("cursorarrow", L("選取"), .select), circuitModeButton("line.diagonal", L("接線"), .wire),
                                circuitModeButton("eraser", L("橡皮擦"), .erase)]
+        // 自動編號（每一頁各自編）：開著的時候亮起來
+        let numbering = makeButton(symbol: "number", title: L("自動編號"), action: nil)
+        numbering.accessibilityLabel = L("自動編號")
+        numbering.accessibilityValue = settings.circuitAutoNumber ? "1" : "0"
+        if settings.circuitAutoNumber {
+            numbering.configuration?.baseForegroundColor = .systemBlue
+            numbering.configuration?.background.backgroundColor = UIColor.systemBlue.withAlphaComponent(0.15)
+            numbering.configuration?.background.cornerRadius = 8
+        }
+        numbering.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            self.setCircuitAutoNumber(!self.settings.circuitAutoNumber)
+        }, for: .touchUpInside)
+        views.append(numbering)
         if circuitMode == .erase {
             // 橡皮擦：擦完一筆要不要切回原本的模式
             let label = hintLabel(L("擦完切回"))

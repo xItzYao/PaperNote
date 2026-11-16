@@ -56,8 +56,8 @@ enum CircuitRenderer {
 
     /// 導線名稱、元件名稱：字的中心在名稱的位置
     static func drawNames(_ d: CircuitData, color: UIColor) {
-        let names = d.wires.map { ($0.label, $0.labelPosition, $0.labelFont) }
-            + d.components.map { ($0.name, $0.namePosition, $0.nameFont) }
+        let names: [(String?, CGPoint?, CGFloat)] = d.wires.map { ($0.label, $0.labelPosition, $0.labelFont) }
+            + d.components.flatMap { c in c.labelLines.map { (Optional($0.text), Optional($0.center), c.nameFont) } }
         for case let (text?, c?, size) in names where !text.isEmpty {
             let str = nameString(text, size: size, color: color)
             let sz = str.size()
@@ -733,8 +733,10 @@ extension CircuitRenderer {
             text(nameMarkup(s, size: w.labelFont), at: c, size: w.labelFont, weight: "500")
         }
         for comp in d.components {
-            guard let s = comp.name, !s.isEmpty, let c = comp.namePosition else { continue }
-            text(nameMarkup(s, size: comp.nameFont), at: c, size: comp.nameFont, weight: "500")
+            // 名稱、數值各一行
+            for line in comp.labelLines {
+                text(nameMarkup(line.text, size: comp.nameFont), at: line.center, size: comp.nameFont, weight: "500")
+            }
         }
         out.append("</svg>")
         return out.joined(separator: "\n") + "\n"

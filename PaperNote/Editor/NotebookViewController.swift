@@ -139,6 +139,11 @@ final class EditorSettings {
         get { bool("circuitContinuousPlace", true) }
         set { d.set(newValue, forKey: "circuitContinuousPlace") }
     }
+    /// 電路元件自動編號（R1、R2…，每一頁各自從 1 開始）；預設關
+    var circuitAutoNumber: Bool {
+        get { bool("circuitAutoNumber", false) }
+        set { d.set(newValue, forKey: "circuitAutoNumber") }
+    }
     /// 電路圖的橡皮擦擦完一筆就切回原本的模式（選取、接線或放置元件）
     var circuitEraserAutoReturn: Bool {
         get { bool("circuitEraserAutoReturn", false) }

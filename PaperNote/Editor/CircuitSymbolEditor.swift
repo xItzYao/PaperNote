@@ -567,6 +567,8 @@ final class CircuitSymbolEditorViewController: UIViewController {
     private(set) var tool: CircuitSymbolTool = .line
     let canvas = CircuitSymbolCanvas()
     let nameField = UITextField()
+    /// 自動編號用的開頭（例如 U、OTA）
+    let prefixField = UITextField()
     private let toolPicker = UISegmentedControl(items: CircuitSymbolTool.allCases.map(\.title))
     /// 橡皮擦：整條擦掉或只擦碰到的那一段（選橡皮擦時才出現）
     let eraseKind = UISegmentedControl(items: [L("整條擦除"), L("局部擦除")])
@@ -594,6 +596,7 @@ final class CircuitSymbolEditorViewController: UIViewController {
         self.onDone = onDone
         super.init(nibName: nil, bundle: nil)
         nameField.text = name
+        prefixField.text = symbol?.numberPrefix
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -608,7 +611,21 @@ final class CircuitSymbolEditorViewController: UIViewController {
         nameField.textAlignment = .center
         nameField.borderStyle = .roundedRect
         nameField.frame.size = CGSize(width: 240, height: 34)
-        navigationItem.titleView = nameField
+        // 名稱旁邊：開了自動編號時這個元件用什麼開頭（空白＝U）
+        prefixField.placeholder = L("編號開頭 U")
+        prefixField.textAlignment = .center
+        prefixField.borderStyle = .roundedRect
+        prefixField.autocorrectionType = .no
+        prefixField.autocapitalizationType = .allCharacters
+        prefixField.accessibilityLabel = L("自動編號的開頭")
+        let title = UIStackView(arrangedSubviews: [nameField, prefixField])
+        title.spacing = 8
+        title.frame.size = CGSize(width: 360, height: 34)
+        NSLayoutConstraint.activate([
+            nameField.widthAnchor.constraint(equalToConstant: 230),
+            prefixField.widthAnchor.constraint(equalToConstant: 120),
+        ])
+        navigationItem.titleView = title
         navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .cancel, primaryAction: UIAction { [weak self] _ in
             self?.dismiss(animated: true)
         })
@@ -961,7 +978,10 @@ final class CircuitSymbolEditorViewController: UIViewController {
             alert(title: draft.symbol.strokes.isEmpty && draft.symbol.texts.isEmpty ? L("還沒有畫符號") : L("還沒有接腳，導線接不上去：用「接腳」工具在格點上點一下"), message: nil)
             return
         }
-        onDone(nameField.text ?? "", symbol)
+        var finished = symbol
+        let prefix = (prefixField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        finished.numberPrefix = prefix.isEmpty ? nil : prefix
+        onDone(nameField.text ?? "", finished)
         dismiss(animated: true)
     }
 }

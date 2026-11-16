@@ -200,6 +200,8 @@ struct CircuitSymbol: Codable, Equatable {
     var strokes: [Stroke] = []
     var texts: [Label] = []
     var pins: [CGPoint] = []
+    /// 自動編號用的開頭（例如 U、OTA）；nil＝U
+    var numberPrefix: String?
 
     init(strokes: [Stroke] = [], texts: [Label] = [], pins: [CGPoint] = []) {
         self.strokes = strokes
@@ -213,6 +215,7 @@ struct CircuitSymbol: Codable, Equatable {
         strokes = try c.decodeIfPresent([Stroke].self, forKey: .strokes) ?? []
         texts = try c.decodeIfPresent([Label].self, forKey: .texts) ?? []
         pins = try c.decodeIfPresent([CGPoint].self, forKey: .pins) ?? []
+        numberPrefix = try c.decodeIfPresent(String.self, forKey: .numberPrefix)
     }
 
     /// 包住線條、文字和接腳；太小的話放大一點，才點得到
@@ -258,6 +261,10 @@ struct CircuitComponent: Codable, Equatable, Identifiable {
     var groupID: UUID?
     /// 自訂元件的符號（放到頁面上就跟著筆記走，之後改元件庫不會動到已經放好的）
     var symbol: CircuitSymbol?
+    /// 元件數值（例如 10、2.2）；nil＝沒有
+    var value: String?
+    /// 數值的單位前綴：p n u m K M G（見 CircuitValuePrefix）；nil＝沒有
+    var valuePrefix: String?
 
     var nameFont: CGFloat { nameSize ?? CircuitText.fontSize }
 
@@ -265,15 +272,53 @@ struct CircuitComponent: Codable, Equatable, Identifiable {
         nameOffset.map { CGPoint(x: position.x + $0.x, y: position.y + $0.y) }
     }
 
+    /// 畫出來的數值：10K、4.7µ
+    var valueText: String? {
+        guard let v = value?.trimmingCharacters(in: .whitespaces), !v.isEmpty else { return nil }
+        return v + CircuitValuePrefix.display(valuePrefix)
+    }
+
+    /// 名稱的位置上畫的幾行字（名稱、數值），和每行的中心：最後一行在名稱的位置，多的往上疊（名稱預設在元件上方，不會壓到元件）
+    var labelLines: [(text: String, center: CGPoint)] {
+        guard let c = namePosition else { return [] }
+        let lines = [name, valueText].compactMap { $0 }.filter { !$0.isEmpty }
+        let h = nameFont * 1.25
+        return lines.enumerated().map { i, t in
+            (t, CGPoint(x: c.x, y: c.y - CGFloat(lines.count - 1 - i) * h))
+        }
+    }
+
     var nameBounds: CGRect? {
-        guard let text = name, !text.isEmpty, let c = namePosition else { return nil }
-        return CircuitText.bounds(text, center: c, size: nameFont)
+        let rects = labelLines.map { CircuitText.bounds($0.text, center: $0.center, size: nameFont) }
+        guard let first = rects.first else { return nil }
+        return rects.dropFirst().reduce(first) { $0.union($1) }
     }
 
     /// 新名稱放在元件上方
     static func defaultNameOffset(_ c: CircuitComponent) -> CGPoint {
         let b = CircuitGeometry.bounds(c)
         return CGPoint(x: b.midX - c.position.x, y: b.minY - c.position.y - CircuitText.fontSize * 0.8)
+    }
+}
+
+/// 元件數值的單位前綴（下拉選單的選項）
+enum CircuitValuePrefix {
+    /// 第一個是沒有前綴
+    static let all = ["", "p", "n", "u", "m", "K", "M", "G"]
+
+    /// 畫在電路圖上的寫法（u 畫成 µ）
+    static func display(_ p: String?) -> String {
+        guard let p, !p.isEmpty else { return "" }
+        return p == "u" ? "µ" : p
+    }
+
+    /// SPICE 的寫法：K → k、M → Meg（SPICE 的 M 是 milli）
+    static func spice(_ p: String?) -> String {
+        switch p ?? "" {
+        case "K": return "k"
+        case "M": return "Meg"
+        default: return p ?? ""
+        }
     }
 }
 
@@ -1120,6 +1165,106 @@ extension CircuitData {
         return named
     }
 
+    // MARK: 圈選（像 AutoCAD）
+
+    /// 圈的方向（畫面座標，y 往下）：順時針＝完整圈到才選；逆時針＝碰到就選
+    static func lassoIsClockwise(_ poly: [CGPoint]) -> Bool {
+        guard poly.count > 2 else { return true }
+        var area: CGFloat = 0
+        for (a, b) in zip(poly, poly.dropFirst() + [poly[0]]) { area += a.x * b.y - b.x * a.y }
+        return area >= 0
+    }
+
+    static func polygon(_ poly: [CGPoint], contains p: CGPoint) -> Bool {
+        var inside = false
+        var j = poly.count - 1
+        for i in poly.indices {
+            let a = poly[i], b = poly[j]
+            if (a.y > p.y) != (b.y > p.y), p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x { inside.toggle() }
+            j = i
+        }
+        return inside
+    }
+
+    static func segmentsIntersect(_ p1: CGPoint, _ p2: CGPoint, _ q1: CGPoint, _ q2: CGPoint) -> Bool {
+        func cross(_ o: CGPoint, _ a: CGPoint, _ b: CGPoint) -> CGFloat { (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x) }
+        func within(_ a: CGPoint, _ b: CGPoint, _ p: CGPoint) -> Bool {
+            min(a.x, b.x) <= p.x && p.x <= max(a.x, b.x) && min(a.y, b.y) <= p.y && p.y <= max(a.y, b.y)
+        }
+        let d1 = cross(q1, q2, p1), d2 = cross(q1, q2, p2), d3 = cross(p1, p2, q1), d4 = cross(p1, p2, q2)
+        if ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0)) { return true }
+        return (d1 == 0 && within(q1, q2, p1)) || (d2 == 0 && within(q1, q2, p2))
+            || (d3 == 0 && within(p1, p2, q1)) || (d4 == 0 && within(p1, p2, q2))
+    }
+
+    /// 折線有沒有碰到圈（有一點在圈裡，或和圈的邊相交）
+    static func polygon(_ poly: [CGPoint], touches line: [CGPoint]) -> Bool {
+        guard poly.count > 2, let first = line.first else { return false }
+        if polygon(poly, contains: first) { return true }
+        let edges = Array(zip(poly, poly.dropFirst() + [poly[0]]))
+        for (a, b) in zip(line, line.dropFirst()) {
+            if polygon(poly, contains: b) { return true }
+            if edges.contains(where: { segmentsIntersect(a, b, $0.0, $0.1) }) { return true }
+        }
+        return false
+    }
+
+    /// 逆時針圈：碰到就選（元件看外框，導線看每一段）；碰到群組的一員就是整組。poly 是電路圖內的座標
+    func touched(byLasso poly: [CGPoint]) -> Set<UUID> {
+        var ids = Set<UUID>()
+        for c in components {
+            let b = CircuitGeometry.bounds(c)
+            let box = [CGPoint(x: b.minX, y: b.minY), CGPoint(x: b.maxX, y: b.minY), CGPoint(x: b.maxX, y: b.maxY),
+                       CGPoint(x: b.minX, y: b.maxY), CGPoint(x: b.minX, y: b.minY)]
+            // 外框碰到圈，或整個圈在外框裡面
+            if Self.polygon(poly, touches: box) || poly.first.map(b.contains) == true { ids.insert(c.id) }
+        }
+        for w in wires where Self.polygon(poly, touches: w.points) { ids.insert(w.id) }
+        for id in ids { ids.formUnion(groupMembers(of: id) ?? []) }
+        return ids
+    }
+
+    // MARK: 自動編號
+
+    /// 自動編號的開頭：電阻 R、電容 C…（SPICE 慣例）；自己畫的元件照它設定的（沒設定是 U）；接地、電源符號不編號
+    static func autoNumberPrefix(_ c: CircuitComponent) -> String? {
+        if supplyNetName(c.part) != nil { return nil }
+        if c.part == .customSymbol {
+            let p = c.symbol?.numberPrefix.map(netlistName) ?? ""
+            return p.isEmpty ? "U" : p
+        }
+        return netlistPrefix(c.part)
+    }
+
+    /// 名稱是自動編號的樣子（開頭 + 數字，例如 R3、R_{3}）：回傳號碼
+    static func autoNumber(of name: String?, prefix: String) -> Int? {
+        guard let name else { return nil }
+        let n = netlistName(name)
+        guard n.hasPrefix(prefix) else { return nil }
+        let digits = n.dropFirst(prefix.count)
+        guard !digits.isEmpty, digits.allSatisfy(\.isASCII), digits.allSatisfy(\.isNumber) else { return nil }
+        return Int(digits)
+    }
+
+    /// 自動編號：沒有名稱、或名稱就是自動編號樣子的（複製出來的 R1），照 used（這一頁已經用掉的名稱）接著編下一個號碼。
+    /// 自己取的名稱（M_{in}、Rload）不動
+    static func autoNumber(_ comps: inout [CircuitComponent], used: [String]) {
+        var next: [String: Int] = [:]
+        func number(_ prefix: String) -> Int {
+            if let n = next[prefix] { return n }
+            return (used.compactMap { autoNumber(of: $0, prefix: prefix) }.max() ?? 0) + 1
+        }
+        for i in comps.indices {
+            guard let prefix = autoNumberPrefix(comps[i]) else { continue }
+            let name = comps[i].name ?? ""
+            guard name.isEmpty || autoNumber(of: name, prefix: prefix) != nil else { continue }
+            let n = number(prefix)
+            next[prefix] = n + 1
+            comps[i].name = "\(prefix)\(n)"
+            if comps[i].nameOffset == nil { comps[i].nameOffset = CircuitComponent.defaultNameOffset(comps[i]) }
+        }
+    }
+
     /// 自動命名用的開頭字母（SPICE 慣例）
     private static func netlistPrefix(_ part: CircuitPart) -> String {
         switch part {
@@ -1193,7 +1338,7 @@ extension CircuitData {
         var taken = Set(components.compactMap { $0.name.map(Self.netlistName) }.filter { !$0.isEmpty })
         var counters: [String: Int] = [:]
         var lines = ["* \(title) netlist",
-                     "* Format: <name> <type> <pin>=<node> ...  (node 0 = ground)",
+                     "* Format: <name> <type> <pin>=<node> ... [value]  (node 0 = ground; k = 1e3, Meg = 1e6, m = 1e-3, u = 1e-6)",
                      "* Pins: MOSFET/JFET G D S [B], BJT B C E, IGBT G C E, diode A(anode) K(cathode),",
                      "*       sources and polarized parts + -, current source arrow points from + to -, op-amp IN- IN+ OUT"]
         var members: [Int: [String]] = [:]
@@ -1221,6 +1366,9 @@ extension CircuitData {
                 if members[net] == nil { order.append(net) }
                 members[net, default: []].append("\(name).\(pn)")
                 fields.append("\(pn)=\(netName(net))")
+            }
+            if let v = c.value?.trimmingCharacters(in: .whitespaces), !v.isEmpty {
+                fields.append(v.replacingOccurrences(of: " ", with: "") + CircuitValuePrefix.spice(c.valuePrefix))
             }
             lines.append(fields.joined(separator: " "))
         }
