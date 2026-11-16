@@ -55,6 +55,45 @@ final class CircuitNetlistTests: XCTestCase {
         XCTAssertEqual(d.wires.compactMap(\.label), ["VIN"])
     }
 
+    // MARK: 接腳直接碰在一起
+
+    /// 回報的需求：兩個元件的接腳接在一起，要當成中間有一條長度 0 的導線，拉開時才會拉出線（拉伸）
+    private func touchingResistors() -> CircuitData {
+        var d = CircuitData()
+        d.components = [CircuitComponent(part: .resistor, position: CGPoint(x: 100, y: 100)),
+                        CircuitComponent(part: .resistor, position: CGPoint(x: 160, y: 100))]
+        XCTAssertEqual(CircuitGeometry.pins(d.components[0])[1], CircuitGeometry.pins(d.components[1])[0], "測試前提：接腳碰在一起")
+        return d
+    }
+
+    func testPinsTouchingEachOtherStretchIntoAWireWhenMoved() {
+        var d = touchingResistors()
+        let n0 = d.nets()
+        XCTAssertEqual(n0.pins[1], n0.pins[2], "碰在一起就是接上")
+        let moving = d.components[1].id
+        d.moveItems([moving], by: CGPoint(x: 0, y: 40))
+        XCTAssertEqual(d.wires.map(\.points), [[CGPoint(x: 130, y: 100), CGPoint(x: 130, y: 140)]], "拉出一條線")
+        let n = d.nets()
+        XCTAssertEqual(n.pins[1], n.pins[2], "還是接在一起")
+        XCTAssertNotEqual(n.pins[0], n.pins[3])
+    }
+
+    func testRotatingAPartKeepsItsTouchingNeighbour() {
+        var d = touchingResistors()
+        d.transformItems([d.components[1].id], .rotate)
+        let n = d.nets()
+        XCTAssertEqual(n.pins[1], n.pins[2], "轉了也還接著")
+        XCTAssertEqual(d.wires.count, 1)
+    }
+
+    func testMovingBothTogetherAddsNoWire() {
+        var d = touchingResistors()
+        d.moveItems(Set(d.components.map(\.id)), by: CGPoint(x: 0, y: 40))
+        XCTAssertTrue(d.wires.isEmpty, "一起動：還是碰在一起，不用拉線")
+        d.stretchTouchingPins(from: [CGPoint(x: 130, y: 140)], to: [CGPoint(x: 130, y: 140)], moving: [d.components[1].id])
+        XCTAssertTrue(d.wires.isEmpty, "沒動就是長度 0")
+    }
+
     // MARK: 網表
 
     func testNetlistListsEveryComponentWithItsNodes() {

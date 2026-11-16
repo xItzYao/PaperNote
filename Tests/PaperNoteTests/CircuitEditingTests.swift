@@ -584,6 +584,33 @@ final class CircuitEditingTests: XCTestCase {
         }
     }
 
+    /// 回報的需求：接腳直接接在一起的兩個元件，拖開一個會拉出導線（當成中間有長度 0 的線）
+    func testDraggingAPartAwayFromATouchingPartStretchesAWire() throws {
+        var d = try XCTUnwrap(data)
+        let first = d.components[0]
+        let second = CircuitComponent(part: .resistor, position: CGPoint(x: first.position.x + 60, y: first.position.y))
+        d.components.append(second)
+        editor.updateCircuit(ref, data: d)
+        let touching = try XCTUnwrap(data)
+        XCTAssertEqual(CircuitGeometry.pins(touching.components[0])[1], CircuitGeometry.pins(touching.components[1])[0], "測試前提：接腳碰在一起")
+        let wires = touching.wires.count
+        let start = editor.circuitDoc(touching.components[1].position, ref)
+        editor.handleCircuitTap(at: start)
+        XCTAssertEqual(editor.circuitSel, .component(second.id))
+        let s = touching.scale
+        TouchPan().drag(from: start, to: CGPoint(x: start.x, y: start.y + 40 * s)) { editor.handleCircuitPan($0, $0.location(in: nil)) }
+
+        let after = try XCTUnwrap(data)
+        let moved = try XCTUnwrap(after.components.first { $0.id == second.id })
+        let fixed = try XCTUnwrap(after.components.first { $0.id == first.id })
+        XCTAssertNotEqual(moved.position.y, fixed.position.y, "拖開了")
+        XCTAssertEqual(after.wires.count, wires + 1, "拉出一條線")
+        let n = after.nets()
+        XCTAssertEqual(n.pins[1], n.pins[2], "兩個元件還是接在一起")
+        editor.undoTapped()
+        XCTAssertEqual(data?.wires.count, wires, "可以復原")
+    }
+
     func testEraserButtonIsOnTheSecondRow() throws {
         let eraser = try XCTUnwrap(editor.buildCircuitRibbon().compactMap { $0 as? UIButton }.first { $0.accessibilityLabel == "橡皮擦" })
         eraser.sendActions(for: .touchUpInside)

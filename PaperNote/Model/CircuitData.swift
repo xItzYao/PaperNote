@@ -723,6 +723,7 @@ extension CircuitData {
             change(&components[i])
             to += CircuitGeometry.pins(components[i])
         }
+        let pinsFrom = from, pinsTo = to
         wires.removeAll { ids.contains($0.id) }
         for w in wires {
             for end in [w.points.first, w.points.last].compactMap({ $0 }) where !from.contains(end) {
@@ -733,6 +734,7 @@ extension CircuitData {
             }
         }
         reattach(from: from, to: to)
+        stretchTouchingPins(from: pinsFrom, to: pinsTo, moving: ids)
         wires += moved.map { w in
             var w = w
             w.points = w.points.map(f)
@@ -894,6 +896,21 @@ extension CircuitData {
             before = moved
         }
         wires.removeAll { $0.points.count < 2 }
+    }
+
+    /// 兩個元件的接腳直接碰在一起（中間沒有導線）：當成中間有一條長度 0 的導線。
+    /// 接腳從 oldPins 移到 newPins（拖曳、旋轉、翻轉）時，沒有跟著動的元件接腳還在原地：從那裡拉一條線到新的位置（拉伸），不會脫開。
+    /// 移動 0 的就是長度 0，不加線
+    mutating func stretchTouchingPins(from oldPins: [CGPoint], to newPins: [CGPoint], moving ids: Set<UUID>) {
+        guard oldPins.count == newPins.count else { return }
+        let staying = components.filter { !ids.contains($0.id) }.flatMap { CircuitGeometry.pins($0) }
+        var added: [(CGPoint, CGPoint)] = []
+        for (a, b) in zip(oldPins, newPins) where a != b && staying.contains(a) && !added.contains(where: { $0 == (a, b) }) {
+            let pts = Self.orthogonalize([a, b])
+            guard pts.count >= 2 else { continue }
+            wires.append(CircuitWire(points: pts))
+            added.append((a, b))
+        }
     }
 
     /// 端點原本在別條導線上、那條線改了走線後脫開的，移到那條線上最近的位置。有移動就回傳 true

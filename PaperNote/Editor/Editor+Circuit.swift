@@ -691,6 +691,8 @@ extension NotebookViewController {
             data.components[ci].position = CircuitData.snap(CGPoint(x: orig.x + delta.x, y: orig.y + delta.y))
             let newPins = CircuitGeometry.pins(data.components[ci])
             data.reattach(from: oldPins, to: newPins)
+            // 和別的元件接腳直接碰在一起的：拉出一條線，不會脫開
+            data.stretchTouchingPins(from: oldPins, to: newPins, moving: [id])
             // 接腳放到導線上：接上（共點）
             data.connectPins(newPins, before: through)
         case let .wireSegment(id, i):
@@ -874,6 +876,7 @@ extension NotebookViewController {
         var through = oldPins.map(data.wiresThrough)
         if oldPins.count == newPins.count {
             data.reattach(from: oldPins, to: newPins)
+            data.stretchTouchingPins(from: oldPins, to: newPins, moving: [id])
         } else {
             // 輸入數量改變：同名的接腳（I0、Y…）對應起來，接在上面的導線跟著走
             let oldNames = CircuitGeometry.pinNames(old), newNames = CircuitGeometry.pinNames(new)
@@ -885,6 +888,7 @@ extension NotebookViewController {
                 }
             }
             data.reattach(from: from, to: to)
+            data.stretchTouchingPins(from: from, to: to, moving: [id])
             through = newNames.map { name in oldNames.firstIndex(of: name).map { through[$0] } ?? [] }
         }
         // 旋轉、翻轉後接腳落在導線上：接上（共點）
