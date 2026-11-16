@@ -100,8 +100,10 @@ final class EditorRequestsNov16Tests: XCTestCase {
         editor.toolPanByDrawingTouch = false
         let s = try XCTUnwrap(data()).scale
         g.drag(from: start, to: CGPoint(x: start.x, y: start.y + 40 * s)) { editor.handleCircuitPan($0, $0.location(in: nil)) }
-        let moved = try XCTUnwrap(data()?.components.first)
-        XCTAssertEqual(moved.position.y - part.position.y, 40, accuracy: 0.5, "接線模式下手指也是拖動選起來的元件")
+        // 放開後電路圖會重新整理座標（內容貼齊外框），所以比頁面上的位置
+        let moved = editor.circuitDoc(try XCTUnwrap(data()?.components.first).position, ref)
+        XCTAssertEqual(moved.y - start.y, 40 * s, accuracy: 0.5, "接線模式下手指也是拖動選起來的元件")
+        XCTAssertEqual(moved.x, start.x, accuracy: 0.5)
         XCTAssertTrue(data()?.wires.isEmpty ?? false, "沒有畫出導線")
     }
 

@@ -157,7 +157,8 @@ final class CircuitGroupTests: XCTestCase {
         XCTAssertFalse(has(lib.sectionBodies[passive]))
         let button = try XCTUnwrap(lib.visibleTiles.first { $0.accessibilityLabel == "我的電阻" } ?? findButton("我的電阻", in: lib))
         let move = try XCTUnwrap(button.menu?.children.compactMap { $0 as? UIMenu }.first { $0.title == "移到分類" }, "長按選單有「移到分類」")
-        XCTAssertEqual(move.children.count, CircuitLibraryView.sections.count + 1, "自訂區＋每個分類")
+        XCTAssertEqual(move.children.count, CircuitLibraryView.allSections.count + 2, "自訂區＋每個分類＋新增分類")
+        XCTAssertEqual(move.children.last?.title, "新增分類…")
 
         CustomCircuitStore.shared.move(c.id, toSection: "passive")
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
