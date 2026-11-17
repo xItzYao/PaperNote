@@ -663,7 +663,7 @@ final class CircuitGroupTests: XCTestCase {
         XCTAssertTrue(editor.topBar.isHidden)
         XCTAssertTrue(editor.subBar.isHidden)
         XCTAssertLessThan(editor.canvas.frame.minY, top, "頁面往上佔滿")
-        XCTAssertFalse(editor.previewExitButton.isHidden)
+        XCTAssertTrue(editor.previewLongPress.isEnabled, "長按頁面問要不要回到筆記模式（沒有「結束預覽」按鈕）")
         XCTAssertTrue(editor.pinOverlay.isHidden)
         XCTAssertFalse(editor.canvas.drawingGestureRecognizer.isEnabled, "不能寫")
         XCTAssertFalse(editor.inkRecognizer.isEnabled)
@@ -672,12 +672,12 @@ final class CircuitGroupTests: XCTestCase {
         XCTAssertTrue(editor.canvas.panGestureRecognizer.isEnabled, "可以捲動")
         XCTAssertTrue(editor.circuitLibrary.isHidden)
 
-        editor.previewExitButton.sendActions(for: .touchUpInside)
+        editor.setPreviewMode(false)
         XCTAssertFalse(editor.topBar.isHidden)
         XCTAssertFalse(editor.subBar.isHidden)
         XCTAssertEqual(editor.canvas.frame.minY, top, accuracy: 0.5)
         XCTAssertEqual(editor.tool, .pen, "回到原本的工具")
         XCTAssertTrue(editor.tapGesture.isEnabled)
-        XCTAssertTrue(editor.previewExitButton.isHidden)
+        XCTAssertFalse(editor.previewLongPress.isEnabled)
     }
 }

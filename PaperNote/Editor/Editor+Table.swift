@@ -555,7 +555,7 @@ extension NotebookViewController {
 
 extension NotebookViewController {
     var ownGestureRecognizers: [UIGestureRecognizer] {
-        [toolPan, tapGesture, doubleTapGesture, longPressGesture, holdRecognizer, textLongPress, textHandlePan, eraserCapture, pencilPointTracker, palmBlocker, inkRecognizer].compactMap { $0 }
+        [toolPan, tapGesture, doubleTapGesture, longPressGesture, holdRecognizer, textLongPress, textHandlePan, eraserCapture, pencilPointTracker, palmBlocker, inkRecognizer, previewLongPress].compactMap { $0 }
     }
 
     func configurePencilKitGestures() {

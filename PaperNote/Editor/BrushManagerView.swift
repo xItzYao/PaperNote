@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// 管理常用筆刷：筆和螢光筆各自的顏色數量、順序
+/// 調色盤設定（常用筆刷）：筆和螢光筆各自的顏色數量、順序
 struct BrushManagerView: View {
     let onDone: () -> Void
     @State private var category: BrushCategory
@@ -51,7 +51,7 @@ struct BrushManagerView: View {
                     Text(L("順序會套用到工具列和調色盤。至少要保留一個。"))
                 }
             }
-            .navigationTitle(L("管理常用筆刷"))
+            .navigationTitle(L("調色盤設定"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { EditButton() }

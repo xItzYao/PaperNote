@@ -280,7 +280,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var barChrome: [UIView] = []
     var canvasBelowBars: NSLayoutConstraint!
     var canvasFullHeight: NSLayoutConstraint!
-    let previewExitButton = UIButton(configuration: .filled())
+    /// 預覽模式下長按頁面：問要不要回到筆記模式（不放「結束預覽」按鈕，畫面乾淨）
+    let previewLongPress = UILongPressGestureRecognizer()
 
     // 自製筆刷（見 InkEngine.swift）
     let inkRecognizer = InkCaptureRecognizer(target: nil, action: nil)
@@ -1202,6 +1203,39 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         showToast(L("第 \(index + 1) 頁已移到「頁面 → 最近刪除的頁面」，30 天內可以還原"))
     }
 
+    /// 「⋯ → 清除該頁面所有物件」：先問一次
+    func confirmClearPage(_ index: Int) {
+        guard pages.indices.contains(index) else { return }
+        let a = UIAlertController(title: L("清除第 \(index + 1) 頁所有物件？"),
+                                  message: L("筆跡、螢光筆、文字框、圖片、表格、電路圖都會清掉，頁面和背景留著。可以按「上一步」復原。"),
+                                  preferredStyle: .alert)
+        a.addAction(UIAlertAction(title: L("取消"), style: .cancel))
+        a.addAction(UIAlertAction(title: L("清除"), style: .destructive) { [weak self] _ in self?.clearPage(index) })
+        present(a, animated: true)
+    }
+
+    /// 清掉一頁上的所有東西（筆跡、螢光標示、自製筆刷筆跡、文字框、圖片、表格、電路圖），一步就能復原。
+    /// 頁面本身、背景（PDF、格線）、擴展的大小都不動
+    func clearPage(_ index: Int) {
+        guard pages.indices.contains(index) else { return }
+        endTextEditing()
+        select(nil)
+        clearLassoSelection()
+        let id = pages[index].id
+        DebugLog.add("clear page \(index + 1)")
+        recordEdit(drawing: canvas.drawing, pageIDs: [id])
+        // PencilKit 的筆跡：和存檔時一樣，看每一筆最靠近哪一頁
+        var drawing = canvas.drawing
+        drawing.strokes.removeAll { nearestPageIndex(to: $0.renderBounds.center) == index }
+        if drawing.strokes.count != canvas.drawing.strokes.count { setDrawing(drawing) }
+        updatePage(index, undoable: false) { page in
+            page.elements = []
+            page.highlights = []
+            page.ink = []
+        }
+        showToast(L("已清除第 \(index + 1) 頁，按「上一步」可以復原"))
+    }
+
     func presentTrashedPages(from source: UIView?) {
         saveNow()
         var host: UIHostingController<TrashedPagesHost>?
@@ -1257,36 +1291,26 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         }
     }
 
-    /// 匯出：畫面中間跳出小視窗選格式
+    /// 匯出：上面打頁碼、下面勾縮圖（兩邊同步），再選格式
     func presentExportChoice(from source: UIView) {
-        let alert = UIAlertController(title: L("匯出「\(session.title)」"), message: L("要匯出成哪一種格式？可以只匯出部分頁面。"), preferredStyle: .alert)
-        alert.addTextField { f in
-            f.placeholder = PageSelection.hint
-            f.accessibilityLabel = L("匯出的頁面")
-            f.keyboardType = .numbersAndPunctuation
-            f.clearButtonMode = .whileEditing
-        }
-        alert.addAction(UIAlertAction(title: L("PDF（給別人看、列印）"), style: .default) { [weak self, weak alert] _ in
-            self?.export(paperNote: false, pages: alert?.textFields?.first?.text ?? "", from: source)
-        })
-        alert.addAction(UIAlertAction(title: L("PaperNote（可以繼續編輯筆跡）"), style: .default) { [weak self, weak alert] _ in
-            self?.export(paperNote: true, pages: alert?.textFields?.first?.text ?? "", from: source)
-        })
-        alert.addAction(UIAlertAction(title: L("取消"), style: .cancel))
-        present(alert, animated: true)
-    }
-
-    /// pages：使用者輸入的頁碼（見 PageSelection），空白＝全部
-    func export(paperNote: Bool, pages text: String = "", from source: UIView) {
         endTextEditing()
         saveNow()
-        let pages: [Int]
-        do {
-            pages = try PageSelection.parse(text, pageCount: session.document.pages.count)
-        } catch {
-            showMessage(L("頁碼有誤"), error.localizedDescription)
-            return
+        let vc = ExportPagesViewController(session: session)
+        vc.onExport = { [weak self, weak vc] paperNote, pages in
+            vc?.dismiss(animated: true) {
+                self?.export(paperNote: paperNote, pages: pages, from: source)
+            }
         }
+        let nav = UINavigationController(rootViewController: vc)
+        nav.modalPresentationStyle = .formSheet
+        nav.preferredContentSize = CGSize(width: 720, height: 820)
+        present(nav, animated: true)
+    }
+
+    /// pages：要匯出的頁面索引（0 起算，排好）
+    func export(paperNote: Bool, pages: [Int], from source: UIView) {
+        endTextEditing()
+        saveNow()
         do {
             let url = paperNote ? try NotebookExporter.exportPaperNote(session: session, pages: pages)
                                 : try NotebookExporter.exportPDF(session: session, pages: pages)

@@ -50,8 +50,12 @@ enum Loc {
         return table
     }()
 
+    /// 同一個中文在不同地方意思不一樣時（「下一步」：工具列是重做、自訂元件是往下一頁），key 寫成「下一步#選分類」：
+    /// 中文只顯示 # 前面，英文各自翻
     static func template(for key: String, english: Bool) -> String {
-        english ? (Self.english[key] ?? key) : key
+        if english, let e = Self.english[key] { return e }
+        guard let i = key.firstIndex(of: "#") else { return key }
+        return String(key[..<i])
     }
 
     /// 把 %@（依序）和 %n$@（指定第 n 個）換成插入的值，其他的 % 原樣保留。

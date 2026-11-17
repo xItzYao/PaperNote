@@ -54,6 +54,7 @@ extension NotebookViewController {
         circuitLibrary.onRenameCustom = { [weak self] id in self?.promptRenameCustomCircuit(id) }
         circuitLibrary.onDeleteCustom = { [weak self] id in self?.deleteCustomCircuit(id) }
         circuitLibrary.onNewCategory = { [weak self] id in self?.promptNewCircuitCategory(moving: id) }
+        circuitLibrary.onDeleteCategory = { [weak self] key in self?.deleteCircuitCategory(key) }
 
         // 插入圖片：一排照片浮在畫布下方，只在圖片工具顯示
         photoStrip.translatesAutoresizingMaskIntoConstraints = false
@@ -83,7 +84,7 @@ extension NotebookViewController {
             topFill.bottomAnchor.constraint(equalTo: topBar.topAnchor),
         ])
         barChrome = [topFill, topBar, subBar, sep]
-        setupPreviewExitButton()
+        setupPreviewLongPress()
 
         // 左：標題（回資料庫用分頁列最左邊的「<」）；長按看完整名稱、改名
         let titleLabel = UILabel()
@@ -278,23 +279,24 @@ extension NotebookViewController {
 
     // MARK: - 預覽模式
 
-    private func setupPreviewExitButton() {
-        var c = UIButton.Configuration.filled()
-        c.image = UIImage(systemName: "eye.slash")
-        c.title = L("結束預覽")
-        c.imagePadding = 4
-        c.baseBackgroundColor = UIColor.black.withAlphaComponent(0.55)
-        c.baseForegroundColor = .white
-        c.cornerStyle = .capsule
-        previewExitButton.configuration = c
-        previewExitButton.translatesAutoresizingMaskIntoConstraints = false
-        previewExitButton.isHidden = true
-        previewExitButton.addAction(UIAction { [weak self] _ in self?.setPreviewMode(false) }, for: .touchUpInside)
-        view.addSubview(previewExitButton)
-        NSLayoutConstraint.activate([
-            previewExitButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
-            previewExitButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
-        ])
+    private func setupPreviewLongPress() {
+        previewLongPress.addTarget(self, action: #selector(previewLongPressed(_:)))
+        previewLongPress.minimumPressDuration = 0.5
+        previewLongPress.isEnabled = false
+        canvas.addGestureRecognizer(previewLongPress)
+    }
+
+    @objc func previewLongPressed(_ g: UILongPressGestureRecognizer) {
+        guard g.state == .began, previewMode, presentedViewController == nil else { return }
+        askToLeavePreview()
+    }
+
+    /// 長按頁面跳出：是否回到筆記模式
+    func askToLeavePreview() {
+        let a = UIAlertController(title: L("是否回到筆記模式？"), message: nil, preferredStyle: .alert)
+        a.addAction(UIAlertAction(title: L("取消"), style: .cancel))
+        a.addAction(UIAlertAction(title: L("回到筆記模式"), style: .default) { [weak self] _ in self?.setPreviewMode(false) })
+        present(a, animated: true)
     }
 
     /// 預覽模式：工具列、貼圖收起來，頁面佔滿畫面，只能捲動、縮放（筆跡還是看得到）
@@ -308,11 +310,12 @@ extension NotebookViewController {
         previewMode = on
         barChrome.forEach { $0.isHidden = on }
         pinOverlay.isHidden = on
-        previewExitButton.isHidden = !on
+        previewLongPress.isEnabled = on
         canvasBelowBars.isActive = false
         canvasFullHeight.isActive = false
         (on ? canvasFullHeight : canvasBelowBars)?.isActive = true
         if on { applyTool() } else { setTool(toolBeforePreview) }
+        if on { showToast(L("長按頁面可以回到筆記模式")) }
         view.layoutIfNeeded()
         // 畫布變高或變矮：頁面留在畫面上原本的位置
         let maxY = max(0, canvas.contentSize.height + canvas.contentInset.bottom - canvas.bounds.height)
@@ -1005,10 +1008,10 @@ extension NotebookViewController {
         return [palette] + tools
     }
 
-    /// 常用筆刷列靠左或靠右
+    /// 右上角「⋯」：分成 Apple Pencil 設定、書寫設定、電路圖設定、其他四段（每段有標題，選單還是只有兩層）
     func makeSettingsMenuItems() -> [UIMenuElement] {
         let s = settings
-        let toggles = UIMenu(options: .displayInline, children: [
+        let pencil = UIMenu(title: L("Apple Pencil 設定"), options: .displayInline, children: [
             UIAction(title: L("Pencil 點兩下時顯示調色盤圖示"), image: UIImage(systemName: "paintpalette"), state: s.paletteOnDoubleTap ? .on : .off) { _ in
                 s.paletteOnDoubleTap.toggle()
             },
@@ -1018,6 +1021,8 @@ extension NotebookViewController {
                 UIAction(title: L("左手寫字"), state: s.palmRejection == "left" ? .on : .off) { _ in s.palmRejection = "left" },
                 UIAction(title: L("關閉"), state: s.palmRejection == "off" ? .on : .off) { _ in s.palmRejection = "off" },
             ]),
+        ])
+        let writing = UIMenu(title: L("書寫設定"), options: .displayInline, children: [
             UIAction(title: L("用手指書寫"), image: UIImage(systemName: "hand.draw"), state: s.fingerDrawing ? .on : .off) { [weak self] _ in
                 s.fingerDrawing.toggle()
                 self?.applyTool()
@@ -1035,6 +1040,14 @@ extension NotebookViewController {
                 self?.applyTool()
                 self?.showToast(s.customInk ? L("原子筆改用自製筆刷：照筆尖原始軌跡畫，不做圓滑（其他筆照樣是 PencilKit）") : L("原子筆改回 PencilKit"))
             },
+            UIAction(title: L("螢光筆自動對齊 PDF 文字"), image: UIImage(systemName: "highlighter"), state: s.smartHighlight ? .on : .off) { _ in
+                s.smartHighlight.toggle()
+            },
+            UIAction(title: L("調色盤設定…"), image: UIImage(systemName: "swatchpalette")) { [weak self] _ in
+                self?.presentBrushManager()
+            },
+        ])
+        let circuit = UIMenu(title: L("電路圖設定"), options: .displayInline, children: [
             UIAction(title: L("連續放置元件"), image: UIImage(systemName: "square.on.square"), state: s.circuitContinuousPlace ? .on : .off) { _ in
                 s.circuitContinuousPlace.toggle()
             },
@@ -1053,19 +1066,19 @@ extension NotebookViewController {
             UIAction(title: L("電路元件庫放左邊"), image: UIImage(systemName: "sidebar.left"), state: s.circuitLibraryOnLeft ? .on : .off) { [weak self] _ in
                 self?.setCircuitLibraryOnLeft(!s.circuitLibraryOnLeft)
             },
+        ])
+        // 其他：最下面是關於我
+        let other = UIMenu(title: L("其他"), options: .displayInline, children: [
+            UIAction(title: L("預覽模式（收合工具列）"), image: UIImage(systemName: "eye")) { [weak self] _ in
+                self?.setPreviewMode(true)
+            },
+            UIAction(title: L("清除該頁面所有物件"), image: UIImage(systemName: "trash.slash"), attributes: .destructive) { [weak self] _ in
+                guard let self else { return }
+                self.confirmClearPage(self.currentPageIndex)
+            },
             UIAction(title: L("拷貝除錯紀錄"), image: UIImage(systemName: "ladybug")) { [weak self] _ in
                 UIPasteboard.general.string = DebugLog.text
                 self?.showToast(L("已拷貝除錯紀錄，可以貼給開發者"))
-            },
-            UIAction(title: L("螢光筆自動對齊 PDF 文字"), image: UIImage(systemName: "highlighter"), state: s.smartHighlight ? .on : .off) { _ in
-                s.smartHighlight.toggle()
-            },
-        ])
-        // 最下面：使用說明、關於我
-        let help = UIMenu(options: .displayInline, children: [
-            UIAction(title: L("使用說明…"), image: UIImage(systemName: "questionmark.circle")) { [weak self] _ in
-                guard let self else { return }
-                self.presentHelp(from: self.settingsButton)
             },
             UIAction(title: L("關於我…"), image: UIImage(systemName: "person.crop.circle")) { [weak self] _ in
                 let about = UIHostingController(rootView: AboutView())
@@ -1073,19 +1086,7 @@ extension NotebookViewController {
                 self?.present(about, animated: true)
             },
         ])
-        let actions = UIMenu(options: .displayInline, children: [
-            UIAction(title: L("預覽模式（收合工具列）"), image: UIImage(systemName: "eye")) { [weak self] _ in
-                self?.setPreviewMode(true)
-            },
-            UIAction(title: L("管理常用筆刷…"), image: UIImage(systemName: "swatchpalette")) { [weak self] _ in
-                self?.presentBrushManager()
-            },
-            UIAction(title: L("清除畫面上所有貼圖"), image: UIImage(systemName: "pin.slash"), attributes: .destructive) { [weak self] _ in
-                PinStore.shared.removeAll()
-                self?.pinOverlay.reload()
-            },
-        ])
-        return [toggles, actions, help]
+        return [pencil, writing, circuit, other]
     }
 
     // MARK: - Favorites
@@ -1193,14 +1194,6 @@ extension NSLayoutConstraint {
 }
 
 extension NotebookViewController {
-    func presentHelp(from source: UIView) {
-        let host = UIHostingController(rootView: HelpView())
-        host.modalPresentationStyle = .popover
-        host.preferredContentSize = CGSize(width: 460, height: 640)
-        host.popoverPresentationController?.sourceView = source
-        host.popoverPresentationController?.sourceRect = source.bounds
-        present(host, animated: true)
-    }
 }
 
 extension NotebookViewController {

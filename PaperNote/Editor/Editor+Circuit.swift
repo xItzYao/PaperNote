@@ -1033,13 +1033,13 @@ extension NotebookViewController {
     /// 畫新的自訂元件，或改元件庫裡已經有的（頁面上已經放好的不受影響）
     func presentSymbolEditor(editing id: UUID? = nil) {
         let existing = id.flatMap { CustomCircuitStore.shared.circuit($0) }
-        // 新的元件：畫完就問要放在哪個分類
+        // 新的元件：畫完按「下一步」選要放在哪個分類
         var section: String?
         let editor = CircuitSymbolEditorViewController(name: existing?.name ?? "", symbol: existing?.symbol) { [weak self] name, symbol in
             self?.saveCustomSymbol(id: id, name: name, symbol: symbol, section: section)
         }
         if id == nil {
-            editor.sectionChoices = CircuitLibraryView.sectionChoices
+            editor.asksForSection = true
             editor.onChooseSection = { section = $0 }
             editor.onNewSection = { CustomCircuitStore.shared.addCategory($0) }
         }
@@ -1061,6 +1061,16 @@ extension NotebookViewController {
             if let section { store.move(c.id, toSection: section) }
             showToast(L("已加入「\(c.name)」"))
         }
+    }
+
+    /// 長按自己加的分類選「刪除」：分類拿掉，裡面的元件回到「自訂電路圖」那一區（元件不會不見）
+    func deleteCircuitCategory(_ key: String) {
+        let store = CustomCircuitStore.shared
+        guard let category = store.categories.first(where: { $0.key == key }) else { return }
+        let moved = store.circuits.filter { $0.section == key }.count
+        store.removeCategory(key)
+        showToast(moved > 0 ? L("已刪除「\(category.name)」，裡面的 \(moved) 個元件移到「\(CircuitLibraryView.customSectionName)」")
+                            : L("已刪除「\(category.name)」"))
     }
 
     /// 長按自訂元件選「新增分類…」：取名字，建好就把它移過去

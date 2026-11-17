@@ -301,7 +301,25 @@ enum PageSelection {
         var errorDescription: String? { message }
     }
 
-    static let hint = L("例如 7-10 或 1 3 5 6 7，空白是全部")
+    static let hint = L("例如 7-10 或 1 3 5 6 7")
+
+    /// 勾選的頁面寫回頁碼（0 起算的索引 → 1 起算）：連續三頁以上寫成 7-10，其他用空格分開
+    static func format(_ indices: [Int], pageCount: Int) -> String {
+        let pages = Array(Set(indices.filter { (0..<pageCount).contains($0) })).sorted().map { $0 + 1 }
+        var parts: [String] = []
+        var i = 0
+        while i < pages.count {
+            var j = i
+            while j + 1 < pages.count, pages[j + 1] == pages[j] + 1 { j += 1 }
+            if j - i >= 2 {
+                parts.append("\(pages[i])-\(pages[j])")
+            } else {
+                parts.append(contentsOf: pages[i...j].map(String.init))
+            }
+            i = j + 1
+        }
+        return parts.joined(separator: " ")
+    }
 
     /// 排好、不重複的頁面索引（從 0 開始）
     static func parse(_ text: String, pageCount: Int) throws -> [Int] {

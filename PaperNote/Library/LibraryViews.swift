@@ -191,8 +191,6 @@ struct FolderView: View {
     @State private var importSummary: String?
     @State private var importing = false
     @State private var exportTarget: NotebookMeta?
-    /// 匯出的頁面（見 PageSelection），空白＝全部
-    @State private var exportPages = ""
     /// 我的最愛文件（畫面中間的視窗）；在視窗裡點的筆記本，等視窗關掉再打開
     @State private var showFavorites = false
     @State private var openAfterFavorites: UUID?
@@ -583,16 +581,17 @@ struct FolderView: View {
         } message: {
             Text(importSummary ?? "")
         }
-        .alert(L("匯出「\(exportTarget?.title ?? "")」"), isPresented: Binding(get: { exportTarget != nil }, set: { if !$0 { exportTarget = nil } }),
-               presenting: exportTarget) { nb in
-            TextField(PageSelection.hint, text: $exportPages)
-                .keyboardType(.numbersAndPunctuation)
-                .accessibilityLabel(L("匯出的頁面"))
-            Button(L("PDF（給別人看、列印）")) { export(nb.id, paperNote: false, pages: exportPages) }
-            Button(L("PaperNote（可以繼續編輯筆跡）")) { export(nb.id, paperNote: true, pages: exportPages) }
-            Button(L("取消"), role: .cancel) {}
-        } message: { _ in
-            Text(L("要匯出成哪一種格式？可以只匯出部分頁面。"))
+        // 匯出：上面打頁碼、下面勾縮圖，再選格式（和筆記本裡的「匯出」同一個畫面）
+        .sheet(item: $exportTarget) { nb in
+            if let session = try? NotebookSession(id: nb.id) {
+                ExportPagesSheet(session: session, onExport: { paperNote, pages in
+                    exportTarget = nil
+                    // 等匯出視窗收起來，再跳出分享
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { export(session, paperNote: paperNote, pages: pages) }
+                }, onCancel: { exportTarget = nil })
+            } else {
+                Text(L("打不開這本筆記本")).padding()
+            }
         }
         // 畫面中間的小視窗（和新增頁面同一個）：點旁邊取消
         .fullScreenCover(isPresented: $showNewNotebook) {
@@ -814,19 +813,17 @@ struct FolderView: View {
         } label: { Label(L("複製"), systemImage: "plus.square.on.square") }
         Button { moveTarget = item } label: { Label(L("移動到…"), systemImage: "folder") }
         if case let .notebook(n) = item {
-            Button { exportPages = ""; exportTarget = n } label: { Label(L("匯出…"), systemImage: "square.and.arrow.up") }
+            Button { exportTarget = n } label: { Label(L("匯出…"), systemImage: "square.and.arrow.up") }
         }
         Divider()
         Button(role: .destructive) { moveToTrash([item]) } label: { Label(L("刪除"), systemImage: "trash") }
     }
 
-    private func export(_ id: UUID, paperNote: Bool, pages text: String) {
+    private func export(_ session: NotebookSession, paperNote: Bool, pages: [Int]) {
         exporting = true
         DispatchQueue.main.async {
             defer { exporting = false }
             do {
-                let session = try NotebookSession(id: id)
-                let pages = try PageSelection.parse(text, pageCount: session.document.pages.count)
                 let url = paperNote ? try NotebookExporter.exportPaperNote(session: session, pages: pages)
                                     : try NotebookExporter.exportPDF(session: session, pages: pages)
                 shareItem = ShareItem(url: url)

@@ -153,31 +153,8 @@ final class EditorRequestsNov16Tests: XCTestCase {
         XCTAssertEqual(CircuitLibraryView.allSections.count, CircuitLibraryView.sections.count + store.categories.count)
         XCTAssertEqual(editor.circuitLibrary.sectionBodies.count, CircuitLibraryView.allSections.count, "元件庫多一個分類")
 
-        // 畫完符號按「完成」：先問放在哪個分類
+        // 畫完符號按「下一步」選分類的流程見 EditorRequestsNov18Tests
         let symbol = CircuitSymbol(strokes: [.init(points: [CGPoint(x: -20, y: 0), CGPoint(x: 20, y: 0)])], pins: [CGPoint(x: -20, y: 0)])
-        var saved = false
-        var picked: String? = "none"
-        let vc = CircuitSymbolEditorViewController(name: "OTA", symbol: symbol) { _, _ in saved = true }
-        vc.sectionChoices = CircuitLibraryView.sectionChoices
-        vc.onChooseSection = { picked = $0 }
-        editor.present(UINavigationController(rootViewController: vc), animated: false)
-        spin(0.3)
-        vc.finish()
-        spin(0.3)
-        let sheet = try XCTUnwrap(vc.presentedViewController as? UIAlertController)
-        XCTAssertEqual(sheet.title, "放在哪個分類？")
-        let titles = sheet.actions.compactMap(\.title)
-        XCTAssertTrue(titles.contains("我的分類"))
-        XCTAssertTrue(titles.contains("被動元件"))
-        XCTAssertTrue(titles.contains("新增分類…"))
-        XCTAssertFalse(saved, "還沒選分類不會存")
-        sheet.dismiss(animated: false)
-        spin(0.2)
-        vc.pickSection(key)
-        XCTAssertEqual(picked, key)
-        XCTAssertTrue(saved)
-        spin(0.5)
-
         editor.saveCustomSymbol(id: nil, name: "OTA", symbol: symbol, section: key)
         let c = try XCTUnwrap(store.circuits.last)
         defer { store.remove(c.id) }

@@ -16,6 +16,8 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
     var onDeleteCustom: ((UUID) -> Void)?
     /// 長按自訂元件選「新增分類…」：取名字，建好就把這個元件移過去
     var onNewCategory: ((UUID) -> Void)?
+    /// 長按自己加的分類標題選「刪除…」（裡面的元件回到自訂電路圖那一區）
+    var onDeleteCategory: ((String) -> Void)?
     var currentMode: CircuitMode = .select { didSet { refreshHighlight() } }
 
     /// 分類參考 CircuiTikZ。key 不隨語言改變（自訂元件記住放在哪個分類用）
@@ -47,7 +49,7 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
     }
     static let customSectionName = L("自訂電路圖")
     /// 收起來的分類（記在本機）
-    private static let collapsedKey = "circuitLibrary.collapsedSections"
+    static let collapsedKey = "circuitLibrary.collapsedSections"
     private static let expandedWidth: CGFloat = 148
     private static let collapsedWidth: CGFloat = 40
     /// 放下面時的高度：分類標題＋兩列元件
@@ -157,10 +159,12 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
             body.isHidden = collapsedNames.contains(s.name)
             // 動畫中途內容不要畫到下面的分類上
             body.clipsToBounds = true
-            stack.addArrangedSubview(sectionHeader(s.name, body: body))
+            let header = sectionHeader(s.name, body: body)
+            header.menu = categoryMenu(key: s.key, name: s.name)
+            stack.addArrangedSubview(header)
             stack.addArrangedSubview(body)
             let columns = UIStackView()
-            bottomStack.addArrangedSubview(bottomSection(s.name, columns: columns))
+            bottomStack.addArrangedSubview(bottomSection(s.name, columns: columns, menu: categoryMenu(key: s.key, name: s.name)))
             sectionBodies.append(body)
             sectionColumns.append(columns)
         }
@@ -273,11 +277,36 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
         }
     }
 
-    private func bottomSection(_ name: String, columns: UIStackView) -> UIView {
-        let title = UILabel()
-        title.text = name
-        title.font = .systemFont(ofSize: 11, weight: .semibold)
-        title.textColor = .tertiaryLabel
+    /// 長按分類標題的選單：只有自己加的分類有（內建分類不能刪）
+    func categoryMenu(key: String, name: String) -> UIMenu? {
+        guard CustomCircuitStore.shared.categories.contains(where: { $0.key == key }) else { return nil }
+        return UIMenu(children: [
+            UIAction(title: L("刪除「\(name)」"), image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
+                self?.onDeleteCategory?(key)
+            },
+        ])
+    }
+
+    /// 放下面時的分類標題；menu：長按跳出的選單（自己加的分類）
+    private func bottomSection(_ name: String, columns: UIStackView, menu: UIMenu? = nil) -> UIView {
+        let title: UIView
+        if let menu {
+            var c = UIButton.Configuration.plain()
+            var t = AttributedString(name)
+            t.font = .systemFont(ofSize: 11, weight: .semibold)
+            c.attributedTitle = t
+            c.baseForegroundColor = .tertiaryLabel
+            c.contentInsets = .zero
+            let b = UIButton(configuration: c)
+            b.menu = menu
+            title = b
+        } else {
+            let label = UILabel()
+            label.text = name
+            label.font = .systemFont(ofSize: 11, weight: .semibold)
+            label.textColor = .tertiaryLabel
+            title = label
+        }
         title.heightAnchor.constraint(equalToConstant: 14).isActive = true
         columns.alignment = .top
         let section = UIStackView(arrangedSubviews: [title, columns])

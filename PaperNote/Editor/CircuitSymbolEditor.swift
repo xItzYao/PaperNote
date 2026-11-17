@@ -577,13 +577,15 @@ final class CircuitSymbolEditorViewController: UIViewController {
     private(set) var tapGesture: UITapGestureRecognizer!
     private(set) var panGesture: UIPanGestureRecognizer!
     private let onDone: (String, CircuitSymbol) -> Void
-    /// 新的自訂元件：按「完成」先問要放在哪個分類（key nil＝自訂電路圖那一區）；nil＝不問（改已經有的）
-    var sectionChoices: [(key: String?, name: String)]?
-    /// 選好的分類（在 onDone 之前呼叫）
+    /// 新的自訂元件：右上角是「下一步」，接著選要放在哪個分類；false＝改已經有的，直接「完成」
+    var asksForSection = false {
+        didSet { if isViewLoaded { updateDoneButton() } }
+    }
+    /// 選好的分類（在 onDone 之前呼叫；key nil＝自訂電路圖那一區）
     var onChooseSection: ((String?) -> Void)?
     /// 選「新增分類…」打好名字：建好分類，回傳它的 key
     var onNewSection: ((String) -> String)?
-    /// 按了「完成」、正在問分類的那一版
+    /// 按了「下一步」、正在選分類的那一版
     private var pendingFinish: CircuitSymbol?
     /// Pencil 切到橡皮擦之前的工具
     private var toolBeforeEraser: CircuitSymbolTool = .line
@@ -637,11 +639,9 @@ final class CircuitSymbolEditorViewController: UIViewController {
         navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .cancel, primaryAction: UIAction { [weak self] _ in
             self?.dismiss(animated: true)
         })
-        navigationItem.rightBarButtonItems = [
-            UIBarButtonItem(systemItem: .done, primaryAction: UIAction { [weak self] _ in self?.finish() }),
-            UIBarButtonItem(title: L("復原"), primaryAction: UIAction { [weak self] _ in self?.undoTapped() }),
-            UIBarButtonItem(title: "JSON", menu: jsonMenu()),
-        ]
+        // 選分類那一頁的返回鍵
+        navigationItem.backButtonTitle = L("上一步#回到畫元件")
+        updateDoneButton()
 
         toolPicker.selectedSegmentIndex = tool.rawValue
         toolPicker.addAction(UIAction { [weak self] _ in
@@ -706,6 +706,20 @@ final class CircuitSymbolEditorViewController: UIViewController {
         ])
         setTool(tool)
     }
+
+    /// 新的元件：「下一步」；改已經有的：「完成」
+    private func updateDoneButton() {
+        let done = asksForSection
+            ? UIBarButtonItem(title: L("下一步#選分類"), style: .done, target: self, action: #selector(finishTapped))
+            : UIBarButtonItem(barButtonSystemItem: .done, target: self, action: #selector(finishTapped))
+        navigationItem.rightBarButtonItems = [
+            done,
+            UIBarButtonItem(title: L("復原"), primaryAction: UIAction { [weak self] _ in self?.undoTapped() }),
+            UIBarButtonItem(title: "JSON", menu: jsonMenu()),
+        ]
+    }
+
+    @objc private func finishTapped() { finish() }
 
     func setTool(_ t: CircuitSymbolTool) {
         tool = t
@@ -989,10 +1003,13 @@ final class CircuitSymbolEditorViewController: UIViewController {
         var finished = symbol
         let prefix = (prefixField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         finished.numberPrefix = prefix.isEmpty ? nil : prefix
-        // 新的元件：畫完先問要放在哪個分類
-        if let choices = sectionChoices {
+        // 新的元件：下一頁選要放在哪個分類
+        if asksForSection {
             pendingFinish = finished
-            presentSectionPicker(choices)
+            let picker = CircuitSectionPickerViewController(symbol: finished, name: nameField.text ?? "")
+            picker.onPick = { [weak self] key in self?.pickSection(key) }
+            picker.onNewSection = onNewSection
+            navigationController?.pushViewController(picker, animated: true)
             return
         }
         complete(finished)
@@ -1003,45 +1020,12 @@ final class CircuitSymbolEditorViewController: UIViewController {
         dismiss(animated: true)
     }
 
-    /// 選好分類（分類選單的每一項、測試用）：存起來、關掉
+    /// 選好分類（選分類那一頁按「完成」）：存起來、關掉
     func pickSection(_ key: String?) {
         guard let symbol = pendingFinish else { return }
         pendingFinish = nil
         onChooseSection?(key)
         complete(symbol)
-    }
-
-    private func presentSectionPicker(_ choices: [(key: String?, name: String)]) {
-        let a = UIAlertController(title: L("放在哪個分類？"), message: nil, preferredStyle: .actionSheet)
-        for c in choices {
-            a.addAction(UIAlertAction(title: c.name, style: .default) { [weak self] _ in self?.pickSection(c.key) })
-        }
-        a.addAction(UIAlertAction(title: L("新增分類…"), style: .default) { [weak self] _ in self?.promptNewSection() })
-        a.addAction(UIAlertAction(title: L("取消"), style: .cancel) { [weak self] _ in self?.pendingFinish = nil })
-        a.popoverPresentationController?.barButtonItem = navigationItem.rightBarButtonItems?.first
-        if a.popoverPresentationController?.barButtonItem == nil {
-            a.popoverPresentationController?.sourceView = view
-            a.popoverPresentationController?.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1)
-        }
-        present(a, animated: true)
-    }
-
-    private func promptNewSection() {
-        let a = UIAlertController(title: L("新增分類…"), message: nil, preferredStyle: .alert)
-        a.addTextField { tf in
-            tf.placeholder = L("分類名稱")
-            tf.clearButtonMode = .whileEditing
-        }
-        a.addAction(UIAlertAction(title: L("取消"), style: .cancel) { [weak self] _ in self?.pendingFinish = nil })
-        a.addAction(UIAlertAction(title: L("加入"), style: .default) { [weak self, weak a] _ in
-            let name = (a?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let self, !name.isEmpty, let key = self.onNewSection?(name) else {
-                self?.pendingFinish = nil
-                return
-            }
-            self.pickSection(key)
-        })
-        present(a, animated: true)
     }
 }
 

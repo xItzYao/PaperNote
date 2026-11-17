@@ -146,7 +146,8 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
                 // 選著物件時工具列亮的是套索：Pencil 從空白處拖就是用套索圈（手指照樣捲動頁面）
                 return tool == .select && toolPanByDrawingTouch
             case .pageResize:
-                return pageHandle(at: g.location(in: pagesContainer)) != nil
+                // 用剛碰到的位置判斷（拖曳要移動一小段才開始，那時手指可能已經離開控制點）
+                return pageHandle(at: panTouchDownPoint(g)) != nil
             case .lasso:
                 return true
             case .circuit:
@@ -241,6 +242,10 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         }
         if g === toolPan, toolPan.numberOfTouches == 0 {
             toolPanByDrawingTouch = touch.type == .pencil || settings.fingerDrawing
+        }
+        // 擴展頁面：選著的那一頁的控制點手指也能拉（按在控制點上不是捲動）；點一下換要擴展的頁面（頁面不是物件）
+        if tool == .pageResize, touch.type == .direct, !settings.fingerDrawing, g === toolPan || g === tapGesture {
+            return g === tapGesture || pageHandle(at: touch.location(in: pagesContainer)) != nil
         }
         // 手指（沒開「用手指書寫」）：只能拖動、點已經選起來的東西（和旁邊的控制點、按鈕），不能選新的；
         // 其他地方交給捲動、縮放頁面
@@ -368,7 +373,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         case .sticker where lassoMoveStart != nil || (g.state == .began && lassoGrab(at: panTouchDownPoint(g)) != nil):
             handleLassoPan(g, g.state == .began ? panTouchDownPoint(g) : p)
         case .select, .image, .sticker: handleElementPan(g, g.state == .began ? panTouchDownPoint(g) : p)
-        case .pageResize: handlePageResizePan(g, p)
+        case .pageResize: handlePageResizePan(g, g.state == .began ? panTouchDownPoint(g) : p)
         case .lasso: handleLassoPan(g, g.state == .began ? panTouchDownPoint(g) : p)
         case .tableDraw: handleTableDrawPan(g, p)
         case .circuit: handleCircuitPan(g, p)

@@ -34,6 +34,16 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(L("跟隨系統"), "Follow System")
     }
 
+    /// 「下一步」在工具列是重做、在自訂元件是往下一頁：key 加上 #用途，中文只顯示 # 前面
+    func testTheSameChineseCanMeanDifferentThings() {
+        XCTAssertEqual(L("下一步#選分類"), "下一步")
+        XCTAssertEqual(L("下一步"), "下一步")
+        Loc.isEnglish = true
+        XCTAssertEqual(L("下一步#選分類"), "Next")
+        XCTAssertEqual(L("下一步"), "Redo")
+        XCTAssertEqual(L("上一步#回到畫元件"), "Back")
+    }
+
     func testAStringWithoutATranslationStaysChinese() {
         Loc.isEnglish = true
         XCTAssertEqual(L("表裡沒有的字串 \(1)"), "表裡沒有的字串 1")
