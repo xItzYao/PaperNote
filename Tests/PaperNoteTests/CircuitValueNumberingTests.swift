@@ -154,7 +154,14 @@ final class CircuitValueNumberingTests: XCTestCase {
     func testTheNameEditorHasAValueFieldWithAPrefixMenu() throws {
         let c = try XCTUnwrap(data?.components.first)
         editor.promptComponentName(ref, component: c.id)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        // 等視窗完全跳出來：跳出的動畫還在跑時按「完成」，系統不理關掉視窗的要求（模擬器慢時 0.3 秒還沒跳完），
+        // 存檔是在關掉之後，就一直不會存
+        let shown = Date().addingTimeInterval(5)
+        while Date() < shown, editor.presentedNameEditor == nil
+                || editor.presentedViewController?.isBeingPresented == true
+                || editor.presentedViewController?.transitionCoordinator != nil {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
         let vc = try XCTUnwrap(editor.presentedNameEditor)
         XCTAssertFalse(vc.valueField.superview?.isHidden ?? true, "元件有數值這一欄")
         XCTAssertEqual(vc.prefixButton.configuration?.title, "無", "預設沒有前綴")
@@ -163,7 +170,7 @@ final class CircuitValueNumberingTests: XCTestCase {
         vc.setValuePrefix("n")
         vc.valueField.text = "100"
         vc.finish()
-        // 關掉視窗的動畫結束才存（模擬器慢的時候要等久一點）
+        // 關掉視窗的動畫結束才存
         let deadline = Date().addingTimeInterval(3)
         while data?.components.first?.valueText == nil, Date() < deadline {
             RunLoop.main.run(until: Date().addingTimeInterval(0.05))
