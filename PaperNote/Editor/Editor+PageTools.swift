@@ -137,6 +137,18 @@ extension NotebookViewController {
         return best?.0
     }
 
+    /// 控制點拖到 p 時的擴展大小
+    private func resizedInsets(_ d: PageResizeDrag, to p: CGPoint) -> PageInsets {
+        let dx = p.x - d.start.x, dy = p.y - d.start.y
+        let limit: CGFloat = 8000
+        var n = d.original
+        if [0, 6, 7].contains(d.handle) { n.left = min(limit, max(0, (d.original.left - dx).rounded())) }
+        if [2, 3, 4].contains(d.handle) { n.right = min(limit, max(0, (d.original.right + dx).rounded())) }
+        if [0, 1, 2].contains(d.handle) { n.top = min(limit, max(0, (d.original.top - dy).rounded())) }
+        if [4, 5, 6].contains(d.handle) { n.bottom = min(limit, max(0, (d.original.bottom + dy).rounded())) }
+        return n
+    }
+
     func handlePageResizePan(_ g: UIPanGestureRecognizer, _ p: CGPoint) {
         switch g.state {
         case .began:
@@ -145,18 +157,13 @@ extension NotebookViewController {
             resizeDrag = PageResizeDrag(handle: h, start: p, original: ins, preview: ins)
         case .changed:
             guard var d = resizeDrag else { return }
-            let dx = p.x - d.start.x, dy = p.y - d.start.y
-            let limit: CGFloat = 8000
-            var n = d.original
-            if [0, 6, 7].contains(d.handle) { n.left = min(limit, max(0, (d.original.left - dx).rounded())) }
-            if [2, 3, 4].contains(d.handle) { n.right = min(limit, max(0, (d.original.right + dx).rounded())) }
-            if [0, 1, 2].contains(d.handle) { n.top = min(limit, max(0, (d.original.top - dy).rounded())) }
-            if [4, 5, 6].contains(d.handle) { n.bottom = min(limit, max(0, (d.original.bottom + dy).rounded())) }
-            d.preview = n
+            d.preview = resizedInsets(d, to: p)
             resizeDrag = d
             updatePageResizeChrome()
         case .ended:
-            guard let d = resizeDrag, let i = resizePageIndex else { return }
+            // 放開的位置也算（最後一次移動到放開之間可能還有一段）
+            guard var d = resizeDrag, let i = resizePageIndex else { return }
+            d.preview = resizedInsets(d, to: p)
             resizeDrag = nil
             if d.preview != d.original {
                 applyInsets(d.preview, pageIndex: i, toAll: false)
