@@ -88,6 +88,9 @@ final class TabsViewController: UIViewController {
             self?.rebuildTabs()
         }
 
+        // 筆記本開著的時候從別的 App 分享 PDF 進來：匯入後要切到那一本（之前只改了分頁資料，畫面沒跟著換）
+        NotificationCenter.default.addObserver(self, selector: #selector(notebookTabOpened(_:)), name: .notebookTabOpened, object: nil)
+
         store.prune(existing: Set(LibraryStore.shared.visibleNotebooks.map(\.id)))
         if let a = store.state.active {
             show(a)
@@ -97,6 +100,16 @@ final class TabsViewController: UIViewController {
     }
 
     // MARK: - 切換分頁
+
+    @objc private func notebookTabOpened(_ note: Notification) {
+        guard let id = note.object as? UUID else { return }
+        show(id)
+    }
+
+    /// 現在顯示的筆記本
+    var shownNotebookID: UUID? {
+        children.compactMap { $0 as? NotebookViewController }.first?.session.id
+    }
 
     private func show(_ id: UUID) {
         guard let vc = editor(for: id) else {
@@ -228,6 +241,7 @@ final class TabsViewController: UIViewController {
         config.baseForegroundColor = active ? .label : .secondaryLabel
         config.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 4)
         let titleButton = UIButton(configuration: config)
+        if active { titleButton.accessibilityTraits.insert(.selected) }
         titleButton.addAction(UIAction { [weak self] _ in self?.show(id) }, for: .touchUpInside)
         titleButton.widthAnchor.constraint(lessThanOrEqualToConstant: 190).isActive = true
 
