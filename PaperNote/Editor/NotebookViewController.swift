@@ -991,13 +991,14 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         scheduleSave()
     }
 
-    /// 記下一步：筆跡回到 drawing（nil＝沒動到筆跡）、這些頁面回到現在的樣子。在改動之前呼叫
-    func recordEdit(drawing: PKDrawing?, pageIDs: [UUID]) {
+    /// 記下一步：筆跡回到 drawing（nil＝沒動到筆跡）、這些頁面回到現在的樣子。在改動之前呼叫。
+    /// newStep：一定自成一步（使用者明確下的指令，例如清除整頁），不併進同一輪剛記的動作
+    func recordEdit(drawing: PKDrawing?, pageIDs: [UUID], newStep: Bool = false) {
         var snaps: [UUID: PageContentSnapshot] = [:]
         for id in pageIDs {
             if let i = pageIndex(of: id) { snaps[id] = PageContentSnapshot(pages[i]) }
         }
-        history.record(.init(drawing: drawing, pages: snaps))
+        history.record(.init(drawing: drawing, pages: snaps), newStep: newStep)
     }
 
     /// 同一步範圍內的目前狀態（按上一步時記下來，給下一步用）
@@ -1223,7 +1224,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         clearLassoSelection()
         let id = pages[index].id
         DebugLog.add("clear page \(index + 1)")
-        recordEdit(drawing: canvas.drawing, pageIDs: [id])
+        recordEdit(drawing: canvas.drawing, pageIDs: [id], newStep: true)
         // PencilKit 的筆跡：和存檔時一樣，看每一筆最靠近哪一頁
         var drawing = canvas.drawing
         drawing.strokes.removeAll { nearestPageIndex(to: $0.renderBounds.center) == index }

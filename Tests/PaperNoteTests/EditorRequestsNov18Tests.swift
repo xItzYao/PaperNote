@@ -181,6 +181,9 @@ final class EditorRequestsNov18Tests: XCTestCase {
         spin(0.2)
         XCTAssertEqual(editor.canvas.drawing.strokes.count, 2)
 
+        // 清除是自己一步：就算同一輪剛記過別的動作，也不會併在一起（上一步只回到清除之前）
+        editor.updatePage(1) { $0.note = "同一輪的別的動作" }
+        editor.updatePage(1) { $0.ink = [InkStroke(colorHex: "#000000FF", points: [InkPoint(CGPoint(x: 10, y: 10), width: 2), InkPoint(CGPoint(x: 50, y: 10), width: 2)])] }
         editor.clearPage(0)
         XCTAssertTrue(editor.pages[0].elements.isEmpty, "物件清掉")
         XCTAssertTrue(editor.pages[0].ink.isEmpty, "筆跡清掉")
@@ -193,6 +196,7 @@ final class EditorRequestsNov18Tests: XCTestCase {
         XCTAssertEqual(editor.pages[0].elements.count, 1, "上一步：回來")
         XCTAssertEqual(editor.pages[0].ink.count, 1)
         XCTAssertEqual(editor.canvas.drawing.strokes.count, 2)
+        XCTAssertEqual(editor.pages[1].ink.count, 1, "同一輪前面的動作沒有一起被復原")
     }
 
     // MARK: 匯出
