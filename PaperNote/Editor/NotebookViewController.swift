@@ -643,7 +643,13 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     func pageIndex(of id: UUID) -> Int? { pages.firstIndex { $0.id == id } }
 
-    func visibleDocRect() -> CGRect { canvas.convert(canvas.bounds, to: pagesContainer) }
+    /// 畫面看得到的範圍（文件座標）。用捲動視圖自己的縮放算，不是用頁面容器：
+    /// 縮放時系統先改好縮放和捲動位置、通知捲動，之後才通知縮放（容器在那裡才跟上）。
+    /// 捲動通知裡容器還是舊的縮放，拿它算會偏好幾頁：正在看的頁面被拿掉重建（一瞬間全白）、頁碼亂跳
+    func visibleDocRect() -> CGRect {
+        let z = max(canvas.zoomScale, 0.001), b = canvas.bounds
+        return CGRect(x: b.minX / z, y: b.minY / z, width: b.width / z, height: b.height / z)
+    }
 
     var currentPageIndex: Int {
         let r = visibleDocRect()
@@ -774,14 +780,17 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             let page = pages[i]
             keep.insert(page.id)
             if pageViews[page.id] == nil {
-                let v = PageContainerView(pageID: page.id)
-                v.frame = pageFrames[i]
-                // 筆跡先放好、有大小，configure 才會在背景準備筆跡
-                inkContainer.addSubview(v.inkView)
-                v.inkView.frame = v.frame
-                v.configure(page: page, session: session, contentScale: elementContentScale)
-                pagesContainer.insertSubview(v, belowSubview: overlay)
-                pageViews[page.id] = v
+                // 新的頁面直接放在自己的位置：在系統的動畫縮放裡（回彈）加進來也不從 (0,0) 飛過去
+                UIView.performWithoutAnimation {
+                    let v = PageContainerView(pageID: page.id)
+                    v.frame = pageFrames[i]
+                    // 筆跡先放好、有大小，configure 才會在背景準備筆跡
+                    inkContainer.addSubview(v.inkView)
+                    v.inkView.frame = v.frame
+                    v.configure(page: page, session: session, contentScale: elementContentScale)
+                    pagesContainer.insertSubview(v, belowSubview: overlay)
+                    pageViews[page.id] = v
+                }
             }
             i += 1
         }
