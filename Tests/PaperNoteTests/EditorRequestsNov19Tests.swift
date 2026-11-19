@@ -112,6 +112,19 @@ final class EditorRequestsNov19Tests: XCTestCase {
         XCTAssertNil(editor.pageViews[editor.session.document.pages[0].id], "看不到的頁面還是會拿掉")
     }
 
+    /// 放到最大再放大、放開回彈時頁面閃一下：模擬器做不出來，除錯紀錄記下放開後每一格頁面畫在哪裡
+    func testTheDebugLogTracesEveryFrameAfterTheFingersLift() throws {
+        _ = try zoomDeepInTheNotebook()
+        editor.zoomTrace.begin()
+        editor.canvas.setZoomScale(editor.canvas.zoomScale * 0.8, animated: true)
+        spin(0.9)
+        let log = DebugLog.text
+        XCTAssertTrue(log.contains("zoom: didZoom"), "縮放的通知")
+        XCTAssertTrue(log.contains("zoom: +"), "每一格畫面")
+        XCTAssertTrue(log.contains("keys=transform"), "頁面跟著系統的縮放動畫")
+        XCTAssertFalse(editor.zoomTrace.isTracing, "記一下就停")
+    }
+
     /// 回報的問題：PDF 選字翻譯有時閃退。閃退紀錄是 iPadOS 27.0.1 在翻譯視窗上面再跳系統的「下載語言」視窗時，
     /// UIKit 自己出錯（-[_UISceneHostingController _setSheetConfiguration:]）。原文語言猜錯就會碰到沒下載的語言。
     /// 只有已經下載的語言才交給系統翻；沒下載的在視窗裡說明，不讓系統跳下載視窗

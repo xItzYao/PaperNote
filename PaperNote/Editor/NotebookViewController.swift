@@ -189,6 +189,9 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     let subBar = UIView()
     let subBarStack = UIStackView()
     let pageLabel = UILabel()
+    /// 除錯紀錄：手指放開後的縮放（回彈）
+    lazy var zoomTrace = ZoomTrace(editor: self)
+    var zoomTraceAttached = false
     /// 點頁碼後出現的輸入框（輸入要跳到的頁碼）
     var pageJumpField: UITextField?
     var toolButtons: [EditorTool: UIButton] = [:]
@@ -791,10 +794,12 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
                     pagesContainer.insertSubview(v, belowSubview: overlay)
                     pageViews[page.id] = v
                 }
+                zoomTrace.note("page+ \(i + 1)")
             }
             i += 1
         }
         for (id, v) in pageViews where !keep.contains(id) {
+            zoomTrace.note("page- \(pageIndex(of: id).map { $0 + 1 } ?? 0)")
             v.removeFromSuperview()
             v.inkView.removeFromSuperview()
             pageViews[id] = nil
@@ -820,6 +825,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         uiTestOffset?.accessibilityLabel = "\(Int(scrollView.contentOffset.y))"
+        zoomTrace.note("didScroll")
         updateVisiblePages()
         updatePageIndicator()
         updateAddPagePull()
@@ -834,6 +840,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     }
 
     func scrollViewDidZoom(_ scrollView: UIScrollView) {
+        zoomTrace.note("didZoom")
         // 在動畫裡（回彈、動畫縮放）：頁面跟著同一個動畫
         updateZoomLayout(followZoomAnimation: UIView.inheritedAnimationDuration > 0)
         let s = elementContentScale
@@ -844,11 +851,16 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     func scrollViewWillBeginZooming(_ scrollView: UIScrollView, with view: UIView?) {
         DebugLog.add("zoom begin")
+        if !zoomTraceAttached, let pinch = canvas.pinchGestureRecognizer {
+            pinch.addTarget(zoomTrace, action: #selector(ZoomTrace.pinchChanged(_:)))
+            zoomTraceAttached = true
+        }
         endTextEditing()
     }
 
     func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
         DebugLog.add("zoom end x\(String(format: "%.2f", scale / max(fitZoom, 0.01)))")
+        zoomTrace.note("didEndZooming")
         let s = elementContentScale
         for v in pageViews.values { v.updateContentScale(s) }
     }
