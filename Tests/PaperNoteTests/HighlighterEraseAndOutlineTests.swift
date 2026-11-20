@@ -238,17 +238,18 @@ final class HighlighterEraseTests: XCTestCase {
         }
     }
 
+    /// 存檔讀回來，monoline 的螢光筆變成 pen：還是螢光筆（局部擦除不會切成好幾筆、排在字的底下）
     /// 擦過的螢光筆：留下的部分圈得到、擦得到，擦掉的部分圈不到；存檔讀回來也一樣
     func testTheRestOfAnErasedHighlighterCanBeCircledAndErasedAfterSaving() throws {
         let erased = try XCTUnwrap(StrokeEraser.erase([highlighter()], along: [CGPoint(x: 100, y: 100)], radius: 4, partial: true))
         let saved = try PKDrawing(data: PKDrawing(strokes: erased).dataRepresentation()).strokes
         XCTAssertEqual(saved.count, 1)
-        let o = saved[0], p0 = o.path.first
-        print("ROUNDTRIP ink=\(o.ink.inkType.rawValue) alpha=\(o.ink.color.cgColor.alpha) op=\(p0?.opacity ?? -1) mask=\(o.mask != nil) "
-              + "before ink=\(erased[0].ink.inkType.rawValue) alpha=\(erased[0].ink.color.cgColor.alpha)")
+        let o = saved[0]
         XCTAssertTrue(NotebookViewController.isHighlighterStroke(o), "存檔讀回來還是螢光筆：\(o.ink.inkType.rawValue) alpha=\(o.ink.color.cgColor.alpha)")
         let plain = try PKDrawing(data: PKDrawing(strokes: [highlighter()]).dataRepresentation()).strokes[0]
         XCTAssertTrue(NotebookViewController.isHighlighterStroke(plain), "沒擦過的存檔讀回來也是：\(plain.ink.inkType.rawValue) alpha=\(plain.ink.color.cgColor.alpha)")
+        let sorted = try XCTUnwrap(NotebookViewController.highlightsBelowInk([pen(), plain]), "讀回來的螢光筆排到字的底下")
+        XCTAssertTrue(NotebookViewController.isHighlighterStroke(sorted[0]))
         func circled(_ x: CGFloat) -> Bool {
             let lasso = UIBezierPath(rect: CGRect(x: x - 6, y: 80, width: 12, height: 40))
             return LassoGeometry.circles(saved[0], path: lasso, area: lasso.bounds)

@@ -1181,9 +1181,10 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         return strokes.filter(isHighlight) + strokes.filter { !isHighlight($0) }
     }
 
-    /// 螢光筆畫的：螢光筆是半透明的 monoline 墨水（見 InkStyle.inkType），舊的筆記可能有 PencilKit 的 marker
+    /// 螢光筆畫的：螢光筆是半透明的 monoline 墨水（見 InkStyle.inkType），舊的筆記可能有 PencilKit 的 marker。
+    /// 存檔再讀回來，monoline 會變成 pen（顏色的透明度還在）：半透明的 pen 也是
     static func isHighlighterStroke(_ s: PKStroke) -> Bool {
-        s.ink.inkType == .marker || (s.ink.inkType == .monoline && s.ink.color.cgColor.alpha < 1)
+        s.ink.inkType == .marker || ([.monoline, .pen].contains(s.ink.inkType) && s.ink.color.cgColor.alpha < 1)
     }
 
     /// 除錯紀錄：PencilKit 這一筆的取樣（墨水、點數、平均間隔，和平均挑的 8 個點的粗細、筆壓、傾斜、方位、透明度）。
