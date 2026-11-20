@@ -49,10 +49,10 @@ final class HighlighterEraseTests: XCTestCase {
                      "離畫出來的範圍還有一點距離：不擦")
     }
 
-    /// 看得到的部分（擦掉的螢光筆是同一筆、那段透明）：每 1pt 的中心點
+    /// 看得到的部分（擦掉的螢光筆是同一筆、那段在遮罩外面）：每 1pt 的中心點
     private func visibleCenters(_ strokes: [PKStroke]) -> [CGPoint] {
         strokes.flatMap { s in
-            s.path.interpolatedPoints(by: .distance(1)).filter { $0.opacity > StrokeEraser.erasedOpacity }.map { $0.location.applying(s.transform) }
+            s.path.interpolatedPoints(by: .distance(1)).filter { StrokeEraser.isShown(s, $0.location) }.map { $0.location.applying(s.transform) }
         }
     }
 
@@ -217,6 +217,104 @@ final class HighlighterEraseTests: XCTestCase {
         XCTAssertEqual(again.count, 1)
         XCTAssertLessThan(alpha(again, at: CGPoint(x: 180, y: 140)), 0.02, "之前擦掉的地方沒有回來")
         XCTAssertEqual(alpha(again, at: CGPoint(x: 100, y: 100)), single, accuracy: 0.05)
+    }
+
+    /// 回報的問題（11/21）：擦完螢光筆後選不到、也擦不掉。
+    /// 擦掉的地方記在點的透明度（≤ 0.01 當成擦掉），但 Pencil 寫的點本來就有自己的透明度（筆壓，水彩 0.01 左右），
+    /// 這種點被當成擦掉的：圈不到、擦不到
+    func testStrokesWithFaintPencilPointsCanStillBeErasedAndCircled() throws {
+        for ink in [PKInk(.watercolor, color: .blue), PKInk(.marker, color: .yellow), PKInk(.monoline, color: UIColor.systemYellow.withAlphaComponent(0.4))] {
+            let pts = stride(from: CGFloat(0), through: 200, by: 10).enumerated().map { i, x in
+                PKStrokePoint(location: CGPoint(x: x, y: 100), timeOffset: Double(i) * 0.01, size: CGSize(width: 12, height: 12),
+                              opacity: 0.005, force: 0.05, azimuth: 0, altitude: .pi / 2)
+            }
+            let s = PKStroke(ink: ink, path: PKStrokePath(controlPoints: pts, creationDate: Date()))
+            let lasso = UIBezierPath(rect: CGRect(x: 80, y: 80, width: 40, height: 40))
+            XCTAssertTrue(LassoGeometry.circles(s, path: lasso, area: lasso.bounds), "\(ink.inkType.rawValue) 圈得到")
+            XCTAssertTrue(LassoGeometry.touches(s, at: CGPoint(x: 100, y: 100), radius: 4), "\(ink.inkType.rawValue) 點得到")
+            XCTAssertNotNil(StrokeEraser.erase([s], along: [CGPoint(x: 100, y: 100)], radius: 4, partial: false), "\(ink.inkType.rawValue) 擦得到")
+            let partial = StrokeEraser.erase([s], along: [CGPoint(x: 100, y: 100)], radius: 4, partial: true)
+            XCTAssertFalse(try XCTUnwrap(partial, "\(ink.inkType.rawValue) 局部擦得到").isEmpty, "其他地方留著")
+        }
+    }
+
+    /// 擦過的螢光筆：留下的部分圈得到、擦得到，擦掉的部分圈不到；存檔讀回來也一樣
+    func testTheRestOfAnErasedHighlighterCanBeCircledAndErasedAfterSaving() throws {
+        let erased = try XCTUnwrap(StrokeEraser.erase([highlighter()], along: [CGPoint(x: 100, y: 100)], radius: 4, partial: true))
+        let saved = try PKDrawing(data: PKDrawing(strokes: erased).dataRepresentation()).strokes
+        XCTAssertEqual(saved.count, 1)
+        func circled(_ x: CGFloat) -> Bool {
+            let lasso = UIBezierPath(rect: CGRect(x: x - 6, y: 80, width: 12, height: 40))
+            return LassoGeometry.circles(saved[0], path: lasso, area: lasso.bounds)
+        }
+        XCTAssertFalse(circled(100), "擦掉的地方圈不到")
+        XCTAssertTrue(circled(40), "留下的地方圈得到")
+        XCTAssertTrue(circled(160))
+        XCTAssertFalse(LassoGeometry.touches(saved[0], at: CGPoint(x: 100, y: 100), radius: 2))
+        XCTAssertTrue(LassoGeometry.touches(saved[0], at: CGPoint(x: 40, y: 100), radius: 2))
+        let again = try XCTUnwrap(StrokeEraser.erase(saved, along: [CGPoint(x: 40, y: 100)], radius: 4, partial: true), "留下的地方擦得到")
+        XCTAssertEqual(again.count, 1)
+        let xs = visibleCenters(again).map(\.x)
+        XCTAssertFalse(xs.contains { abs($0 - 40) < 4 || abs($0 - 100) < 4 }, "兩個地方都擦掉了")
+        XCTAssertTrue(xs.contains { $0 > 150 })
+        XCTAssertNil(StrokeEraser.erase(again, along: [CGPoint(x: 100, y: 100)], radius: 4, partial: true), "擦掉的地方不會再被擦到")
+        XCTAssertEqual(StrokeEraser.erase(again, along: [CGPoint(x: 0, y: 100), CGPoint(x: 200, y: 100)], radius: 4, partial: true)?.count, 0,
+                       "整條擦過去：整筆拿掉")
+    }
+
+    /// 回報的問題（11/21）：擦大量螢光筆時很卡（每移動一下主執行緒卡 200～400ms）
+    func testErasingManyHighlightersStaysFast() throws {
+        let meta = LibraryStore.shared.createNotebook(title: "HighlighterErasePerf", folder: nil, paper: .blank, landscape: false)
+        defer { LibraryStore.shared.deleteNotebook(meta.id) }
+        let editor = NotebookViewController(session: try NotebookSession(id: meta.id), initialPageID: nil, onClose: {})
+        let window = try TestWindow.make()
+        window.rootViewController = editor
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        editor.view.layoutIfNeeded()
+        let savedPixel = EditorSettings.shared.pixelEraser
+        let savedReturn = EditorSettings.shared.eraserAutoReturn
+        EditorSettings.shared.pixelEraser = true
+        EditorSettings.shared.eraserAutoReturn = false
+        defer {
+            EditorSettings.shared.pixelEraser = savedPixel
+            EditorSettings.shared.eraserAutoReturn = savedReturn
+        }
+        // 34 筆彎彎的螢光筆排滿半頁
+        let f = editor.pageFrames[0]
+        let strokes = (0..<34).map { row -> PKStroke in
+            let y = f.minY + 60 + CGFloat(row) * 20
+            let pts = stride(from: CGFloat(0), through: 400, by: 3).enumerated().map { i, x in
+                PKStrokePoint(location: CGPoint(x: f.minX + 80 + x, y: y + sin(x / 15) * 4), timeOffset: Double(i) * 0.01,
+                              size: CGSize(width: 12, height: 12), opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2)
+            }
+            return PKStroke(ink: PKInk(.monoline, color: UIColor.systemYellow.withAlphaComponent(0.4)),
+                            path: PKStrokePath(controlPoints: pts, creationDate: Date()))
+        }
+        editor.setDrawing(PKDrawing(strokes: strokes))
+        editor.setTool(.eraser)
+        // 橡皮擦從上到下劃過全部，再橫著來回擦
+        var path: [CGPoint] = []
+        for k in 0..<60 { path.append(CGPoint(x: f.minX + 200 + CGFloat(k % 2) * 3, y: f.minY + 40 + CGFloat(k) * 12)) }
+        for k in 0..<60 { path.append(CGPoint(x: f.minX + 120 + CGFloat(k) * 5, y: f.minY + 300 + sin(CGFloat(k)) * 30)) }
+        let start = CACurrentMediaTime()
+        var worst: CFTimeInterval = 0
+        editor.eraserBegan(at: path[0])
+        for p in path.dropFirst() {
+            let t = CACurrentMediaTime()
+            editor.eraserMoved([p])
+            worst = max(worst, CACurrentMediaTime() - t)
+        }
+        editor.eraserEnded()
+        let total = CACurrentMediaTime() - start
+        print(String(format: "ERASEPERF total=%.0fms worst=%.0fms", total * 1000, worst * 1000))
+        XCTAssertEqual(editor.canvas.drawing.strokes.count, 34, "測試的前提：螢光筆局部擦，每一筆還是一筆")
+        XCTAssertTrue(editor.canvas.drawing.strokes.allSatisfy { $0.mask != nil }, "測試的前提：每一筆都擦到了")
+        XCTAssertLessThan(worst, 0.1, "每移動一下不超過 100ms")
+        XCTAssertLessThan(total, 3, "整個擦完不超過 3 秒")
+        // 擦完：留下的部分還圈得到
+        let lasso = UIBezierPath(rect: f.insetBy(dx: 10, dy: 10))
+        XCTAssertEqual(editor.canvas.drawing.strokes.filter { LassoGeometry.circles($0, path: lasso, area: lasso.bounds) }.count, 34)
     }
 
     /// 回報的問題（11/20）：PencilKit 的筆、螢光筆用局部擦除，彎的地方會慢慢變平滑、越擦越直，不只擦到的地方

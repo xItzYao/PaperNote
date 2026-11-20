@@ -18,9 +18,9 @@ enum LassoGeometry {
     /// 只圈到大圓圈、方框中間的空白則不算，才能在框裡圈字）
     static func circles(_ stroke: PKStroke, path: UIBezierPath, area: CGRect) -> Bool {
         guard area.intersects(stroke.renderBounds) else { return false }
-        // 擦掉的部分（透明的螢光筆）不算
+        // 擦掉的部分（螢光筆遮罩外面）不算
         for p in stroke.path.interpolatedPoints(by: .distance(3))
-        where p.opacity > StrokeEraser.erasedOpacity && path.contains(p.location.applying(stroke.transform)) {
+        where path.contains(p.location.applying(stroke.transform)) && StrokeEraser.isShown(stroke, p.location) {
             return true
         }
         return false
@@ -31,9 +31,9 @@ enum LassoGeometry {
         guard stroke.renderBounds.insetBy(dx: -radius, dy: -radius).contains(p) else { return false }
         let k = abs(stroke.transform.a * stroke.transform.d - stroke.transform.b * stroke.transform.c).squareRoot()
         let pts = stroke.path.interpolatedPoints(by: .distance(2))
-            .map { ($0.location.applying(stroke.transform), $0.size.width * k / 2, $0.opacity > StrokeEraser.erasedOpacity) }
+            .map { ($0.location.applying(stroke.transform), $0.size.width * k / 2, StrokeEraser.isShown(stroke, $0.location)) }
         if pts.count == 1 { return pts[0].2 && pts[0].0.distance(to: p) <= radius + pts[0].1 }
-        // 擦掉的部分（透明的螢光筆）不算
+        // 擦掉的部分（螢光筆遮罩外面）不算
         return zip(pts, pts.dropFirst()).contains { a, b in a.2 && b.2 && InkGeometry.distance(p, a.0, b.0) <= radius + max(a.1, b.1) }
     }
 
@@ -308,6 +308,13 @@ extension NotebookViewController {
         }
         let sel = LassoSelection(strokeIndices: strokes, elements: elements, highlights: highlights, bounds: bounds, ink: ink, outline: pts)
         DebugLog.add("lasso end points=\(pts.count) strokes=\(strokes.count) ink=\(ink.count) elements=\(elements.count) highlights=\(highlights.count)")
+        if strokes.isEmpty {
+            // 套索裡有 PencilKit 筆跡的控制點卻沒圈到：記下那幾筆，查為什麼
+            let missed = allStrokes.filter { s in s.path.contains { path.contains($0.location.applying(s.transform)) } }
+            if !missed.isEmpty {
+                DebugLog.add("lasso missed \(missed.count): " + missed.prefix(3).map(StrokeEraser.summary).joined(separator: " | "))
+            }
+        }
         updateUITestDump()
         guard !sel.isEmpty else { return }
         lassoSel = sel
