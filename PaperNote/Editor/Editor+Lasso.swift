@@ -18,7 +18,9 @@ enum LassoGeometry {
     /// 只圈到大圓圈、方框中間的空白則不算，才能在框裡圈字）
     static func circles(_ stroke: PKStroke, path: UIBezierPath, area: CGRect) -> Bool {
         guard area.intersects(stroke.renderBounds) else { return false }
-        for p in stroke.path.interpolatedPoints(by: .distance(3)) where path.contains(p.location.applying(stroke.transform)) {
+        // 擦掉的部分（透明的螢光筆）不算
+        for p in stroke.path.interpolatedPoints(by: .distance(3))
+        where p.opacity > StrokeEraser.erasedOpacity && path.contains(p.location.applying(stroke.transform)) {
             return true
         }
         return false
@@ -28,9 +30,11 @@ enum LassoGeometry {
     static func touches(_ stroke: PKStroke, at p: CGPoint, radius: CGFloat) -> Bool {
         guard stroke.renderBounds.insetBy(dx: -radius, dy: -radius).contains(p) else { return false }
         let k = abs(stroke.transform.a * stroke.transform.d - stroke.transform.b * stroke.transform.c).squareRoot()
-        let pts = stroke.path.interpolatedPoints(by: .distance(2)).map { ($0.location.applying(stroke.transform), $0.size.width * k / 2) }
-        if pts.count == 1 { return pts[0].0.distance(to: p) <= radius + pts[0].1 }
-        return zip(pts, pts.dropFirst()).contains { a, b in InkGeometry.distance(p, a.0, b.0) <= radius + max(a.1, b.1) }
+        let pts = stroke.path.interpolatedPoints(by: .distance(2))
+            .map { ($0.location.applying(stroke.transform), $0.size.width * k / 2, $0.opacity > StrokeEraser.erasedOpacity) }
+        if pts.count == 1 { return pts[0].2 && pts[0].0.distance(to: p) <= radius + pts[0].1 }
+        // 擦掉的部分（透明的螢光筆）不算
+        return zip(pts, pts.dropFirst()).contains { a, b in a.2 && b.2 && InkGeometry.distance(p, a.0, b.0) <= radius + max(a.1, b.1) }
     }
 
     /// 矩形整個在套索裡面。邊緣留一點寬容：手畫的圈稍微切到角落也算

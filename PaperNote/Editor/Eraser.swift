@@ -46,7 +46,10 @@ enum StrokeEraser {
             }
             if let t = params.last, t < end { params.append(end) }
             let pts = params.map { sp.interpolatedPoint(at: $0) }
-            let hit = pts.map { q -> Bool in
+            // 之前擦掉的部分（透明度 0，見下面的螢光筆）不算
+            let alive = pts.map { $0.opacity > erasedOpacity }
+            let hit = zip(pts, alive).map { q, a -> Bool in
+                guard a else { return false }
                 let w = q.location.applying(s.transform)
                 return distance(w, to: path) <= radius + drawnHalfWidth(s.ink, q.size) * k
             }
@@ -56,6 +59,13 @@ enum StrokeEraser {
             }
             changed = true
             guard partial else { continue }
+            let gone = zip(hit, alive).map { h, a in h || !a }
+            guard gone.contains(false) else { continue }
+            // 半透明的螢光筆：還是同一筆，擦掉的部分變透明。切成好幾筆的話，自己交錯的地方變成兩筆疊在一起，顏色變深
+            if NotebookViewController.isHighlighterStroke(s) {
+                out.append(fadedOut(s, params: params, samples: pts, gone: gone))
+                continue
+            }
             // 局部擦除：連續沒碰到的一段各自變成一筆（同一條筆跡的亂數種子，鉛筆、蠟筆的紋路不會變）。
             // 一段用的是原本的控制點，只有切開的兩端補上切點：不能拿曲線上取的點當控制點，
             // PencilKit 的線是控制點拉出來的平滑曲線，取樣的點再當控制點會再平滑一次，
@@ -76,16 +86,66 @@ enum StrokeEraser {
                 let p = PKStrokePath(controlPoints: cps, creationDate: sp.creationDate)
                 out.append(PKStroke(ink: s.ink, path: p, transform: s.transform, mask: s.mask, randomSeed: s.randomSeed))
             }
-            for (j, h) in hit.enumerated() {
+            for (j, h) in gone.enumerated() {
                 if h {
                     if start != nil { flush(j - 1) }
                 } else if start == nil {
                     start = j
                 }
             }
-            if start != nil { flush(hit.count - 1) }
+            if start != nil { flush(gone.count - 1) }
         }
         return changed ? out : nil
+    }
+
+    /// 擦掉的點：透明度 0（判斷時留一點誤差）
+    static let erasedOpacity: CGFloat = 0.01
+
+    /// 同一筆，samples 裡 gone 的部分透明度改成 0（控制點不動，切開的地方補上切點，前後各一個，邊緣是銳利的）
+    static func fadedOut(_ s: PKStroke, params: [CGFloat], samples: [PKStrokePoint], gone: [Bool]) -> PKStroke {
+        let sp = s.path
+        func with(_ q: PKStrokePoint, opacity: CGFloat) -> PKStrokePoint {
+            PKStrokePoint(location: q.location, timeOffset: q.timeOffset, size: q.size, opacity: opacity,
+                          force: q.force, azimuth: q.azimuth, altitude: q.altitude)
+        }
+        // 擦掉的參數範圍
+        var dead: [ClosedRange<CGFloat>] = []
+        var cuts: [(CGFloat, PKStrokePoint)] = []
+        var j = 0
+        while j < gone.count {
+            guard gone[j] else { j += 1; continue }
+            var b = j
+            while b + 1 < gone.count, gone[b + 1] { b += 1 }
+            // 留下的最後一個點之後一點點就透明，下一個留下的點之前一點點才出現
+            let t0 = j > 0 ? params[j - 1] + (params[j] - params[j - 1]) * 0.05 : params[j]
+            let t1 = b + 1 < gone.count ? params[b + 1] - (params[b + 1] - params[b]) * 0.05 : params[b]
+            dead.append(t0...t1)
+            if j > 0 {
+                cuts.append((params[j - 1], samples[j - 1]))
+                cuts.append((t0, with(sp.interpolatedPoint(at: t0), opacity: 0)))
+            }
+            if b + 1 < gone.count {
+                cuts.append((t1, with(sp.interpolatedPoint(at: t1), opacity: 0)))
+                cuts.append((params[b + 1], samples[b + 1]))
+            }
+            j = b + 1
+        }
+        var all: [(CGFloat, PKStrokePoint)] = sp.indices.map { i in
+            let t = CGFloat(i)
+            let q = sp[i]
+            return (t, dead.contains { $0.contains(t) } ? with(q, opacity: 0) : q)
+        }
+        all += cuts
+        // 同一個位置只留一個（原本的控制點排前面、優先，形狀不變）
+        let ordered = all.enumerated().sorted { ($0.element.0, $0.offset) < ($1.element.0, $1.offset) }.map(\.element)
+        var cps: [PKStrokePoint] = []
+        var lastT: CGFloat = -1
+        for (t, q) in ordered where t - lastT > 0.0001 {
+            cps.append(q)
+            lastT = t
+        }
+        return PKStroke(ink: s.ink, path: PKStrokePath(controlPoints: cps, creationDate: sp.creationDate),
+                        transform: s.transform, mask: s.mask, randomSeed: s.randomSeed)
     }
 
     /// PencilKit 實際畫出來的半個線寬（和點的 size 不一樣，見 PencilKitInkWidth）。斜的筆頭都用長的那邊（比較好擦）

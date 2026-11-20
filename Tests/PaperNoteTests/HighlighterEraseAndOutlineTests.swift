@@ -49,12 +49,18 @@ final class HighlighterEraseTests: XCTestCase {
                      "離畫出來的範圍還有一點距離：不擦")
     }
 
+    /// 看得到的部分（擦掉的螢光筆是同一筆、那段透明）：每 1pt 的中心點
+    private func visibleCenters(_ strokes: [PKStroke]) -> [CGPoint] {
+        strokes.flatMap { s in
+            s.path.interpolatedPoints(by: .distance(1)).filter { $0.opacity > StrokeEraser.erasedOpacity }.map { $0.location.applying(s.transform) }
+        }
+    }
+
     func testPartialErasingCutsTheCentreLineWhereTheCircleTouched() throws {
         let result = try XCTUnwrap(StrokeEraser.erase([highlighter()], along: [CGPoint(x: 100, y: 108)], radius: 4, partial: true))
-        XCTAssertEqual(result.count, 2, "切成左右兩段")
-        let xs = result.map { s in s.path.map { $0.location.applying(s.transform).x } }
-        let left = try XCTUnwrap(xs.first { ($0.first ?? 0) < 50 })
-        let right = try XCTUnwrap(xs.first { ($0.first ?? 0) > 50 })
+        XCTAssertEqual(result.count, 1, "螢光筆還是同一筆（切成好幾筆的話，交錯的地方會疊成兩層）")
+        let xs = visibleCenters(result).map(\.x)
+        let left = xs.filter { $0 < 100 }, right = xs.filter { $0 > 100 }
         XCTAssertLessThan(try XCTUnwrap(left.max()), 100 - 4, "碰到的那段中心拿掉了")
         XCTAssertGreaterThan(try XCTUnwrap(right.min()), 100 + 4)
         XCTAssertLessThan(try XCTUnwrap(left.max()), 100 - 4 - 4, "連圓圈只碰到筆畫邊緣的那段中心也拿掉")
@@ -67,24 +73,25 @@ final class HighlighterEraseTests: XCTestCase {
         // 螢光筆寬 20，橡皮擦半徑 2（細很多），從上面劃到下面一條線
         let line = [CGPoint(x: 100, y: 80), CGPoint(x: 100, y: 120)]
         let result = try XCTUnwrap(StrokeEraser.erase([highlighter()], along: line, radius: 2, partial: true))
-        XCTAssertEqual(result.count, 2, "擦斷成左右兩段")
+        let xs = visibleCenters(result).map(\.x)
+        XCTAssertTrue(xs.contains { $0 < 80 } && xs.contains { $0 > 120 }, "擦斷成左右兩邊")
         // 留下來的每個圓都碰不到橡皮擦劃過的那條線：那裡整個寬度都不見了，上下沒有殘留
-        for s in result {
-            for q in s.path.interpolatedPoints(by: .distance(1)) {
-                let half = StrokeEraser.drawnHalfWidth(s.ink, q.size)
-                XCTAssertGreaterThan(abs(q.location.x - 100), half, "x=\(q.location.x) 的圓還蓋到擦過的線")
-            }
+        let half = StrokeEraser.drawnHalfWidth(result[0].ink, CGSize(width: 12, height: 12))
+        for x in xs {
+            XCTAssertGreaterThan(abs(x - 100), half, "x=\(x) 的圓還蓋到擦過的線")
         }
         // 只擦到上緣一點點也一樣：碰到的那幾個圓整個拿掉
         let edge = try XCTUnwrap(StrokeEraser.erase([highlighter()], along: [CGPoint(x: 150, y: 89)], radius: 2, partial: true))
-        XCTAssertEqual(edge.count, 2, "碰到邊緣也擦斷，不是只擦掉邊緣")
+        let ex = visibleCenters(edge).map(\.x)
+        XCTAssertFalse(ex.contains { abs($0 - 150) < 3 }, "碰到邊緣也擦斷，不是只擦掉邊緣")
+        XCTAssertTrue(ex.contains { $0 < 140 } && ex.contains { $0 > 160 })
     }
 
     func testAnEraserPathSweepingAcrossCountsEveryPoint() throws {
         // 橡皮擦從上面劃過到下面：中間經過的點都算
         let path = [CGPoint(x: 60, y: 60), CGPoint(x: 60, y: 140)]
         let result = try XCTUnwrap(StrokeEraser.erase([highlighter()], along: path, radius: 4, partial: true))
-        XCTAssertEqual(result.count, 2)
+        XCTAssertFalse(visibleCenters(result).contains { abs($0.x - 60) < 10 }, "經過的地方都擦掉")
     }
 
     func testPenStrokesAreErasedWithinWhatTheyDraw() {
@@ -163,6 +170,53 @@ final class HighlighterEraseTests: XCTestCase {
         editor.setTool(.highlighter)
         XCTAssertFalse(editor.eraserCapture.isEnabled)
         XCTAssertTrue(editor.canvas.drawingGestureRecognizer.isEnabled, "換回螢光筆：PencilKit 照常書寫")
+    }
+
+    /// 回報的問題（11/20）：擦螢光筆時，自己交錯的那一筆被切斷後，交錯的地方畫成兩層，顏色變深
+    func testErasingAHighlighterThatCrossesItselfKeepsTheCrossingOneLayer() throws {
+        // 一筆螢光筆：往右走，往下、往左，再往上穿過橫的那段（交錯在 (100, 100)）
+        let corners = [CGPoint(x: 20, y: 100), CGPoint(x: 180, y: 100), CGPoint(x: 180, y: 180), CGPoint(x: 100, y: 180), CGPoint(x: 100, y: 20)]
+        var locs: [CGPoint] = []
+        for (a, b) in zip(corners, corners.dropFirst()) {
+            let n = Int(hypot(b.x - a.x, b.y - a.y) / 5)
+            for i in 0..<n {
+                let f = CGFloat(i) / CGFloat(n)
+                locs.append(CGPoint(x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f))
+            }
+        }
+        locs.append(corners[corners.count - 1])
+        let pts = locs.enumerated().map { i, p in
+            PKStrokePoint(location: p, timeOffset: Double(i) * 0.01, size: CGSize(width: 12, height: 12),
+                          opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2)
+        }
+        let stroke = PKStroke(ink: PKInk(.monoline, color: UIColor.systemYellow.withAlphaComponent(0.4)),
+                              path: PKStrokePath(controlPoints: pts, creationDate: Date()))
+        /// 畫出來那一點的不透明度
+        func alpha(_ strokes: [PKStroke], at p: CGPoint) -> CGFloat {
+            let img = PKDrawing(strokes: strokes).image(from: CGRect(x: 0, y: 0, width: 200, height: 200), scale: 1)
+            guard let cg = img.cgImage else { return 0 }
+            var px = [UInt8](repeating: 0, count: 4)
+            let ctx = CGContext(data: &px, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            ctx.draw(cg, in: CGRect(x: -p.x, y: -(CGFloat(cg.height) - 1 - p.y), width: CGFloat(cg.width), height: CGFloat(cg.height)))
+            return CGFloat(px[3]) / 255
+        }
+        let single = alpha([stroke], at: CGPoint(x: 50, y: 100))
+        XCTAssertGreaterThan(single, 0.2, "測試的前提：畫得出來")
+        XCTAssertEqual(alpha([stroke], at: CGPoint(x: 100, y: 100)), single, accuracy: 0.05, "測試的前提：同一筆交錯的地方只有一層")
+        // 擦斷右邊直的那段
+        let after = try XCTUnwrap(StrokeEraser.erase([stroke], along: [CGPoint(x: 180, y: 140)], radius: 4, partial: true))
+        XCTAssertLessThan(alpha(after, at: CGPoint(x: 180, y: 140)), 0.02, "擦掉的地方沒了")
+        XCTAssertLessThan(alpha(after, at: CGPoint(x: 188, y: 140)), 0.02, "整個寬度都擦掉")
+        XCTAssertEqual(alpha(after, at: CGPoint(x: 100, y: 100)), single, accuracy: 0.05, "交錯的地方還是一層，顏色沒變深")
+        XCTAssertEqual(alpha(after, at: CGPoint(x: 50, y: 100)), single, accuracy: 0.05)
+        XCTAssertEqual(alpha(after, at: CGPoint(x: 180, y: 110)), single, accuracy: 0.05, "擦的地方旁邊留著")
+        // 再擦一次擦過的地方：沒有變化；擦到別的地方：還是同一筆
+        XCTAssertNil(StrokeEraser.erase(after, along: [CGPoint(x: 180, y: 140)], radius: 4, partial: true), "擦掉的部分不會再被擦到")
+        let again = try XCTUnwrap(StrokeEraser.erase(after, along: [CGPoint(x: 140, y: 180)], radius: 4, partial: true))
+        XCTAssertEqual(again.count, 1)
+        XCTAssertLessThan(alpha(again, at: CGPoint(x: 180, y: 140)), 0.02, "之前擦掉的地方沒有回來")
+        XCTAssertEqual(alpha(again, at: CGPoint(x: 100, y: 100)), single, accuracy: 0.05)
     }
 
     /// 回報的問題（11/20）：PencilKit 的筆、螢光筆用局部擦除，彎的地方會慢慢變平滑、越擦越直，不只擦到的地方
