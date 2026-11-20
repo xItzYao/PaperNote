@@ -101,7 +101,8 @@ enum StrokeEraser {
     /// 擦掉的點：透明度 0（判斷時留一點誤差）
     static let erasedOpacity: CGFloat = 0.01
 
-    /// 同一筆，samples 裡 gone 的部分透明度改成 0（控制點不動，切開的地方補上切點，前後各一個，邊緣是銳利的）
+    /// 同一筆，samples 裡 gone 的部分透明度改成 0（控制點不動，切開的地方補上切點，前後各一個，邊緣是銳利的）。
+    /// PencilKit 畫螢光筆不看每個點的透明度：透明度只記哪裡擦掉了，畫面靠遮罩（留下的點的圓，和切成好幾筆時畫出來的一樣）
     static func fadedOut(_ s: PKStroke, params: [CGFloat], samples: [PKStrokePoint], gone: [Bool]) -> PKStroke {
         let sp = s.path
         func with(_ q: PKStrokePoint, opacity: CGFloat) -> PKStrokePoint {
@@ -144,8 +145,25 @@ enum StrokeEraser {
             cps.append(q)
             lastT = t
         }
-        return PKStroke(ink: s.ink, path: PKStrokePath(controlPoints: cps, creationDate: sp.creationDate),
-                        transform: s.transform, mask: s.mask, randomSeed: s.randomSeed)
+        let faded = PKStrokePath(controlPoints: cps, creationDate: sp.creationDate)
+        // 遮罩：留下的點各一個圓（半徑是畫出來的線寬一半，多一點點不切到邊緣）
+        let circles = CGMutablePath()
+        var t: CGFloat = 0
+        let end = CGFloat(max(faded.count - 1, 0))
+        while true {
+            let q = faded.interpolatedPoint(at: t)
+            if q.opacity > erasedOpacity {
+                let r = drawnHalfWidth(s.ink, q.size) + 0.5
+                circles.addEllipse(in: CGRect(x: q.location.x - r, y: q.location.y - r, width: 2 * r, height: 2 * r))
+            }
+            guard t < end else { break }
+            let next = min(faded.parametricValue(t, offsetBy: .distance(1)), end)
+            guard next > t else { break }
+            t = next
+        }
+        // 原本就有遮罩（超出頁面的部分遮掉、之前擦過）：只會更少，取交集
+        let mask = s.mask.map { circles.intersection($0.cgPath) } ?? circles
+        return PKStroke(ink: s.ink, path: faded, transform: s.transform, mask: UIBezierPath(cgPath: mask), randomSeed: s.randomSeed)
     }
 
     /// PencilKit 實際畫出來的半個線寬（和點的 size 不一樣，見 PencilKitInkWidth）。斜的筆頭都用長的那邊（比較好擦）
