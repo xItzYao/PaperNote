@@ -243,6 +243,12 @@ final class HighlighterEraseTests: XCTestCase {
         let erased = try XCTUnwrap(StrokeEraser.erase([highlighter()], along: [CGPoint(x: 100, y: 100)], radius: 4, partial: true))
         let saved = try PKDrawing(data: PKDrawing(strokes: erased).dataRepresentation()).strokes
         XCTAssertEqual(saved.count, 1)
+        let o = saved[0], p0 = o.path.first
+        print("ROUNDTRIP ink=\(o.ink.inkType.rawValue) alpha=\(o.ink.color.cgColor.alpha) op=\(p0?.opacity ?? -1) mask=\(o.mask != nil) "
+              + "before ink=\(erased[0].ink.inkType.rawValue) alpha=\(erased[0].ink.color.cgColor.alpha)")
+        XCTAssertTrue(NotebookViewController.isHighlighterStroke(o), "存檔讀回來還是螢光筆：\(o.ink.inkType.rawValue) alpha=\(o.ink.color.cgColor.alpha)")
+        let plain = try PKDrawing(data: PKDrawing(strokes: [highlighter()]).dataRepresentation()).strokes[0]
+        XCTAssertTrue(NotebookViewController.isHighlighterStroke(plain), "沒擦過的存檔讀回來也是：\(plain.ink.inkType.rawValue) alpha=\(plain.ink.color.cgColor.alpha)")
         func circled(_ x: CGFloat) -> Bool {
             let lasso = UIBezierPath(rect: CGRect(x: x - 6, y: 80, width: 12, height: 40))
             return LassoGeometry.circles(saved[0], path: lasso, area: lasso.bounds)
