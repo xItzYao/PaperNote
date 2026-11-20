@@ -95,21 +95,36 @@ final class EditorRequestsNov19Tests: XCTestCase {
         XCTAssertEqual(Set(pages + [editor.pageLabel.text ?? ""]), [label ?? ""], "頁碼沒有跳")
     }
 
+    /// 實機的除錯紀錄（PDF 第 60 頁，放到最大再放大、放開）：回彈的動畫裡系統先把縮放改成最後的值、通知捲動，
+    /// 這時捲動位置還是放開前的，之後才改捲動位置、再通知一次：
+    ///   didScroll z=8.253 off=5460,379288 → page+ 81, page- 60
+    ///   didScroll z=8.253 off=3103,278439 → page+ 60, page- 81
+    /// 正在看的第 60 頁被拿掉又重建，PDF 的背景要畫一下，那一瞬間是白的（空白筆記畫得快、頁數也少，看不出來）
     func testThePageBeingViewedIsNotRebuiltDuringTheZoomBounce() throws {
         let (id, viewed) = try zoomDeepInTheNotebook()
+        let canvas = editor.canvas
+        let z = canvas.zoomScale, z2 = z * 0.8
+        let old = canvas.contentOffset
+        let half = CGPoint(x: canvas.bounds.width / 2, y: canvas.bounds.height / 2)
+        let final = CGPoint(x: (old.x + half.x) * z2 / z - half.x, y: (old.y + half.y) * z2 / z - half.y)
         var removed = false
-        let watch = watchZoom(id) { line in
-            print(line)
+        UIView.animate(withDuration: 0.25) {
+            // 照實機的順序：縮放先到最後的值，捲動位置還是舊的
+            canvas.zoomScale = z2
+            canvas.contentOffset = old
+            self.editor.scrollViewDidScroll(canvas)
+            if self.editor.pageViews[id] == nil { removed = true }
+            canvas.contentOffset = final
+            self.editor.scrollViewDidZoom(canvas)
             if self.editor.pageViews[id] == nil { removed = true }
         }
-        // 回彈和程式的動畫縮放是同一個系統動畫
-        editor.canvas.setZoomScale(editor.canvas.zoomScale * 0.8, animated: true)
-        XCTAssertTrue(editor.pageViews[id] === viewed, "正在看的頁面沒有被拿掉重建")
-        spin(0.6)
-        watch.invalidate()
-        XCTAssertFalse(removed)
+        XCTAssertFalse(removed, "回彈途中正在看的頁面沒有被拿掉")
+        XCTAssertTrue(editor.pageViews[id] === viewed, "正在看的頁面沒有重建（重建的背景要重畫，PDF 會白一下）")
+        spin(0.5)
+        editor.scrollViewDidEndZooming(canvas, with: nil, atScale: z2)
         XCTAssertTrue(editor.pageViews[id] === viewed)
-        XCTAssertNil(editor.pageViews[editor.session.document.pages[0].id], "看不到的頁面還是會拿掉")
+        let far = editor.session.document.pages[10].id
+        XCTAssertNil(editor.pageViews[far], "縮放結束後，回彈途中多加的（看不到的）頁面會拿掉")
     }
 
     /// 放到最大再放大、放開回彈時頁面閃一下：模擬器做不出來，除錯紀錄記下放開後每一格頁面畫在哪裡

@@ -691,7 +691,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             pagesContainer.center = c
             inkContainer.transform = t
             inkContainer.center = c
-            UIView.performWithoutAnimation { finishZoomLayout(z) }
+            UIView.performWithoutAnimation { finishZoomLayout(z, removeHidden: false) }
             return
         }
         // 頁面的位置、縮放不做動畫：鍵盤跳出來時系統在鍵盤的動畫裡通知，
@@ -710,7 +710,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         finishZoomLayout(z)
     }
 
-    private func finishZoomLayout(_ z: CGFloat) {
+    private func finishZoomLayout(_ z: CGFloat, removeHidden: Bool = true) {
         // PencilKit 之後才加的 view 也要在筆跡底下
         if canvas.subviews.last !== inkContainer { canvas.bringSubviewToFront(inkContainer) }
         overlay.lineScale = 1 / z
@@ -719,7 +719,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         applyCanvasInsets()
         updateSelectionChrome()
         updatePageResizeChrome()
-        updateVisiblePages()
+        updateVisiblePages(removeHidden: removeHidden)
     }
 
     /// 畫布底下的留白：鍵盤擋住的高度；擴展頁面時再多留一個畫面，才拉得到最後一頁下緣的控制點
@@ -772,7 +772,11 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         min(traitCollection.displayScale * canvas.zoomScale, 8)
     }
 
-    func updateVisiblePages() {
+    /// removeHidden：拿掉看不到的頁面。系統的動畫縮放（放開後回彈）是在動畫裡一項一項改的：先改縮放、通知捲動，
+    /// 再改捲動位置、再通知一次。中間那次的縮放和捲動位置配不起來，算出來的範圍差好幾頁（越後面的頁差越多），
+    /// 照它拿掉頁面，正在看的頁面就被拿掉又重建，背景重畫（PDF 比較慢）時一瞬間全白。
+    /// 動畫裡只加不拿；動畫裡的值都改好後（縮放結束、下一次一般的捲動）再拿掉
+    func updateVisiblePages(removeHidden: Bool = true) {
         guard !pageFrames.isEmpty else { return }
         let visible = visibleDocRect()
         let margin = visible.height * 0.75
@@ -798,6 +802,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             }
             i += 1
         }
+        guard removeHidden else { return }
         for (id, v) in pageViews where !keep.contains(id) {
             zoomTrace.note("page- \(pageIndex(of: id).map { $0 + 1 } ?? 0)")
             v.removeFromSuperview()
@@ -826,7 +831,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         uiTestOffset?.accessibilityLabel = "\(Int(scrollView.contentOffset.y))"
         zoomTrace.note("didScroll")
-        updateVisiblePages()
+        updateVisiblePages(removeHidden: UIView.inheritedAnimationDuration == 0)
         updatePageIndicator()
         updateAddPagePull()
     }
@@ -861,6 +866,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
         DebugLog.add("zoom end x\(String(format: "%.2f", scale / max(fitZoom, 0.01)))")
         zoomTrace.note("didEndZooming")
+        // 回彈的動畫裡只加不拿：值都定了，把看不到的頁面拿掉
+        updateVisiblePages()
         let s = elementContentScale
         for v in pageViews.values { v.updateContentScale(s) }
     }
