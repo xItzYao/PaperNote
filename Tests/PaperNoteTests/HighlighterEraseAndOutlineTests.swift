@@ -164,6 +164,41 @@ final class HighlighterEraseTests: XCTestCase {
         XCTAssertFalse(editor.eraserCapture.isEnabled)
         XCTAssertTrue(editor.canvas.drawingGestureRecognizer.isEnabled, "換回螢光筆：PencilKit 照常書寫")
     }
+
+    /// 回報的問題（11/20）：PencilKit 的筆、螢光筆用局部擦除，彎的地方會慢慢變平滑、越擦越直，不只擦到的地方
+    func testPartialErasingDoesNotStraightenTheRestOfTheStroke() throws {
+        // 彎來彎去的一筆：控制點在 y = 100、110 之間來回
+        let pts = stride(from: CGFloat(0), through: 200, by: 5).enumerated().map { i, x in
+            PKStrokePoint(location: CGPoint(x: x, y: i % 2 == 0 ? 100 : 110), timeOffset: Double(i) * 0.01,
+                          size: CGSize(width: 2, height: 2), opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2)
+        }
+        let original = PKStroke(ink: PKInk(.pen, color: .black), path: PKStrokePath(controlPoints: pts, creationDate: Date()))
+        func curve(_ strokes: [PKStroke]) -> [CGPoint] {
+            strokes.flatMap { s in s.path.interpolatedPoints(by: .distance(1)).map { $0.location.applying(s.transform) } }
+        }
+        let before = curve([original]).filter { $0.x > 120 && $0.x < 180 }
+        // 從左邊一點一點擦過去（擦的時候每移動一下就擦一次）
+        var strokes = [original]
+        var passes = 0
+        for k in 0..<30 {
+            if let r = StrokeEraser.erase(strokes, along: [CGPoint(x: CGFloat(k) * 2, y: 105)], radius: 4, partial: true) {
+                strokes = r
+                passes += 1
+            }
+        }
+        XCTAssertGreaterThan(passes, 10, "測試的前提：擦了很多次")
+        XCTAssertFalse(strokes.isEmpty)
+        let after = curve(strokes)
+        // 離擦的地方很遠的線：形狀和原本一樣
+        var worst: CGFloat = 0
+        for p in before {
+            worst = max(worst, after.map { hypot($0.x - p.x, $0.y - p.y) }.min() ?? .infinity)
+        }
+        XCTAssertLessThan(worst, 0.3, "沒擦到的地方被拉直了 \(worst)pt")
+        let ys = after.filter { $0.x > 120 && $0.x < 180 }.map(\.y), ys0 = before.map(\.y)
+        XCTAssertEqual(try XCTUnwrap(ys.max()) - XCTUnwrap(ys.min()), try XCTUnwrap(ys0.max()) - XCTUnwrap(ys0.min()), accuracy: 0.3,
+                       "彎的高度還在")
+    }
 }
 
 /// 回報的需求：PDF 大綱模式，在「全部頁面」「我的最愛」旁邊加一個「大綱」

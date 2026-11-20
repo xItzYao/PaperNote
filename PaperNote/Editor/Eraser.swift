@@ -31,7 +31,21 @@ enum StrokeEraser {
                 out.append(s)
                 continue
             }
-            let pts = Array(s.path.interpolatedPoints(by: .distance(2)))
+            // 每 2pt 取一個點檢查（記下在筆跡上的參數位置，切開時才找得到原本的控制點）
+            let sp = s.path
+            guard sp.count > 0 else {
+                out.append(s)
+                continue
+            }
+            let end = CGFloat(max(sp.count - 1, 0))
+            var params: [CGFloat] = [0]
+            while let t = params.last, t < end {
+                let next = min(sp.parametricValue(t, offsetBy: .distance(2)), end)
+                guard next > t else { break }
+                params.append(next)
+            }
+            if let t = params.last, t < end { params.append(end) }
+            let pts = params.map { sp.interpolatedPoint(at: $0) }
             let hit = pts.map { q -> Bool in
                 let w = q.location.applying(s.transform)
                 return distance(w, to: path) <= radius + drawnHalfWidth(s.ink, q.size) * k
@@ -42,19 +56,34 @@ enum StrokeEraser {
             }
             changed = true
             guard partial else { continue }
-            // 局部擦除：連續沒碰到的點各自變成一段（同一條筆跡的亂數種子，鉛筆、蠟筆的紋路不會變）
-            var run: [PKStrokePoint] = []
-            func flush() {
-                if run.count >= 2 {
-                    let p = PKStrokePath(controlPoints: run, creationDate: s.path.creationDate)
-                    out.append(PKStroke(ink: s.ink, path: p, transform: s.transform, mask: s.mask, randomSeed: s.randomSeed))
+            // 局部擦除：連續沒碰到的一段各自變成一筆（同一條筆跡的亂數種子，鉛筆、蠟筆的紋路不會變）。
+            // 一段用的是原本的控制點，只有切開的兩端補上切點：不能拿曲線上取的點當控制點，
+            // PencilKit 的線是控制點拉出來的平滑曲線，取樣的點再當控制點會再平滑一次，
+            // 擦一下（擦的時候一直在擦）整條就平滑一次，彎的地方越擦越直
+            var start: Int?
+            func flush(_ last: Int) {
+                defer { start = nil }
+                guard let a = start, last > a else { return }
+                let t0 = params[a], t1 = params[last]
+                // 原本的頭尾沒被擦到：用原本的點
+                var cps = [t0 == 0 ? sp[0] : pts[a]]
+                var i = Int(t0.rounded(.down)) + 1
+                while CGFloat(i) < t1 {
+                    cps.append(sp[i])
+                    i += 1
                 }
-                run = []
+                cps.append(t1 == end ? sp[sp.count - 1] : pts[last])
+                let p = PKStrokePath(controlPoints: cps, creationDate: sp.creationDate)
+                out.append(PKStroke(ink: s.ink, path: p, transform: s.transform, mask: s.mask, randomSeed: s.randomSeed))
             }
-            for (q, h) in zip(pts, hit) {
-                if h { flush() } else { run.append(q) }
+            for (j, h) in hit.enumerated() {
+                if h {
+                    if start != nil { flush(j - 1) }
+                } else if start == nil {
+                    start = j
+                }
             }
-            flush()
+            if start != nil { flush(hit.count - 1) }
         }
         return changed ? out : nil
     }

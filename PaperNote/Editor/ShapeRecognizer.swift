@@ -304,7 +304,8 @@ extension UITouch {
 /// 手掌防誤觸：判定為手掌的觸碰一出現就「辨識成功」，讓畫布的捲動、縮放無法開始。
 /// 不攔截 Pencil，也不影響 PencilKit 書寫。
 final class PalmBlocker: UIGestureRecognizer {
-    var isPalm: ((UITouch) -> Bool)?
+    /// 觸碰、連它在內螢幕上同時按著幾個手指觸碰
+    var isPalm: ((UITouch, Int) -> Bool)?
     private var palmTouches = Set<UITouch>()
     /// 現在有手掌壓在螢幕上（這時候頁面不能捲動）
     var holdingPalm: Bool { !palmTouches.isEmpty }
@@ -321,8 +322,9 @@ final class PalmBlocker: UIGestureRecognizer {
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         Self.lastTouchCount = event.allTouches?.count ?? 0
+        let together = event.allTouches?.filter { $0.type == .direct && $0.phase != .ended && $0.phase != .cancelled }.count ?? touches.count
         for t in touches {
-            if isPalm?(t) == true {
+            if isPalm?(t, max(together, 1)) == true {
                 palmTouches.insert(t)
             } else if palmTouches.isEmpty {
                 ignore(t, for: event)
