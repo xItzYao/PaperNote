@@ -55,13 +55,24 @@ enum StrokeEraser {
                 out.append(s)
                 continue
             }
-            changed = true
-            guard partial else { continue }
-            // 半透明的螢光筆：還是同一筆，擦掉的部分用遮罩挖掉。切成好幾筆的話，自己交錯的地方變成兩筆疊在一起，顏色變深
-            if NotebookViewController.isHighlighterStroke(s) {
-                if let m = maskedOut(s, samples: pts, hit: hit) { out.append(m) }
+            guard partial else {
+                changed = true
                 continue
             }
+            // 半透明的螢光筆：還是同一筆，擦掉的部分用遮罩挖掉。切成好幾筆的話，自己交錯的地方變成兩筆疊在一起，顏色變深
+            if NotebookViewController.isHighlighterStroke(s) {
+                switch maskedOut(s, samples: pts, hit: hit) {
+                case .unchanged:
+                    out.append(s)
+                case .removed:
+                    changed = true
+                case .masked(let m):
+                    out.append(m)
+                    changed = true
+                }
+                continue
+            }
+            changed = true
             let gone = zip(hit, pts).map { h, q in h || !isShown(s, q.location) }
             guard gone.contains(false) else { continue }
             // 局部擦除：連續沒碰到的一段各自變成一筆（同一條筆跡的亂數種子，鉛筆、蠟筆的紋路不會變）。
@@ -96,17 +107,25 @@ enum StrokeEraser {
         return changed ? out : nil
     }
 
-    /// 筆跡上的這一點（筆跡的 path 座標）畫得出來：沒有遮罩，或在遮罩裡面。
+    /// 筆跡上的這一點（筆跡的 path 座標）畫得出來：沒有遮罩，或在遮罩裡面（擦掉的點如果落在旁邊留下的點的圓頭裡，也看得到）。
     /// 擦掉的地方只記在遮罩（畫面、套索、橡皮擦都看它）：點的透明度是 Pencil 的筆壓資料（水彩 0.01 左右），不能拿來記擦掉了
     static func isShown(_ s: PKStroke, _ location: CGPoint) -> Bool {
         s.mask?.contains(location) ?? true
     }
 
+    enum MaskedOut {
+        /// 碰到的都是已經擦掉的地方
+        case unchanged
+        /// 整筆都擦掉了
+        case removed
+        case masked(PKStroke)
+    }
+
     /// 螢光筆局部擦除：同一筆，控制點、形狀都不動，用遮罩挖掉碰到的點的圓（整個寬度，彎的外側也挖乾淨），
-    /// 但不挖到旁邊留下的點的圓（留下的部分完整，和擦掉的那段在兩點中間切齊）。
-    /// 遮罩每次只減掉這次碰到的地方，不重算整筆。全部擦掉了回傳 nil
-    static func maskedOut(_ s: PKStroke, samples: [PKStrokePoint], hit: [Bool]) -> PKStroke? {
-        guard let first = s.path.first else { return nil }
+    /// 但不挖到旁邊留下的點的圓：留下的部分完整，擦掉的頭是留下的最後一個點的圓弧。
+    /// 遮罩每次只減掉這次碰到的地方，不重算整筆
+    static func maskedOut(_ s: PKStroke, samples: [PKStrokePoint], hit: [Bool]) -> MaskedOut {
+        guard let first = s.path.first else { return .removed }
         // 線寬外面再多 1pt：邊緣反鋸齒的那一圈也要挖掉
         let edge: CGFloat = 1
         let widest = s.path.reduce(CGFloat(0)) { max($0, drawnHalfWidth(s.ink, $1.size)) } + edge
@@ -120,38 +139,40 @@ enum StrokeEraser {
         }
         let n = samples.count
         let loc = samples.map(\.location)
-        // 這次擦完還留著的點
-        let kept = (0..<n).map { !hit[$0] && mask.contains(loc[$0]) }
         func dist(_ a: CGPoint, _ b: CGPoint) -> CGFloat { hypot(b.x - a.x, b.y - a.y) }
-        func mid(_ a: CGPoint, _ b: CGPoint) -> CGPoint { CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2) }
-        /// 從 b 沿著 a → b 的方向再往前 d
-        func beyond(_ a: CGPoint, _ b: CGPoint, _ d: CGFloat) -> CGPoint {
-            let l = dist(a, b)
-            guard l > 0 else { return b }
-            return CGPoint(x: b.x + (b.x - a.x) / l * d, y: b.y + (b.y - a.y) / l * d)
+        /// 這個點整個圓都還在（真的留著的點）。之前擦掉的點的圓心可能落在旁邊留下的點的圓頭裡，
+        /// 那裡看得到，但不是它自己的：它的圓周圍有一圈是空的
+        func solid(_ i: Int) -> Bool {
+            let r = drawnHalfWidth(s.ink, samples[i].size) + 0.5
+            return mask.contains(loc[i]) && (0..<8).allSatisfy { k in
+                let a = CGFloat(k) * .pi / 4
+                return mask.contains(CGPoint(x: loc[i].x + r * cos(a), y: loc[i].y + r * sin(a)))
+            }
         }
-        /// 沿著這些點、半徑 r 的帶子（只有一個點就是一個圓）
-        func band(_ pts: [CGPoint], _ r: CGFloat, cap: CGLineCap) -> CGPath {
+        /// 沿著這些點、半徑 r、兩頭圓的帶子（只有一個點就是一個圓）
+        func band(_ pts: [CGPoint], _ r: CGFloat) -> CGPath {
             guard pts.count > 1, zip(pts, pts.dropFirst()).contains(where: { dist($0, $1) > 0.01 }) else {
                 return CGPath(ellipseIn: CGRect(x: pts[0].x - r, y: pts[0].y - r, width: 2 * r, height: 2 * r), transform: nil)
             }
             let p = CGMutablePath()
             p.addLines(between: pts)
-            return p.copy(strokingWithWidth: 2 * r, lineCap: cap, lineJoin: .round, miterLimit: 1)
+            return p.copy(strokingWithWidth: 2 * r, lineCap: .round, lineJoin: .round, miterLimit: 1)
         }
         func radius(_ idx: [Int]) -> CGFloat { idx.reduce(CGFloat(0)) { max($0, drawnHalfWidth(s.ink, samples[$1].size)) } + edge }
+        var changed = false
         var j = 0
         while j < n {
             guard hit[j] else { j += 1; continue }
             var e = j
             while e + 1 < n, hit[e + 1] { e += 1 }
             let run = Array(j...e)
-            var cut = band(run.map { loc[$0] }, radius(run), cap: .round)
-            // 旁邊留下的點（圓可能和碰到的圓重疊）：一段一段連續的
+            j = e + 1
+            var cut = band(run.map { loc[$0] }, radius(run))
+            // 旁邊真的留著的點（圓可能和碰到的圓重疊）：一段一段連續的，它們的圓不挖
             let reach = 2 * widest + 1
             let area = cut.boundingBoxOfPath.insetBy(dx: -widest - 1, dy: -widest - 1)
             let near = (0..<n).filter { i in
-                kept[i] && area.contains(loc[i]) && run.contains { dist(loc[$0], loc[i]) <= reach }
+                !hit[i] && area.contains(loc[i]) && run.contains { dist(loc[$0], loc[i]) <= reach } && solid(i)
             }
             var groups: [[Int]] = []
             for i in near {
@@ -159,30 +180,19 @@ enum StrokeEraser {
             }
             var keep: CGPath?
             for g in groups {
-                let r = radius(g)
-                var pts = g.map { loc[$0] }
-                let part: CGPath
-                if g.first == e + 1 {
-                    // 接在擦掉的那段後面：從兩點中間切齊，另一頭延伸蓋住最後一個點的圓
-                    pts.insert(mid(loc[e], loc[e + 1]), at: 0)
-                    pts.append(beyond(pts[pts.count - 2], pts[pts.count - 1], r))
-                    part = band(pts, r, cap: .butt)
-                } else if g.last == j - 1 {
-                    pts.append(mid(loc[j - 1], loc[j]))
-                    pts.insert(beyond(pts[1], pts[0], r), at: 0)
-                    part = band(pts, r, cap: .butt)
-                } else {
-                    // 同一筆繞回來經過這裡的另一段
-                    part = band(pts, r, cap: .round)
-                }
+                let part = band(g.map { loc[$0] }, radius(g))
                 keep = keep.map { $0.union(part) } ?? part
             }
             if let keep { cut = cut.subtracting(keep) }
-            mask = mask.subtracting(cut)
-            j = e + 1
+            let after = mask.subtracting(cut)
+            // 只碰到之前擦掉、落在留下的圓頭裡的點：什麼都沒變
+            guard run.contains(where: { solid($0) || !after.contains(loc[$0]) }) else { continue }
+            mask = after
+            changed = true
         }
-        guard kept.contains(true) else { return nil }
-        return PKStroke(ink: s.ink, path: s.path, transform: s.transform, mask: UIBezierPath(cgPath: mask), randomSeed: s.randomSeed)
+        guard changed else { return .unchanged }
+        guard (0..<n).contains(where: { !hit[$0] && mask.contains(loc[$0]) }) else { return .removed }
+        return .masked(PKStroke(ink: s.ink, path: s.path, transform: s.transform, mask: UIBezierPath(cgPath: mask), randomSeed: s.randomSeed))
     }
 
     /// 除錯紀錄用：一筆 PencilKit 筆跡的外框、遮罩、點的透明度
