@@ -332,32 +332,47 @@ final class HighlighterEraseTests: XCTestCase {
             return PKStroke(ink: ink, path: PKStrokePath(controlPoints: pts, creationDate: Date().addingTimeInterval(Double(row))))
         }
         editor.setTool(.eraser)
-        var results: [String] = []
+        // 橡皮擦在色塊上來回刷：一下往下一下往上，慢慢往右
+        let route = (0..<120).map { k -> CGPoint in
+            let phase = k % 20
+            let down = phase < 10 ? CGFloat(phase) : CGFloat(20 - phase)
+            return CGPoint(x: f.minX + 100 + CGFloat(k) * 2, y: f.minY + 70 + down * 19)
+        }
+        let length = zip(route, route.dropFirst()).reduce(CGFloat(0)) { $0 + hypot($1.1.x - $1.0.x, $1.1.y - $1.0.y) }
+        /// 同一條路切成每一下走 step（iPad 每一格畫面送一次：手動得慢，一下走得少，同樣的路要擦比較多下）
+        func moves(every step: CGFloat) -> [CGPoint] {
+            var out = [route[0]]
+            for (a, b) in zip(route, route.dropFirst()) {
+                let n = max(1, Int((hypot(b.x - a.x, b.y - a.y) / step).rounded(.up)))
+                for i in 1...n { out.append(CGPoint(x: a.x + (b.x - a.x) * CGFloat(i) / CGFloat(n), y: a.y + (b.y - a.y) * CGFloat(i) / CGFloat(n))) }
+            }
+            return out
+        }
         for (name, strokes) in [("one", oneStroke), ("many", manyStrokes)] {
-            editor.setDrawing(PKDrawing(strokes: strokes))
-            // 橡皮擦在色塊上來回刷：一下往下一下往上，慢慢往右
-            let path = (0..<120).map { k -> CGPoint in
-                let phase = k % 20
-                let down = phase < 10 ? CGFloat(phase) : CGFloat(20 - phase)
-                return CGPoint(x: f.minX + 100 + CGFloat(k) * 2, y: f.minY + 70 + down * 19)
+            for (speed, step) in [("fast", CGFloat(20)), ("slow", CGFloat(2))] {
+                editor.setDrawing(PKDrawing(strokes: strokes))
+                let path = moves(every: step)
+                StrokeEraser.counts = .init()
+                let start = CACurrentMediaTime()
+                var worst: CFTimeInterval = 0
+                editor.eraserBegan(at: path[0])
+                for p in path.dropFirst() {
+                    let t = CACurrentMediaTime()
+                    editor.eraserMoved([p])
+                    worst = max(worst, CACurrentMediaTime() - t)
+                }
+                editor.eraserEnded()
+                let total = CACurrentMediaTime() - start
+                // 橡皮擦每走 100pt
+                let per = 100 / length, c = StrokeEraser.counts
+                let line = String(format: "BLOCKPERF %@ %@ moves=%d per100pt: ms=%.1f booleans=%.0f outlines=%.0f inside=%.0f samples=%.0f worst=%.0fms",
+                                  name, speed, path.count - 1, total * 1000 * per, Double(c.booleans) * per, Double(c.outlines) * per,
+                                  Double(c.inside) * per, Double(c.samples) * per, worst * 1000)
+                print(line)
+                XCTAssertTrue(editor.canvas.drawing.strokes.contains { $0.mask != nil }, "\(name) \(speed) 測試的前提：擦到了")
+                XCTAssertLessThan(worst, 0.05, "每移動一下不超過 50ms：\(line)")
+                XCTAssertLessThan(total * per, 0.5, "橡皮擦每走 100pt 不超過 0.5 秒：\(line)")
             }
-            let start = CACurrentMediaTime()
-            var worst: CFTimeInterval = 0
-            editor.eraserBegan(at: path[0])
-            for p in path.dropFirst() {
-                let t = CACurrentMediaTime()
-                editor.eraserMoved([p])
-                worst = max(worst, CACurrentMediaTime() - t)
-            }
-            editor.eraserEnded()
-            let total = CACurrentMediaTime() - start
-            let line = String(format: "BLOCKPERF %@ total=%.0fms worst=%.0fms strokes=%d", name, total * 1000, worst * 1000,
-                              editor.canvas.drawing.strokes.count)
-            print(line)
-            results.append(line)
-            XCTAssertTrue(editor.canvas.drawing.strokes.contains { $0.mask != nil }, "\(name) 測試的前提：擦到了")
-            XCTAssertLessThan(worst, 0.05, "\(name) 每移動一下不超過 50ms：\(line)")
-            XCTAssertLessThan(total, 3, "\(name) 整個擦完不超過 3 秒：\(line)")
         }
     }
 

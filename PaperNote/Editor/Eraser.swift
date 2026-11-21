@@ -10,6 +10,24 @@ enum StrokeEraser {
     /// 線寬外面再多 1pt：邊緣反鋸齒的那一圈也要挖掉
     private static let edge: CGFloat = 1
 
+    /// 擦的時候做了多少事（測試用來比較橡皮擦每走一段路要算多少次）
+    struct Counts {
+        /// 看了幾個取樣點離橡皮擦多遠
+        var samples = 0
+        /// 問了遮罩幾次「這一點在裡面嗎」
+        var inside = 0
+        /// 畫了幾次帶子的外形（把中心線變成一個形狀）
+        var outlines = 0
+        /// 遮罩做了幾次布林運算（相減、聯集）
+        var booleans = 0
+    }
+    static var counts = Counts()
+
+    private static func inside(_ path: CGPath, _ p: CGPoint) -> Bool {
+        counts.inside += 1
+        return path.contains(p)
+    }
+
     /// 一筆筆跡每 2pt 取的點（記下在筆跡上的參數位置，切開時才找得到原本的控制點），和每 32 個點一塊的外框。
     /// 擦的時候每移動一下都要用：同一條筆跡只算一次，之後只看橡皮擦附近那幾塊
     final class Samples {
@@ -96,9 +114,10 @@ enum StrokeEraser {
             var hit = [Bool](repeating: false, count: sm.count)
             var any = false
             for c in sm.chunks where c.box.applying(s.transform).insetBy(dx: -radius, dy: -radius).intersects(area) {
+                counts.samples += c.range.count
                 for i in c.range {
                     let w = sm.locations[i].applying(s.transform)
-                    if distance(w, to: path) <= radius + sm.half[i] * k, mask?.contains(sm.locations[i]) ?? true {
+                    if distance(w, to: path) <= radius + sm.half[i] * k, mask.map({ inside($0, sm.locations[i]) }) ?? true {
                         hit[i] = true
                         any = true
                     }
@@ -128,7 +147,7 @@ enum StrokeEraser {
             changed = true
             let sp = s.path, params = sm.params, pts = sm.points
             let end = CGFloat(sp.count - 1)
-            let gone = (0..<sm.count).map { hit[$0] || !(mask?.contains(sm.locations[$0]) ?? true) }
+            let gone = (0..<sm.count).map { hit[$0] || !(mask.map { inside($0, sm.locations[$0]) } ?? true) }
             guard gone.contains(false) else { continue }
             // 局部擦除：連續沒碰到的一段各自變成一筆（同一條筆跡的亂數種子，鉛筆、蠟筆的紋路不會變）。
             // 一段用的是原本的控制點，只有切開的兩端補上切點：不能拿曲線上取的點當控制點，
@@ -196,9 +215,9 @@ enum StrokeEraser {
         /// 那裡看得到，但不是它自己的：它的圓周圍有一圈是空的
         func solid(_ i: Int) -> Bool {
             let p = loc[i], q = sm.half[i] + 0.5
-            return mask.contains(p) && (0..<8).allSatisfy { k in
+            return inside(mask, p) && (0..<8).allSatisfy { k in
                 let a = CGFloat(k) * .pi / 4
-                return mask.contains(CGPoint(x: p.x + q * cos(a), y: p.y + q * sin(a)))
+                return inside(mask, CGPoint(x: p.x + q * cos(a), y: p.y + q * sin(a)))
             }
         }
         /// 連續的一段一段（索引連在一起的）
@@ -221,15 +240,13 @@ enum StrokeEraser {
                     lines.addLine(to: CGPoint(x: pts[0].x + 0.01, y: pts[0].y))
                 }
             }
+            counts.outlines += 1
             return lines.copy(strokingWithWidth: 2 * r, lineCap: .round, lineJoin: .round, miterLimit: 1)
         }
         let hitIdx = (0..<n).filter { hit[$0] }
-        // 這一下真的擦到還在的點；只碰到之前擦掉、落在留下的圓頭裡的點的話，下面再看有沒有變
-        let touchesSolid = hitIdx.contains(where: solid)
-        var cut = bands(runs(hitIdx))
-        // 旁邊真的留著的點（圓可能和碰到的圓重疊）：它們的圓不挖
-        let around = cut.boundingBoxOfPath.insetBy(dx: -r - 1, dy: -r - 1)
         let hitLoc = hitIdx.map { loc[$0] }
+        // 旁邊真的留著的點（圓可能和碰到的圓重疊）：它們的圓不挖
+        let around = hitLoc.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) }.insetBy(dx: -3 * r - 2, dy: -3 * r - 2)
         let reach = 2 * r + 1
         var near: [Int] = []
         for c in sm.chunks where c.box.intersects(around) {
@@ -237,12 +254,19 @@ enum StrokeEraser {
                 near.append(i)
             }
         }
-        if !near.isEmpty { cut = cut.subtracting(bands(runs(near))) }
+        // 只碰到之前擦掉、圓心落在留下的點的圓頭裡的點（慢慢擦的時候大部分的移動都是這樣）：什麼都沒變，遮罩不用算
+        let touchesSolid = hitIdx.contains(where: solid)
+        if !touchesSolid, hitLoc.allSatisfy({ h in near.contains { dist(loc[$0], h) <= r } }) { return .unchanged }
+        var cut = bands(runs(hitIdx))
+        if !near.isEmpty {
+            cut = cut.subtracting(bands(runs(near)))
+            counts.booleans += 1
+        }
         let after = mask.subtracting(cut)
-        guard touchesSolid || hitIdx.contains(where: { !after.contains(loc[$0]) }) else { return .unchanged }
-        // 還有留下的點嗎（跳著找，找到就停）
-        let stride3 = Swift.stride(from: 0, to: n, by: 3)
-        guard stride3.contains(where: { !hit[$0] && after.contains(loc[$0]) }) || near.contains(where: { after.contains(loc[$0]) }) else {
+        counts.booleans += 1
+        guard touchesSolid || hitIdx.contains(where: { !inside(after, loc[$0]) }) else { return .unchanged }
+        // 還有留下的點嗎：旁邊留著的點一定還在；沒有的話跳著找，找到就停
+        guard !near.isEmpty || Swift.stride(from: 0, to: n, by: 3).contains(where: { !hit[$0] && inside(after, loc[$0]) }) else {
             return .removed
         }
         return .masked(PKStroke(ink: s.ink, path: s.path, transform: s.transform, mask: UIBezierPath(cgPath: after), randomSeed: s.randomSeed))
