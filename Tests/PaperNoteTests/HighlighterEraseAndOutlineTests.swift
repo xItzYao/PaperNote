@@ -290,6 +290,77 @@ final class HighlighterEraseTests: XCTestCase {
                        "整條擦過去：整筆拿掉")
     }
 
+    /// 回報的問題（11/22）：擦大面積的螢光筆色塊還是很卡（單一條線比較不會）。
+    /// 色塊是一筆來回塗很多趟（很長的一筆，橡皮擦一下碰到好幾趟），或很多筆疊在一起
+    func testErasingABigHighlightedBlockStaysFast() throws {
+        let meta = LibraryStore.shared.createNotebook(title: "HighlighterBlockPerf", folder: nil, paper: .blank, landscape: false)
+        defer { LibraryStore.shared.deleteNotebook(meta.id) }
+        let editor = NotebookViewController(session: try NotebookSession(id: meta.id), initialPageID: nil, onClose: {})
+        let window = try TestWindow.make()
+        window.rootViewController = editor
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        editor.view.layoutIfNeeded()
+        let savedPixel = EditorSettings.shared.pixelEraser
+        let savedReturn = EditorSettings.shared.eraserAutoReturn
+        EditorSettings.shared.pixelEraser = true
+        EditorSettings.shared.eraserAutoReturn = false
+        defer {
+            EditorSettings.shared.pixelEraser = savedPixel
+            EditorSettings.shared.eraserAutoReturn = savedReturn
+        }
+        let f = editor.pageFrames[0]
+        let ink = PKInk(.monoline, color: UIColor.systemYellow.withAlphaComponent(0.4))
+        func point(_ p: CGPoint, _ i: Int) -> PKStrokePoint {
+            PKStrokePoint(location: p, timeOffset: Double(i) * 0.005, size: CGSize(width: 12, height: 12),
+                          opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2)
+        }
+        // 一筆來回塗 24 趟（每趟 300pt，往下 7pt）
+        var scribble: [PKStrokePoint] = []
+        for pass in 0..<24 {
+            let y = f.minY + 80 + CGFloat(pass) * 7
+            for step in 0...100 {
+                let x = f.minX + 80 + CGFloat(pass % 2 == 0 ? step : 100 - step) * 3
+                scribble.append(point(CGPoint(x: x, y: y + sin(CGFloat(step) / 6) * 2), scribble.count))
+            }
+        }
+        let oneStroke = [PKStroke(ink: ink, path: PKStrokePath(controlPoints: scribble, creationDate: Date()))]
+        // 40 筆疊在一起
+        let manyStrokes = (0..<40).map { row -> PKStroke in
+            let y = f.minY + 80 + CGFloat(row) * 4
+            let pts = (0...100).map { point(CGPoint(x: f.minX + 80 + CGFloat($0) * 3, y: y + sin(CGFloat($0) / 6) * 2), $0) }
+            return PKStroke(ink: ink, path: PKStrokePath(controlPoints: pts, creationDate: Date().addingTimeInterval(Double(row))))
+        }
+        editor.setTool(.eraser)
+        var results: [String] = []
+        for (name, strokes) in [("one", oneStroke), ("many", manyStrokes)] {
+            editor.setDrawing(PKDrawing(strokes: strokes))
+            // 橡皮擦在色塊上來回刷：一下往下一下往上，慢慢往右
+            let path = (0..<120).map { k -> CGPoint in
+                let phase = k % 20
+                let down = phase < 10 ? CGFloat(phase) : CGFloat(20 - phase)
+                return CGPoint(x: f.minX + 100 + CGFloat(k) * 2, y: f.minY + 70 + down * 19)
+            }
+            let start = CACurrentMediaTime()
+            var worst: CFTimeInterval = 0
+            editor.eraserBegan(at: path[0])
+            for p in path.dropFirst() {
+                let t = CACurrentMediaTime()
+                editor.eraserMoved([p])
+                worst = max(worst, CACurrentMediaTime() - t)
+            }
+            editor.eraserEnded()
+            let total = CACurrentMediaTime() - start
+            let line = String(format: "BLOCKPERF %@ total=%.0fms worst=%.0fms strokes=%d", name, total * 1000, worst * 1000,
+                              editor.canvas.drawing.strokes.count)
+            print(line)
+            results.append(line)
+            XCTAssertTrue(editor.canvas.drawing.strokes.contains { $0.mask != nil }, "\(name) 測試的前提：擦到了")
+            XCTAssertLessThan(worst, 0.05, "\(name) 每移動一下不超過 50ms：\(line)")
+            XCTAssertLessThan(total, 3, "\(name) 整個擦完不超過 3 秒：\(line)")
+        }
+    }
+
     /// 回報的問題（11/21）：擦大量螢光筆時很卡（每移動一下主執行緒卡 200～400ms）
     func testErasingManyHighlightersStaysFast() throws {
         let meta = LibraryStore.shared.createNotebook(title: "HighlighterErasePerf", folder: nil, paper: .blank, landscape: false)
