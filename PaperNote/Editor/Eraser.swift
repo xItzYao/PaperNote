@@ -147,7 +147,7 @@ enum StrokeEraser {
             changed = true
             let sp = s.path, params = sm.params, pts = sm.points
             let end = CGFloat(sp.count - 1)
-            let gone = (0..<sm.count).map { hit[$0] || !(mask.map { inside($0, sm.locations[$0]) } ?? true) }
+            let gone = (0..<sm.count).map { i in hit[i] || !(mask.map { inside($0, sm.locations[i]) } ?? true) }
             guard gone.contains(false) else { continue }
             // 局部擦除：連續沒碰到的一段各自變成一筆（同一條筆跡的亂數種子，鉛筆、蠟筆的紋路不會變）。
             // 一段用的是原本的控制點，只有切開的兩端補上切點：不能拿曲線上取的點當控制點，
