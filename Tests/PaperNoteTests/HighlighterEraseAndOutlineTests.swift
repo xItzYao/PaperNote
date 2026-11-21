@@ -324,6 +324,48 @@ final class HighlighterEraseTests: XCTestCase {
         XCTAssertEqual(editor.canvas.drawing.strokes.filter { LassoGeometry.circles($0, path: lasso, area: lasso.bounds) }.count, 34)
     }
 
+    /// 回報的問題（11/21）：螢光筆沿著彎的地方擦一段，彎的外側留下一根一根的殘留（梳子的齒），整筆擦完才不見。
+    /// 每移動一下挖掉一段兩端切齊的帶子，彎的地方相鄰兩段的切口往外張開，中間的楔形沒挖到
+    func testErasingAlongACurveLeavesNothingOnTheOutsideOfTheBend() throws {
+        // 半圈的螢光筆：圓心 (100, 100)、半徑 30，從左邊繞過上面到右邊
+        let pts = (0...60).map { i -> PKStrokePoint in
+            let a = CGFloat.pi * (1 + CGFloat(i) / 60)
+            return PKStrokePoint(location: CGPoint(x: 100 + 30 * cos(a), y: 100 + 30 * sin(a)), timeOffset: Double(i) * 0.01,
+                                 size: CGSize(width: 12, height: 12), opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2)
+        }
+        var strokes = [PKStroke(ink: PKInk(.monoline, color: UIColor.systemYellow.withAlphaComponent(0.4)),
+                                path: PKStrokePath(controlPoints: pts, creationDate: Date()))]
+        // 橡皮擦沿著筆跡一點一點往前擦（和手拿著擦一樣，每移動一下擦一次），擦到四分之三
+        var last: CGPoint?
+        for i in 0...45 {
+            let a = CGFloat.pi * (1 + CGFloat(i) / 60)
+            let p = CGPoint(x: 100 + 30 * cos(a), y: 100 + 30 * sin(a))
+            if let r = StrokeEraser.erase(strokes, along: [last ?? p, p], radius: 3, partial: true) { strokes = r }
+            last = p
+        }
+        XCTAssertEqual(strokes.count, 1, "測試的前提：還留著最後一段")
+        let s = strokes[0]
+        let shown = s.path.interpolatedPoints(by: .distance(1)).filter { StrokeEraser.isShown(s, $0.location) }.map(\.location)
+        XCTAssertFalse(shown.isEmpty)
+        XCTAssertFalse(shown.contains { $0.x < 120 }, "測試的前提：擦掉的那段沒留下中心")
+        // 畫出來的每個點都要在留下的那段的線寬裡面：其他地方（擦掉的那段、它彎的外側）什麼都沒有
+        let half = StrokeEraser.drawnHalfWidth(s.ink, CGSize(width: 12, height: 12))
+        let img = try XCTUnwrap(PKDrawing(strokes: strokes).image(from: CGRect(x: 0, y: 0, width: 200, height: 200), scale: 1).cgImage)
+        let w = img.width, h = img.height
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        let ctx = try XCTUnwrap(CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                          space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+        var stray: [CGPoint] = []
+        for y in 0..<h {
+            for x in 0..<w where px[(y * w + x) * 4 + 3] > 12 {
+                let p = CGPoint(x: (CGFloat(x) + 0.5) * 200 / CGFloat(w), y: (CGFloat(y) + 0.5) * 200 / CGFloat(h))
+                if !shown.contains(where: { hypot($0.x - p.x, $0.y - p.y) <= half + 1.5 }) { stray.append(p) }
+            }
+        }
+        XCTAssertTrue(stray.isEmpty, "擦掉的地方留下 \(stray.count) 個點，例如 \(stray.prefix(5).map { "(\(Int($0.x)),\(Int($0.y)))" })")
+    }
+
     /// 回報的問題（11/20）：PencilKit 的筆、螢光筆用局部擦除，彎的地方會慢慢變平滑、越擦越直，不只擦到的地方
     func testPartialErasingDoesNotStraightenTheRestOfTheStroke() throws {
         // 彎來彎去的一筆：控制點在 y = 100、110 之間來回
