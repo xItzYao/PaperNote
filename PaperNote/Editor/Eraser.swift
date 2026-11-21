@@ -107,7 +107,9 @@ enum StrokeEraser {
     /// 遮罩每次只減掉這次碰到的地方，不重算整筆。全部擦掉了回傳 nil
     static func maskedOut(_ s: PKStroke, samples: [PKStrokePoint], hit: [Bool]) -> PKStroke? {
         guard let first = s.path.first else { return nil }
-        let widest = s.path.reduce(CGFloat(0)) { max($0, drawnHalfWidth(s.ink, $1.size)) } + 0.5
+        // 線寬外面再多 1pt：邊緣反鋸齒的那一圈也要挖掉
+        let edge: CGFloat = 1
+        let widest = s.path.reduce(CGFloat(0)) { max($0, drawnHalfWidth(s.ink, $1.size)) } + edge
         var mask: CGPath
         if let m = s.mask {
             mask = m.cgPath
@@ -137,7 +139,7 @@ enum StrokeEraser {
             p.addLines(between: pts)
             return p.copy(strokingWithWidth: 2 * r, lineCap: cap, lineJoin: .round, miterLimit: 1)
         }
-        func radius(_ idx: [Int]) -> CGFloat { idx.reduce(CGFloat(0)) { max($0, drawnHalfWidth(s.ink, samples[$1].size)) } + 0.5 }
+        func radius(_ idx: [Int]) -> CGFloat { idx.reduce(CGFloat(0)) { max($0, drawnHalfWidth(s.ink, samples[$1].size)) } + edge }
         var j = 0
         while j < n {
             guard hit[j] else { j += 1; continue }
