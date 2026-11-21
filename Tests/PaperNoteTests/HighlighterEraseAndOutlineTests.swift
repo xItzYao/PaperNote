@@ -365,9 +365,9 @@ final class HighlighterEraseTests: XCTestCase {
                 let total = CACurrentMediaTime() - start
                 // 橡皮擦每走 100pt
                 let per = 100 / length, c = StrokeEraser.counts
-                let line = String(format: "BLOCKPERF %@ %@ moves=%d per100pt: ms=%.1f booleans=%.0f outlines=%.0f inside=%.0f samples=%.0f worst=%.0fms",
-                                  name, speed, path.count - 1, total * 1000 * per, Double(c.booleans) * per, Double(c.outlines) * per,
-                                  Double(c.inside) * per, Double(c.samples) * per, worst * 1000)
+                let line = String(format: "BLOCKPERF %@ %@ moves=%d per100pt: ms=%.1f eraser=%.1fms booleans=%.0f outlines=%.0f inside=%.0f derived=%.0f samples=%.0f worst=%.0fms",
+                                  name, speed, path.count - 1, total * 1000 * per, c.seconds * 1000 * Double(per), Double(c.booleans) * per,
+                                  Double(c.outlines) * per, Double(c.inside) * per, Double(c.derived) * per, Double(c.samples) * per, worst * 1000)
                 print(line)
                 XCTAssertTrue(editor.canvas.drawing.strokes.contains { $0.mask != nil }, "\(name) \(speed) 測試的前提：擦到了")
                 XCTAssertLessThan(worst, 0.05, "每移動一下不超過 50ms：\(line)")
