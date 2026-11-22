@@ -370,13 +370,24 @@ final class HighlighterEraseTests: XCTestCase {
                 StrokeEraser.counts = .init()
                 let start = CACurrentMediaTime()
                 var worst: CFTimeInterval = 0
+                var worstParts = ""
                 editor.eraserBegan(at: path[0])
-                for p in path.dropFirst() {
+                for (k, p) in path.dropFirst().enumerated() {
                     let t = CACurrentMediaTime()
+                    let c0 = StrokeEraser.counts
                     editor.eraserMoved([p])
-                    worst = max(worst, CACurrentMediaTime() - t)
+                    let took = CACurrentMediaTime() - t
+                    if took > worst {
+                        worst = took
+                        let c1 = StrokeEraser.counts
+                        worstParts = String(format: "move=%d eraser=%.1fms sampling=%.1fms makeStroke=%.1fms assemble=%.1fms outlines=%d elements=%d",
+                                            k + 1, (c1.seconds - c0.seconds) * 1000, (c1.sampling - c0.sampling) * 1000,
+                                            (c1.makeStroke - c0.makeStroke) * 1000, (c1.assemble - c0.assemble) * 1000,
+                                            c1.outlines - c0.outlines, c1.elements - c0.elements)
+                    }
                 }
                 editor.eraserEnded()
+                print("BLOCKWORST \(name) \(speed) \(Int(worst * 1000))ms \(worstParts)")
                 let total = CACurrentMediaTime() - start
                 // 橡皮擦每走 100pt
                 let per = 100 / length, c = StrokeEraser.counts

@@ -30,6 +30,8 @@ enum StrokeEraser {
         var readMask: Double = 0, compare: Double = 0, assemble: Double = 0, makeStroke: Double = 0, readBack: Double = 0
         /// 新遮罩的元素（線段、曲線）總數
         var elements = 0
+        /// 第一次碰到一筆時沿著它取樣的時間
+        var sampling: Double = 0
     }
 
     /// 量一段花多久，加到 counts 的某一欄
@@ -59,6 +61,8 @@ enum StrokeEraser {
         let chunks: [(range: Range<Int>, box: CGRect)]
 
         init(_ s: PKStroke) {
+            let started = CACurrentMediaTime()
+            defer { StrokeEraser.counts.sampling += CACurrentMediaTime() - started }
             let sp = s.path
             let end = CGFloat(max(sp.count - 1, 0))
             var params: [CGFloat] = [0]
