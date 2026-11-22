@@ -2,7 +2,7 @@ import SwiftUI
 
 /// 關於我
 struct AboutView: View {
-    static let blurb = L("大學生的一個用愛發電小project，希望大家用的開心！\n想支持的話也可以贊助這個app的運作:P")
+    static let blurb = L("大學生的一個用愛發電小project，希望大家用的開心！")
     /// App Store 審查指南 5.1.1(i)：App 裡也要有隱私權政策的連結（和 App Store Connect 填的是同一個網址）
     static let privacyPolicyURL = URL(string: "https://papernote.yaoyaoyao.in/privacy/")!
     @Environment(\.dismiss) private var dismiss
