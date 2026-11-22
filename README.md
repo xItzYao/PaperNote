@@ -1,6 +1,6 @@
 # PaperNote
 
-[![Buy Me a Coffee]([https://img.shields.io/badge/Buy%20Me%20a%20Coffee-支持這個%20App-FFDD00?logo=buymeacoffee&logoColor=black](https://shields.io/badge/ko--fi-%E6%94%AF%E6%8C%81%E9%80%99%E5%80%8BApp-ff5f5f?logo=ko-fi&style=for-the-badgeKo-fi))]([https://buymeacoffee.com/happytw](https://ko-fi.com/xitzyao))
+[![ko-fi](https://img.shields.io/badge/ko--fi-%E6%94%AF%E6%8C%81%E9%80%99%E5%80%8BApp-ff5f5f?logo=ko-fi&logoColor=white&style=for-the-badge)](https://ko-fi.com/xitzyao)
 
 一款給 iPad 用的手寫筆記 App，靈感來自 GoodNotes，補上了我自己做筆記時最需要、但 GoodNotes 不夠好用的功能。
 
