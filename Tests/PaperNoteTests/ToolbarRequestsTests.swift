@@ -186,16 +186,32 @@ final class ToolbarRequestsTests: XCTestCase {
 
     // MARK: 螢光筆不蓋住筆跡
 
+    /// 排在自製筆跡上面的 view。系統的捲動條不算：一捲動就被排到最後面（zPosition 1000，本來就畫在最上面），不是內容
+    private var viewsOverInk: [String] {
+        let all = editor.canvas.subviews
+        guard let i = all.firstIndex(of: editor.inkContainer) else { return ["找不到筆跡那一層"] }
+        return all[(i + 1)...].map { "\(type(of: $0))" }.filter { $0 != "_UIScrollViewScrollIndicator" }
+    }
+
     func testCustomInkIsAbovePencilKit() throws {
         editor.view.layoutIfNeeded()
         let v = try XCTUnwrap(editor.pageViews.values.first)
         XCTAssertTrue(v.inkView.superview === editor.inkContainer, "自製筆刷的筆跡放在 PencilKit 上面那一層")
-        XCTAssertTrue(editor.canvas.subviews.last === editor.inkContainer, "那一層在畫布最上面")
+        XCTAssertEqual(viewsOverInk, [], "那一層在畫布內容的最上面")
         XCTAssertEqual(v.inkView.frame, v.frame, "和頁面對齊")
         XCTAssertEqual(editor.inkContainer.frame, editor.pagesContainer.frame, "跟著縮放、捲動")
         editor.canvas.zoomScale = 1.5
         editor.updateZoomLayout()
         XCTAssertEqual(editor.inkContainer.frame, editor.pagesContainer.frame, "放大後也對齊")
+        XCTAssertEqual(viewsOverInk, [], "放大後也在最上面")
+        editor.canvas.setContentOffset(CGPoint(x: 20, y: 300), animated: false)
+        XCTAssertEqual(viewsOverInk, [], "捲動後也在最上面")
+        let late = UIView()
+        editor.canvas.addSubview(late)
+        defer { late.removeFromSuperview() }
+        XCTAssertEqual(viewsOverInk, ["UIView"], "別的 view 蓋上去要看得出來")
+        editor.updateZoomLayout()
+        XCTAssertEqual(viewsOverInk, [], "之後才加的 view 也要排到筆跡底下")
     }
 
     private func pixel(_ img: UIImage, _ p: CGPoint) throws -> [UInt8] {
