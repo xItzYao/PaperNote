@@ -9,6 +9,8 @@ enum StrokeEraser {
     private static let maxReach: CGFloat = 60
     /// 線寬外面再多 1pt：邊緣反鋸齒的那一圈也要挖掉
     private static let edge: CGFloat = 1
+    /// 每幾個取樣點一塊（2pt 一個點：一塊 64pt）
+    static let chunkSize = 32
 
     /// 擦的時候做了多少事（測試用來比較橡皮擦每走一段路要算多少次）
     struct Counts {
@@ -62,7 +64,7 @@ enum StrokeEraser {
             var chunks: [(range: Range<Int>, box: CGRect)] = []
             var i = 0
             while i < locations.count {
-                let r = i..<min(i + 32, locations.count)
+                let r = i..<min(i + StrokeEraser.chunkSize, locations.count)
                 var box = CGRect.null
                 for j in r { box = box.union(CGRect(origin: locations[j], size: .zero).insetBy(dx: -half[j], dy: -half[j])) }
                 chunks.append((r, box))
@@ -111,20 +113,37 @@ enum StrokeEraser {
         var mask: CGPath?
         /// -1 還不知道、0 擦掉了、1 還在
         var state: [Int8]
+        /// 每個點擦掉了沒都知道（沒有遮罩，或遮罩只是筆跡超出頁面時加的方框）：遮罩直接用留下的點一塊一塊拼出來。
+        /// 不知道的（重新打開、復原之後，遮罩是之前擦出來的）就從原本的遮罩挖
+        let known: Bool
+        /// 筆跡超出頁面時的方框：每一塊只留框裡的
+        let clip: CGRect?
+        /// 每一塊（Samples.chunks）留下的點畫成的形狀，nil 是還沒畫或要重畫
+        var outlines: [CGPath?]
         private let sm: Samples
-        /// 遮罩只是一個方框（筆跡超出頁面時加的）：還沒擦過，圓心在框裡的都還在
+        /// 遮罩只是一個方框
         private let plainBox: Bool
 
         init(_ sm: Samples, mask: CGPath?) {
             self.sm = sm
             self.mask = mask
-            state = [Int8](repeating: mask == nil ? 1 : -1, count: sm.count)
             var curves = false, elements = 0
             mask?.applyWithBlock { e in
                 elements += 1
                 if e.pointee.type == .addCurveToPoint || e.pointee.type == .addQuadCurveToPoint { curves = true }
             }
             plainBox = mask != nil && !curves && elements <= 6
+            outlines = [CGPath?](repeating: nil, count: sm.chunks.count)
+            if let mask, plainBox {
+                let box = mask.boundingBoxOfPath
+                clip = box
+                state = sm.locations.map { box.contains($0) ? 1 : 0 }
+                known = true
+            } else {
+                clip = nil
+                state = [Int8](repeating: mask == nil ? 1 : -1, count: sm.count)
+                known = mask == nil
+            }
         }
 
         func isAlive(_ i: Int) -> Bool {
@@ -292,6 +311,36 @@ enum StrokeEraser {
             return lines.copy(strokingWithWidth: 2 * r, lineCap: .round, lineJoin: .round, miterLimit: 1)
         }
         let hitIdx = (0..<n).filter { hit[$0] }
+        if st.known {
+            // 知道每個點擦掉了沒：碰到的記成擦掉，只重畫碰到的那幾塊，遮罩是每一塊拼起來（不做布林運算，遮罩再複雜也一樣快）
+            for i in hitIdx { st.state[i] = 0 }
+            guard st.state.contains(1) else { return nil }
+            for i in hitIdx {
+                let c = i / chunkSize
+                st.outlines[c] = nil
+                // 每一塊的形狀多連到隔壁塊的第一個點（才接得起來）：碰到邊上的點，隔壁那塊也重畫
+                if i % chunkSize == 0, c > 0 { st.outlines[c - 1] = nil }
+                if i % chunkSize == chunkSize - 1, c + 1 < st.outlines.count { st.outlines[c + 1] = nil }
+            }
+            let whole = CGMutablePath()
+            for (c, chunk) in sm.chunks.enumerated() {
+                if st.outlines[c] == nil {
+                    let kept = (max(0, chunk.range.lowerBound - 1)..<min(n, chunk.range.upperBound + 1)).filter { st.state[$0] == 1 }
+                    var o: CGPath = kept.isEmpty ? CGMutablePath() : bands(runs(kept))
+                    if let clip = st.clip, !kept.isEmpty, !clip.contains(chunk.box.insetBy(dx: -r, dy: -r)) {
+                        o = o.intersection(CGPath(rect: clip, transform: nil))
+                        counts.booleans += 1
+                    }
+                    st.outlines[c] = o
+                }
+                if let o = st.outlines[c] { whole.addPath(o) }
+            }
+            let m = PKStroke(ink: s.ink, path: s.path, transform: s.transform, mask: UIBezierPath(cgPath: whole), randomSeed: s.randomSeed)
+            // 記下 PencilKit 存起來的遮罩（它會換成自己的寫法）：下一下讀到的是這個，才對得上
+            st.mask = m.mask?.cgPath
+            return m
+        }
+        // 不知道每個點擦掉了沒（之前擦過、重新打開或復原）：從原本的遮罩挖掉碰到的圓，旁邊還在的圓不挖
         let hitLoc = hitIdx.map { loc[$0] }
         // 旁邊還在的點（圓可能和碰到的圓重疊）：它們的圓不挖
         let around = hitLoc.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) }.insetBy(dx: -3 * r - 2, dy: -3 * r - 2)

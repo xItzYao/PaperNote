@@ -90,6 +90,21 @@ final class HighlighterEraseTests: XCTestCase {
     }
 
     /// 回報的需求（更正）：刪除圓心後連同整個圓都刪掉，螢光筆比橡皮擦粗，也只要擦一條線就擦斷
+    /// 遮罩是一塊一塊（每塊 64pt）拼起來的：接縫的地方不能有洞、也不能疊成兩層，留下的部分和沒擦過的一樣
+    func testTheKeptPartLooksTheSameAcrossTheMaskPieces() throws {
+        let before = [highlighter()]
+        let result = try XCTUnwrap(StrokeEraser.erase(before, along: [CGPoint(x: 199, y: 100)], radius: 2, partial: true))
+        XCTAssertLessThan(inkAlpha(result, at: CGPoint(x: 199, y: 100)), 0.02, "尾巴擦掉了")
+        var wrong: [String] = []
+        for x in Swift.stride(from: CGFloat(2), through: 170, by: 2) {
+            for y: CGFloat in [100, 94, 90] {
+                let a = inkAlpha(before, at: CGPoint(x: x, y: y)), b = inkAlpha(result, at: CGPoint(x: x, y: y))
+                if abs(a - b) > 0.02 { wrong.append("(\(Int(x)),\(Int(y))) \(a)→\(b)") }
+            }
+        }
+        XCTAssertTrue(wrong.isEmpty, "留下的部分和沒擦過的不一樣：\(wrong.prefix(8))")
+    }
+
     func testAThinEraserLineAcrossAThickHighlighterRemovesItsWholeWidthThere() throws {
         // 螢光筆寬 20，橡皮擦半徑 2（細很多），從上面劃到下面一條線
         let line = [CGPoint(x: 100, y: 80), CGPoint(x: 100, y: 120)]
