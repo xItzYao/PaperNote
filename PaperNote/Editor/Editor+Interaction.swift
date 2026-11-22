@@ -225,6 +225,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        if g === tapGesture { tapOnlyClears = false }
         // 手掌的觸碰不觸發點選、長按、拖曳物件
         if g !== palmBlocker, touch.type == .direct, isPalmTouch(touch) { return false }
         // 編輯文字時，點文字框內部交給 UITextView
@@ -252,6 +253,12 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         // 擴展頁面：選著的那一頁的控制點手指也能拉（按在控制點上不是捲動）；點一下換要擴展的頁面（頁面不是物件）
         if tool == .pageResize, touch.type == .direct, !settings.fingerDrawing, g === toolPan || g === tapGesture {
             return g === tapGesture || pageHandle(at: touch.location(in: pagesContainer)) != nil
+        }
+        // 手指（沒開「用手指書寫」）點空白處：取消選取。筆尖剛離開時碰到的是寫字的手、捲動中的是要停下來，都不算
+        if g === tapGesture, touch.type == .direct, !settings.fingerDrawing,
+           fingerTapClears(at: touch.location(in: pagesContainer)) {
+            tapOnlyClears = CACurrentMediaTime() - lastPencilTime >= 0.5 && !canvas.isDecelerating
+            return tapOnlyClears
         }
         // 手指（沒開「用手指書寫」）：只能拖動、點已經選起來的東西（和旁邊的控制點、按鈕），不能選新的；
         // 其他地方交給捲動、縮放頁面
@@ -298,6 +305,47 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         guard e.isCircuit else { return nil }
         if tool == .circuit, settings.fingerDrawing || hit == circuitTarget { return nil }
         return hit
+    }
+
+    /// 有東西選著，p 是旁邊什麼都沒有的地方（手指點一下就取消選取）
+    private func fingerTapClears(at p: CGPoint) -> Bool {
+        switch tool {
+        case .select, .lasso, .image, .sticker:
+            return (selected != nil || lassoSel != nil) && isBlank(at: p)
+        case .circuit:
+            guard lockIconHit(at: p) == nil, !circuitSelectionHit(at: p), circuitHit(at: p) == nil else { return false }
+            // 沒選著元件：點在電路圖外面才算，裡面是在編輯它
+            return circuitSel != nil || (circuitTarget != nil && hitElement(at: p) == nil)
+        default:
+            return false
+        }
+    }
+
+    /// 沒有物件，也不是選起來的東西的控制點、按鈕（筆跡不算：手指本來就不能選）
+    private func isBlank(at p: CGPoint) -> Bool {
+        guard hitElement(at: p) == nil, lockIconHit(at: p) == nil, lassoGrab(at: p) == nil, dragTarget(at: p) == nil else { return false }
+        let z = canvas.zoomScale
+        if let t = imageDeleteTarget(), t.point.distance(to: p) < 20 / z { return false }
+        guard let h = selectedTableHandles()?.handles else { return true }
+        return !(h.plusCols + h.plusRows).contains { $0.point.distance(to: p) < 18 / z }
+    }
+
+    private func clearSelectionByTap(at p: CGPoint) {
+        endTextEditing()
+        if tool == .circuit {
+            // 外框跟著收掉；點在電路圖裡面的空白只取消元件
+            circuitSel = nil
+            if let ref = circuitTarget, let info = circuitInfo(ref),
+               !docFrame(of: info.element, pageIndex: info.pi).contains(p) {
+                circuitTarget = nil
+            }
+            rebuildSubBar()
+            updateCircuitChrome()
+        } else {
+            clearLassoSelection()
+            select(nil)
+        }
+        DebugLog.add("tap clears selection")
     }
 
     /// 手指按的地方是不是已經選起來的東西：選起來的物件（含表格的標頭、＋、控制點）、套索圈起來的範圍和縮放把手、
@@ -415,8 +463,16 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
 
     @objc func handleTap(_ g: UITapGestureRecognizer) {
         let p = g.location(in: pagesContainer)
+        if tapOnlyClears {
+            tapOnlyClears = false
+            clearSelectionByTap(at: p)
+            return
+        }
         if editingTextView != nil {
+            // 點在空白處：一下就結束打字並取消選取（要先看，結束打字會拿掉空的文字框）
+            let clears = tool == .select && isBlank(at: p)
             endTextEditing()
+            if clears { clearSelectionByTap(at: p) }
             return
         }
         switch tool {

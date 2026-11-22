@@ -232,6 +232,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     /// 手指點兩下的第一下按下之前，最上面那一步的編號（0＝還沒有任何一步）。
     /// 開了「用手指書寫」時這兩下也會寫出墨點、放下元件：進入編輯時回到這一步
     var stepBeforeEditTap: Int?
+    /// 這一下是手指點空白處：只取消選取，不選、不放、不貼別的東西（收到觸碰時決定）
+    var tapOnlyClears = false
     var longPressGesture: UILongPressGestureRecognizer!
     var textLongPress: UILongPressGestureRecognizer!
     /// 拖曳文字選取兩端的控制點（手指或 Pencil）
@@ -534,6 +536,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             didInitialLayout = true
             lastLayoutWidth = w
             updateZoomLimits(resetZoom: true)
+            // 設定縮放時系統保持的是畫面中心（這時還沒有在看哪裡）：一開始看的地方要自己指定，從最上面開始
+            setVisibleDocOrigin(.zero)
             configurePencilKitGestures()
             pinOverlay.reload()
             if let pid = initialPageID, let i = pageIndex(of: pid) {
