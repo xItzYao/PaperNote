@@ -16,34 +16,34 @@ struct BackupView: View {
             Form {
                 Section {
                     if signedIn {
-                        Label("已連結 Google Drive", systemImage: "checkmark.circle.fill")
+                        Label(L("已連結 Google Drive"), systemImage: "checkmark.circle.fill")
                             .foregroundStyle(.green)
                         Button {
                             backup.backupNow()
                         } label: {
-                            Label("立即備份", systemImage: "icloud.and.arrow.up")
+                            Label(L("立即備份"), systemImage: "icloud.and.arrow.up")
                         }
                         .disabled(backup.isRunning)
                         Button {
                             confirmRestore = true
                         } label: {
-                            Label("從 Google Drive 還原…", systemImage: "icloud.and.arrow.down")
+                            Label(L("從 Google Drive 還原…"), systemImage: "icloud.and.arrow.down")
                         }
                         .disabled(backup.isRunning)
                         Button(role: .destructive) {
                             confirmSignOut = true
                         } label: {
-                            Label("中斷連結", systemImage: "link.badge.plus")
+                            Label(L("中斷連結"), systemImage: "link.badge.plus")
                         }
                     } else {
                         Button {
                             connect()
                         } label: {
-                            Label("連結 Google Drive", systemImage: "link")
+                            Label(L("連結 Google Drive"), systemImage: "link")
                         }
                         .disabled(!GoogleAuth.shared.hasClientID)
                         if !GoogleAuth.shared.hasClientID {
-                            Text("請先在下方貼上 OAuth 用戶端 ID。").font(.footnote).foregroundStyle(.secondary)
+                            Text(L("請先在下方貼上 OAuth 用戶端 ID。")).font(.footnote).foregroundStyle(.secondary)
                         }
                     }
                 } header: {
@@ -51,13 +51,13 @@ struct BackupView: View {
                 }
 
                 Section {
-                    Toggle("自動備份", isOn: $autoBackup)
+                    Toggle(L("自動備份"), isOn: $autoBackup)
                         .onChange(of: autoBackup) { _, v in backup.autoBackup = v }
                 } footer: {
-                    Text("每 10 分鐘，以及關閉筆記本後，自動備份到 Google Drive 的「\(BackupManager.rootFolderName)」資料夾。備份的是原始檔，筆跡、PDF、表格、螢光標示還原後都能繼續編輯；只會上傳有變動的檔案。在 App 裡永久刪除的筆記本，雲端的備份會移到 Google Drive 的垃圾桶。")
+                    Text(L("每 10 分鐘，以及關閉筆記本後，自動備份到 Google Drive 的「\(BackupManager.rootFolderName)」資料夾。備份的是原始檔，筆跡、PDF、表格、螢光標示還原後都能繼續編輯；只會上傳有變動的檔案。在 App 裡永久刪除的筆記本，雲端的備份會移到 Google Drive 的垃圾桶。"))
                 }
 
-                Section("狀態") {
+                Section(L("狀態")) {
                     if backup.isRunning {
                         HStack(spacing: 10) {
                             ProgressView()
@@ -66,7 +66,7 @@ struct BackupView: View {
                     } else if !backup.status.isEmpty {
                         Text(backup.status).foregroundStyle(.secondary)
                     }
-                    LabeledContent("上次備份", value: backup.lastBackup?.formatted(date: .abbreviated, time: .shortened) ?? "尚未備份")
+                    LabeledContent(L("上次備份"), value: backup.lastBackup?.formatted(date: .abbreviated, time: .shortened) ?? L("尚未備份"))
                     if let e = backup.lastError {
                         Text(e).font(.footnote).foregroundStyle(.red)
                     }
@@ -82,35 +82,35 @@ struct BackupView: View {
                                 UserDefaults.standard.set(v.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "google.clientID")
                             }
                     } header: {
-                        Text("OAuth 用戶端 ID")
+                        Text(L("OAuth 用戶端 ID"))
                     } footer: {
-                        Text("在 Google Cloud 建立「iOS」類型的 OAuth 用戶端後，把用戶端 ID 貼在這裡。")
+                        Text(L("在 Google Cloud 建立「iOS」類型的 OAuth 用戶端後，把用戶端 ID 貼在這裡。"))
                     }
                 }
             }
-            .navigationTitle("雲端備份")
+            .navigationTitle(L("雲端備份"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button(L("完成")) { dismiss() } }
             }
-            .confirmationDialog("從 Google Drive 還原？", isPresented: $confirmRestore, titleVisibility: .visible) {
-                Button("還原") { restore() }
-                Button("取消", role: .cancel) {}
+            .confirmationDialog(L("從 Google Drive 還原？"), isPresented: $confirmRestore, titleVisibility: .visible) {
+                Button(L("還原")) { restore() }
+                Button(L("取消"), role: .cancel) {}
             } message: {
-                Text("只會加入本機沒有的筆記本，不會覆蓋或刪除本機現有的筆記本。垃圾桶裡的項目還原後還在垃圾桶，永久刪除的不會還原。")
+                Text(L("只會加入本機沒有的筆記本，不會覆蓋或刪除本機現有的筆記本。垃圾桶裡的項目還原後還在垃圾桶，永久刪除的不會還原。"))
             }
-            .confirmationDialog("中斷與 Google Drive 的連結？", isPresented: $confirmSignOut, titleVisibility: .visible) {
-                Button("中斷連結", role: .destructive) {
+            .confirmationDialog(L("中斷與 Google Drive 的連結？"), isPresented: $confirmSignOut, titleVisibility: .visible) {
+                Button(L("中斷連結"), role: .destructive) {
                     GoogleAuth.shared.signOut()
                     BackupManager.shared.resetRemoteState()
                     signedIn = false
                 }
-                Button("取消", role: .cancel) {}
+                Button(L("取消"), role: .cancel) {}
             } message: {
-                Text("雲端已經備份的檔案會保留。")
+                Text(L("雲端已經備份的檔案會保留。"))
             }
-            .alert("雲端備份", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
-                Button("好", role: .cancel) {}
+            .alert(L("雲端備份"), isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
+                Button(L("好"), role: .cancel) {}
             } message: {
                 Text(message ?? "")
             }
@@ -135,15 +135,15 @@ struct BackupView: View {
                 let r = try await backup.restore()
                 await MainActor.run {
                     if r.notebooks == 0 {
-                        message = "本機已經有全部的筆記本。"
+                        message = L("本機已經有全部的筆記本。")
                     } else if r.trashed == 0 {
-                        message = "已還原 \(r.notebooks) 本筆記本。"
+                        message = L("已還原 \(r.notebooks) 本筆記本。")
                     } else {
-                        message = "已還原 \(r.notebooks) 本筆記本，其中 \(r.trashed) 本在垃圾桶裡。"
+                        message = L("已還原 \(r.notebooks) 本筆記本，其中 \(r.trashed) 本在垃圾桶裡。")
                     }
                 }
             } catch {
-                await MainActor.run { message = "還原失敗：\(error.localizedDescription)" }
+                await MainActor.run { message = L("還原失敗：\(error.localizedDescription)") }
             }
         }
     }

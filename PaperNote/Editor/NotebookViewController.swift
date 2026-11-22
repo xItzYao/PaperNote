@@ -4,7 +4,7 @@ import PDFKit
 import SwiftUI
 
 enum EditorTool: Equatable {
-    case pen, highlighter, eraser, lasso, capture, select, image, textSelect, pageResize, tableDraw, circuit
+    case pen, highlighter, eraser, lasso, capture, select, image, sticker, textSelect, pageResize, tableDraw, circuit
 
     /// 筆或螢光筆
     var isInking: Bool { self == .pen || self == .highlighter }
@@ -32,8 +32,15 @@ struct ElementRef: Hashable {
     var elementID: UUID
 }
 
+/// 選取框四邊中間的把手
+enum BoxEdge: CaseIterable {
+    case top, bottom, left, right
+}
+
 enum DragKind {
     case move, resize, colLine(Int), rowLine(Int), cells
+    /// 文字框四邊中間的把手：只拉這一邊
+    case edge(BoxEdge)
     /// 拖曳選取範圍右下角的填滿控制點：重複這一組
     case fill
     /// 拖曳表格上方的欄標頭／左邊的列標頭：選好幾欄（列），參數是一開始按的那一欄（列）
@@ -99,7 +106,7 @@ final class EditorSettings {
     }
     /// Apple Pencil 筆身點兩下時，在筆尖旁顯示調色盤小圖示
     var paletteOnDoubleTap: Bool {
-        get { bool("paletteOnDoubleTap", true) }
+        get { bool("paletteOnDoubleTap", false) }
         set { d.set(newValue, forKey: "paletteOnDoubleTap") }
     }
     /// 手掌防誤觸："right"（右手寫字）、"left"（左手寫字）、"off"
@@ -112,9 +119,45 @@ final class EditorSettings {
         set { d.set(newValue, forKey: "captureFreeform") }
     }
     /// 「筆」用自製筆刷（照原始取樣點畫，不圓滑；見 InkEngine.swift）。預設打開，可以在「⋯」改回 PencilKit
+    /// Pencil Pro 按壓："palette"＝叫出調色盤；其他是工具列的工具（squeezeKey）
+    var squeezeAction: String {
+        get { d.string(forKey: "squeezeAction") ?? "palette" }
+        set { d.set(newValue, forKey: "squeezeAction") }
+    }
+    static func squeezeKey(_ t: EditorTool) -> String { String(describing: t) }
+    /// 畫元件的橡皮擦：只擦掉碰到的那一段（關掉＝整條擦掉）
+    var symbolPartialErase: Bool {
+        get { bool("symbolPartialErase", false) }
+        set { d.set(newValue, forKey: "symbolPartialErase") }
+    }
     var customInk: Bool {
         get { bool("customInk", true) }
         set { d.set(newValue, forKey: "customInk") }
+    }
+    /// 電路圖放完元件留在放置模式；關掉的話放好就回到選取
+    var circuitContinuousPlace: Bool {
+        get { bool("circuitContinuousPlace", true) }
+        set { d.set(newValue, forKey: "circuitContinuousPlace") }
+    }
+    /// 電路圖用 Pencil 圈選的方式：default 順時針窗選、逆時針交集；reversed 反過來；window 只有窗選；crossing 只有交集
+    var circuitLassoMode: String {
+        get { d.string(forKey: "circuitLassoMode") ?? "default" }
+        set { d.set(newValue, forKey: "circuitLassoMode") }
+    }
+    /// 電路元件自動編號（R1、R2…，每一頁各自從 1 開始）；預設關
+    var circuitAutoNumber: Bool {
+        get { bool("circuitAutoNumber", false) }
+        set { d.set(newValue, forKey: "circuitAutoNumber") }
+    }
+    /// 電路圖的橡皮擦擦完一筆就切回原本的模式（選取、接線或放置元件）
+    var circuitEraserAutoReturn: Bool {
+        get { bool("circuitEraserAutoReturn", false) }
+        set { d.set(newValue, forKey: "circuitEraserAutoReturn") }
+    }
+    /// 電路元件庫放左邊；預設放下面
+    var circuitLibraryOnLeft: Bool {
+        get { bool("circuitLibraryOnLeft", false) }
+        set { d.set(newValue, forKey: "circuitLibraryOnLeft") }
     }
 }
 
@@ -138,19 +181,27 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     /// 這一次用 PencilKit 下筆（寫字、擦除）
     var strokeGesture: StrokeGesture?
     let pagesContainer = UIView()
+    /// 自製筆刷的筆跡：放在 PencilKit 筆跡（螢光筆）上面，螢光筆不會蓋住字。和 pagesContainer 一起縮放
+    let inkContainer = UIView()
     let overlay = OverlayView()
     let pinOverlay = PinOverlayView()
     let topBar = UIView()
     let subBar = UIView()
     let subBarStack = UIStackView()
     let pageLabel = UILabel()
+    /// 除錯紀錄：手指放開後的縮放（回彈）
+    lazy var zoomTrace = ZoomTrace(editor: self)
+    var zoomTraceAttached = false
     /// 點頁碼後出現的輸入框（輸入要跳到的頁碼）
     var pageJumpField: UITextField?
     var toolButtons: [EditorTool: UIButton] = [:]
     var presetButtons: [UUID: UIButton] = [:]
+    weak var presetStrip: UIScrollView?
     /// 筆工具列的「細、中、粗」三個粗細按鈕與虛線開關
     var penWidthButtons: [UIButton] = []
     weak var penDashButton: UIButton?
+    /// 工具列的小視窗開著時接下頁面上的觸碰
+    let popoverShield = PopoverShieldView()
     var favoriteButton: UIButton!
     var settingsButton: UIButton!
 
@@ -169,13 +220,20 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var tool: EditorTool = .pen
     /// 切到橡皮擦之前的工具（Pencil 點兩下、擦完自動切回時用）
     var toolBeforeEraser: EditorTool = .pen
+    /// Pencil Pro 按壓切到某個工具之前的工具（再按一次切回來）
+    var toolBeforeSqueeze: EditorTool = .pen
     /// 自動切到選 PDF 文字之前的工具（選字不在工具列上，用完切回去）
     var toolBeforeTemporary: EditorTool?
 
     // 手勢
     var toolPan: UIPanGestureRecognizer!
     var tapGesture: UITapGestureRecognizer!
-    var doubleTapGesture: UITapGestureRecognizer!
+    var doubleTapGesture: EditDoubleTapRecognizer!
+    /// 手指點兩下的第一下按下之前，最上面那一步的編號（0＝還沒有任何一步）。
+    /// 開了「用手指書寫」時這兩下也會寫出墨點、放下元件：進入編輯時回到這一步
+    var stepBeforeEditTap: Int?
+    /// 這一下是手指點空白處：只取消選取，不選、不放、不貼別的東西（收到觸碰時決定）
+    var tapOnlyClears = false
     var longPressGesture: UILongPressGestureRecognizer!
     var textLongPress: UILongPressGestureRecognizer!
     /// 拖曳文字選取兩端的控制點（手指或 Pencil）
@@ -193,21 +251,47 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var circuitDrag: CircuitDrag?
     var wireDraft: WireDraft?
     var circuitGateInputs: [CircuitPart: Int] = [:]
-    /// 電路元件庫（浮在頁面左邊，見 CircuitLibrary.swift）
+    /// 電路元件庫（浮在頁面下面或左邊，見 CircuitLibrary.swift）
     let circuitLibrary = CircuitLibraryView()
     /// 插入圖片工具：下方一排最近的照片
     let photoStrip = PhotoStripView()
+    /// 貼紙工具：畫面下面一排目前分類的貼紙
+    let stickerStrip = StickerStripView()
     /// 拉過最後一頁底部時出現的＋
     let addPagePull = AddPagePullView()
     /// UI 測試讀得到的除錯資訊（手指按下時卡住的手勢、畫布捲到哪裡）
     var uiTestDump: UILabel?
     var uiTestOffset: UILabel?
+    /// UI 測試：PencilKit 筆跡的數量、最近的除錯紀錄、最後一筆 PencilKit 筆跡的墨水
+    var uiTestStrokes: UILabel?
+    var uiTestLog: UILabel?
+    var uiTestInk: UILabel?
+    /// UI 測試：第一頁表格在視窗裡的位置
+    var uiTestTablePoint: UILabel?
     /// PencilKit 開始書寫的時間（收尾後清掉）；下筆時還沒清掉就代表上一筆卡住了
     var pkUsingSince: CFTimeInterval?
-    /// 筆身點兩下切到接線前的模式（再點兩下切回來）
-    var circuitModeBeforeWire: CircuitMode = .select
+    /// 切到橡皮擦前的模式（筆身再點兩下、或擦完自動切回時回到這裡）
+    var circuitModeBeforeErase: CircuitMode = .select
+    /// 橡皮擦這一筆擦到的元件和導線：筆尖離開才刪
+    var circuitErasing: [ElementRef: Set<UUID>] = [:]
+    /// 橡皮擦這一筆上一次的位置；nil＝沒有在擦
+    var circuitEraseLast: CGPoint?
     /// 每種元件上次的方向與翻轉，連續擺放時沿用
     var circuitPartStyle: [CircuitPart: (rotation: Int, flipH: Bool, flipV: Bool)] = [:]
+    /// 選取模式下 Pencil 從空白處畫的框選；nil＝沒有在框選
+    var circuitMarquee: [CGPoint]?
+    /// toolPan 這次的觸碰是用來畫的（Pencil，或開了「用手指書寫」的手指）
+    var toolPanByDrawingTouch = false
+
+    // 預覽模式：工具列收起來，只能看
+    var previewMode = false
+    var toolBeforePreview: EditorTool = .pen
+    /// 預覽時藏起來的工具列
+    var barChrome: [UIView] = []
+    var canvasBelowBars: NSLayoutConstraint!
+    var canvasFullHeight: NSLayoutConstraint!
+    /// 預覽模式下長按頁面：問要不要回到筆記模式（不放「結束預覽」按鈕，畫面乾淨）
+    let previewLongPress = UILongPressGestureRecognizer()
 
     // 自製筆刷（見 InkEngine.swift）
     let inkRecognizer = InkCaptureRecognizer(target: nil, action: nil)
@@ -223,7 +307,14 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     // 自訂套索
     var lassoPoints: [CGPoint] = []
     var lassoSel: LassoSelection?
+    /// 貼紙的相簿選擇器（選擇器只弱參照 delegate）
+    var stickerPicker: StickerPhotoPicker?
     var lassoMoveStart: CGPoint?
+    /// 拖的是右下角的縮放把手（不是移動）
+    var lassoScaling = false
+    /// 拖曳中預覽的自製筆刷筆跡（文件座標）、預覽圖是照多大的倍數畫的
+    var lassoMoveInk: [InkStroke] = []
+    var lassoPreviewScale: CGFloat = 1
     var lassoMoveOriginal: PKDrawing?
     var lassoMoveStrokes: [PKStroke] = []
     var lassoMoveElementFrames: [ElementRef: CGRect] = [:]
@@ -251,9 +342,21 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     /// 工具列的＋（插入表格的小視窗指著它）
     weak var insertButton: UIButton?
     weak var tableCellLabel: UILabel?
+    /// 表格工具列的顏色框：照現在選到的格子更新
+    var tableColorBoxes: [() -> Void] = []
 
     // 橡皮擦擦螢光標示
-    var eraserTracker: TouchTracker!
+    /// 橡皮擦：App 自己擦（見 Eraser.swift），PencilKit 的橡皮擦不用
+    let eraserCapture = InkCaptureRecognizer(target: nil, action: nil)
+    /// 橡皮擦上一個位置（文件座標）：和下一個點連起來，中間經過的都擦
+    var lastEraserPoint: CGPoint?
+    /// 這次擦除（筆碰到螢幕到離開）擦完的筆跡：下一下直接用，不從 PencilKit 讀回來（讀回來的遮罩是新的一份，對不上記著哪些點擦掉了）
+    var eraseWorking: [PKStroke]?
+    /// 橡皮擦走過、還沒擦的點（見 eraseEvery）
+    var eraserPending: [CGPoint] = []
+    var eraserErasedAt: CFTimeInterval = 0
+    /// 這一次擦除的上一步（第一次擦到東西時登記，之後併進去）
+    var eraseStep: Int?
     /// 套索改顏色時的自訂顏色選擇器
     var lassoColorPicker: ColorPickerRelay?
     /// 表格格子的拷貝（照相對位置）；剪貼簿換過內容就不算
@@ -284,6 +387,10 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     // 截圖
     var capturePoints: [CGPoint] = []
+    /// 截好的範圍（文件座標）：拉錨點調整大小、拖曳框內移動，放開再跳出選單
+    var captureRegion: UIBezierPath?
+    /// 正在拉的錨點（0…7，-1＝移動整個範圍）、開始的位置和範圍
+    var captureDrag: (handle: Int, start: CGPoint, path: UIBezierPath)?
 
     // 擴展頁面
     var resizePageIndex: Int?
@@ -333,6 +440,11 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         view.addSubview(pinOverlay)
 
         if ProcessInfo.processInfo.arguments.contains("-uiTestNotebook") {
+            // UI 測試讀的除錯紀錄定時更新（不是每個地方記完都會更新，例如手勢沒有走完）
+            Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] t in
+                guard let self else { return t.invalidate() }
+                self.updateUITestDump()
+            }
             let l = UILabel(frame: CGRect(x: 0, y: 0, width: 2, height: 2))
             l.accessibilityIdentifier = "gestureDump"
             l.accessibilityLabel = "-"
@@ -345,6 +457,19 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             o.isAccessibilityElement = true
             view.addSubview(o)
             uiTestOffset = o
+            for (i, id) in ["pkStrokes", "debugTail", "pkInk", "tablePoint"].enumerated() {
+                let l = UILabel(frame: CGRect(x: 0, y: 4 + 2 * CGFloat(i), width: 2, height: 2))
+                l.accessibilityIdentifier = id
+                l.accessibilityLabel = id == "pkStrokes" ? "0" : "-"
+                l.isAccessibilityElement = true
+                view.addSubview(l)
+                switch i {
+                case 0: uiTestStrokes = l
+                case 1: uiTestLog = l
+                case 2: uiTestInk = l
+                default: uiTestTablePoint = l
+                }
+            }
         }
         DebugLog.watchMainThread()
 
@@ -367,17 +492,34 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         canvas.backgroundColor = .clear
         canvas.isOpaque = false
         canvas.alwaysBounceVertical = true
+        // 點到最上面的狀態列不要跳回第一頁（很容易誤觸）
+        canvas.scrollsToTop = false
         canvas.showsHorizontalScrollIndicator = false
         canvas.contentInsetAdjustmentBehavior = .never
         canvas.overrideUserInterfaceStyle = .light
         canvas.bouncesZoom = true
         view.addSubview(canvas)
         canvas.layer.addSublayer(holdToShape.previewLayer)
+        // 小視窗開著時碰到頁面：當作點旁邊，系統的關閉動畫，這一下不寫字
+        popoverShield.translatesAutoresizingMaskIntoConstraints = false
+        popoverShield.backgroundColor = .clear
+        popoverShield.isActive = { [weak self] in self?.toolPopoverShown ?? false }
+        popoverShield.onTouch = { [weak self] in self?.dismissToolPopover(animated: true) }
+        view.insertSubview(popoverShield, aboveSubview: canvas)
+        NSLayoutConstraint.activate([
+            popoverShield.topAnchor.constraint(equalTo: canvas.topAnchor),
+            popoverShield.bottomAnchor.constraint(equalTo: canvas.bottomAnchor),
+            popoverShield.leadingAnchor.constraint(equalTo: canvas.leadingAnchor),
+            popoverShield.trailingAnchor.constraint(equalTo: canvas.trailingAnchor),
+        ])
 
         pagesContainer.backgroundColor = .clear
         overlay.frame = .zero
         pagesContainer.addSubview(overlay)
         canvas.insertSubview(pagesContainer, at: 0)
+        inkContainer.backgroundColor = .clear
+        inkContainer.isUserInteractionEnabled = false
+        canvas.addSubview(inkContainer)
 
         editMenu = UIEditMenuInteraction(delegate: self)
         canvas.addInteraction(editMenu)
@@ -394,6 +536,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             didInitialLayout = true
             lastLayoutWidth = w
             updateZoomLimits(resetZoom: true)
+            // 設定縮放時系統保持的是畫面中心（這時還沒有在看哪裡）：一開始看的地方要自己指定，從最上面開始
+            setVisibleDocOrigin(.zero)
             configurePencilKitGestures()
             pinOverlay.reload()
             if let pid = initialPageID, let i = pageIndex(of: pid) {
@@ -403,12 +547,14 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             updatePageIndicator()
         } else if abs(w - lastLayoutWidth) > 1 {
             let relative = canvas.zoomScale / fitZoom
-            let anchor = currentPageIndex
+            // 畫面左上角對到的文件位置不變：App 切到背景時系統會用另一個方向排版截圖，
+            // 切回來要回到原本看的地方，不是那一頁的最上面
+            let anchor = visibleDocRect().origin
             lastLayoutWidth = w
             updateZoomLimits(resetZoom: false)
             canvas.zoomScale = min(max(fitZoom * relative, canvas.minimumZoomScale), canvas.maximumZoomScale)
             updateZoomLayout()
-            scrollToPage(anchor, animated: false)
+            setVisibleDocOrigin(anchor)
             pinOverlay.clampAll()
         }
     }
@@ -420,13 +566,13 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     @objc func titleLongPressed(_ g: UILongPressGestureRecognizer) {
         guard g.state == .began else { return }
-        let alert = UIAlertController(title: "筆記本名稱", message: nil, preferredStyle: .alert)
+        let alert = UIAlertController(title: L("筆記本名稱"), message: nil, preferredStyle: .alert)
         alert.addTextField { [weak self] tf in
             tf.text = self?.session.title
             tf.clearButtonMode = .whileEditing
         }
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-        alert.addAction(UIAlertAction(title: "儲存", style: .default) { [weak self, weak alert] _ in
+        alert.addAction(UIAlertAction(title: L("取消"), style: .cancel))
+        alert.addAction(UIAlertAction(title: L("儲存"), style: .default) { [weak self, weak alert] _ in
             self?.renameNotebook(to: alert?.textFields?.first?.text ?? "")
         })
         present(alert, animated: true)
@@ -517,7 +663,13 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     func pageIndex(of id: UUID) -> Int? { pages.firstIndex { $0.id == id } }
 
-    func visibleDocRect() -> CGRect { canvas.convert(canvas.bounds, to: pagesContainer) }
+    /// 畫面看得到的範圍（文件座標）。用捲動視圖自己的縮放算，不是用頁面容器：
+    /// 縮放時系統先改好縮放和捲動位置、通知捲動，之後才通知縮放（容器在那裡才跟上）。
+    /// 捲動通知裡容器還是舊的縮放，拿它算會偏好幾頁：正在看的頁面被拿掉重建（一瞬間全白）、頁碼亂跳
+    func visibleDocRect() -> CGRect {
+        let z = max(canvas.zoomScale, 0.001), b = canvas.bounds
+        return CGRect(x: b.minX / z, y: b.minY / z, width: b.width / z, height: b.height / z)
+    }
 
     var currentPageIndex: Int {
         let r = visibleDocRect()
@@ -542,28 +694,83 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         updateZoomLayout()
     }
 
-    func updateZoomLayout() {
+    /// followZoomAnimation：縮放本身在動畫裡（放到最大再拉、放開後回彈；程式的動畫縮放）。
+    /// 系統用同一個動畫一起改縮放和捲動位置，頁面也要跟著這個動畫縮放、移動；
+    /// 不跟的話頁面一下就變成最後的大小，捲動位置卻還在動畫裡，畫面會先偏到角落再跳回來。
+    /// 只有兩個容器的縮放跟著動畫：同一輪裡新加進來的頁面、選取框等等直接放到位置，
+    /// 不然新的頁面會從左上角 (0,0) 一路動畫飛到自己的位置
+    func updateZoomLayout(followZoomAnimation: Bool = false) {
         let z = canvas.zoomScale
-        pagesContainer.transform = .identity
-        pagesContainer.bounds = CGRect(origin: .zero, size: docSize)
-        pagesContainer.transform = CGAffineTransform(scaleX: z, y: z)
-        pagesContainer.center = CGPoint(x: docSize.width * z / 2, y: docSize.height * z / 2)
-        overlay.frame = CGRect(origin: .zero, size: docSize)
+        if followZoomAnimation, pagesContainer.bounds.size == docSize {
+            let t = CGAffineTransform(scaleX: z, y: z)
+            let c = CGPoint(x: docSize.width * z / 2, y: docSize.height * z / 2)
+            pagesContainer.transform = t
+            pagesContainer.center = c
+            inkContainer.transform = t
+            inkContainer.center = c
+            UIView.performWithoutAnimation { finishZoomLayout(z, removeHidden: false) }
+            return
+        }
+        // 頁面的位置、縮放不做動畫：鍵盤跳出來時系統在鍵盤的動畫裡通知，
+        // 這裡先把縮放歸零再設回去，跟著動畫的話頁面會縮小再放大（閃一下）
+        UIView.performWithoutAnimation {
+            pagesContainer.transform = .identity
+            pagesContainer.bounds = CGRect(origin: .zero, size: docSize)
+            pagesContainer.transform = CGAffineTransform(scaleX: z, y: z)
+            pagesContainer.center = CGPoint(x: docSize.width * z / 2, y: docSize.height * z / 2)
+            inkContainer.transform = .identity
+            inkContainer.bounds = pagesContainer.bounds
+            inkContainer.transform = pagesContainer.transform
+            inkContainer.center = pagesContainer.center
+            overlay.frame = CGRect(origin: .zero, size: docSize)
+        }
+        finishZoomLayout(z)
+    }
+
+    private func finishZoomLayout(_ z: CGFloat, removeHidden: Bool = true) {
+        // PencilKit 之後才加的 view 也要在筆跡底下
+        if canvas.subviews.last !== inkContainer { canvas.bringSubviewToFront(inkContainer) }
         overlay.lineScale = 1 / z
         let size = CGSize(width: docSize.width * z, height: docSize.height * z)
         if canvas.contentSize != size { canvas.contentSize = size }
-        let side = max(0, (canvas.bounds.width - size.width) / 2)
-        if canvas.contentInset.left != side || canvas.contentInset.right != side || canvas.contentInset.bottom != bottomInset {
-            canvas.contentInset = UIEdgeInsets(top: 0, left: side, bottom: bottomInset, right: side)
-        }
+        applyCanvasInsets()
         updateSelectionChrome()
         updatePageResizeChrome()
-        updateVisiblePages()
+        updateVisiblePages(removeHidden: removeHidden)
     }
 
-    /// 畫布底下的留白：鍵盤擋住的高度；擴展頁面時再多留半個畫面，才拉得到最後一頁下緣的控制點
+    /// 畫布底下的留白：鍵盤擋住的高度；擴展頁面時再多留一個畫面，才拉得到最後一頁下緣的控制點
     var bottomInset: CGFloat {
-        keyboardInset + (tool == .pageResize ? max(200, canvas.bounds.height * 0.5) : 0)
+        keyboardInset + resizeRoom.height + (tool == .circuit ? circuitLibrary.bottomOverlap : 0)
+    }
+
+    /// 擴展頁面時四周多留的空間（各一個畫面）：頁面變大後留白也跟著往外，可以一直往任何方向捲、一直擴展
+    var resizeRoom: CGSize {
+        guard tool == .pageResize else { return .zero }
+        return CGSize(width: max(200, canvas.bounds.width * 0.9), height: max(200, canvas.bounds.height * 0.9))
+    }
+
+    /// 畫布的留白：頁面比畫面窄時左右置中；擴展頁面時四周各留一個畫面
+    var canvasInsets: UIEdgeInsets {
+        let side = max(0, (canvas.bounds.width - canvas.contentSize.width) / 2)
+        let room = resizeRoom
+        return UIEdgeInsets(top: room.height, left: max(side, room.width), bottom: bottomInset, right: max(side, room.width))
+    }
+
+    func applyCanvasInsets() {
+        let new = canvasInsets
+        let old = canvas.contentInset
+        guard new != old else { return }
+        canvas.contentInset = new
+        // 離開擴展頁面：四周的留白收回去，畫面不能停在留白裡
+        if old.top > new.top || old.left > new.left {
+            let minX = -new.left, minY = -new.top
+            let maxX = max(minX, canvas.contentSize.width - canvas.bounds.width + new.right)
+            let maxY = max(minY, canvas.contentSize.height - canvas.bounds.height + new.bottom)
+            let o = canvas.contentOffset
+            let c = CGPoint(x: min(max(o.x, minX), maxX), y: min(max(o.y, minY), maxY))
+            if c != o { canvas.contentOffset = c }
+        }
     }
 
     /// 讓文件座標 p 出現在畫面左上角
@@ -582,7 +789,11 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         min(traitCollection.displayScale * canvas.zoomScale, 8)
     }
 
-    func updateVisiblePages() {
+    /// removeHidden：拿掉看不到的頁面。系統的動畫縮放（放開後回彈）是在動畫裡一項一項改的：先改縮放、通知捲動，
+    /// 再改捲動位置、再通知一次。中間那次的縮放和捲動位置配不起來，算出來的範圍差好幾頁（越後面的頁差越多），
+    /// 照它拿掉頁面，正在看的頁面就被拿掉又重建，背景重畫（PDF 比較慢）時一瞬間全白。
+    /// 動畫裡只加不拿；動畫裡的值都改好後（縮放結束、下一次一般的捲動）再拿掉
+    func updateVisiblePages(removeHidden: Bool = true) {
         guard !pageFrames.isEmpty else { return }
         let visible = visibleDocRect()
         let margin = visible.height * 0.75
@@ -593,16 +804,26 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             let page = pages[i]
             keep.insert(page.id)
             if pageViews[page.id] == nil {
-                let v = PageContainerView(pageID: page.id)
-                v.frame = pageFrames[i]
-                v.configure(page: page, session: session, contentScale: elementContentScale)
-                pagesContainer.insertSubview(v, belowSubview: overlay)
-                pageViews[page.id] = v
+                // 新的頁面直接放在自己的位置：在系統的動畫縮放裡（回彈）加進來也不從 (0,0) 飛過去
+                UIView.performWithoutAnimation {
+                    let v = PageContainerView(pageID: page.id)
+                    v.frame = pageFrames[i]
+                    // 筆跡先放好、有大小，configure 才會在背景準備筆跡
+                    inkContainer.addSubview(v.inkView)
+                    v.inkView.frame = v.frame
+                    v.configure(page: page, session: session, contentScale: elementContentScale)
+                    pagesContainer.insertSubview(v, belowSubview: overlay)
+                    pageViews[page.id] = v
+                }
+                zoomTrace.note("page+ \(i + 1)")
             }
             i += 1
         }
+        guard removeHidden else { return }
         for (id, v) in pageViews where !keep.contains(id) {
+            zoomTrace.note("page- \(pageIndex(of: id).map { $0 + 1 } ?? 0)")
             v.removeFromSuperview()
+            v.inkView.removeFromSuperview()
             pageViews[id] = nil
         }
     }
@@ -610,6 +831,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     func refreshPage(_ i: Int) {
         guard let page = pages[safe: i], let v = pageViews[page.id] else { return }
         v.frame = pageFrames[i]
+        v.inkView.frame = v.frame
         v.configure(page: page, session: session, contentScale: elementContentScale)
         updateSelectionChrome()
     }
@@ -625,7 +847,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         uiTestOffset?.accessibilityLabel = "\(Int(scrollView.contentOffset.y))"
-        updateVisiblePages()
+        zoomTrace.note("didScroll")
+        updateVisiblePages(removeHidden: UIView.inheritedAnimationDuration == 0)
         updatePageIndicator()
         updateAddPagePull()
     }
@@ -639,18 +862,29 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     }
 
     func scrollViewDidZoom(_ scrollView: UIScrollView) {
-        updateZoomLayout()
+        zoomTrace.note("didZoom")
+        // 在動畫裡（回彈、動畫縮放）：頁面跟著同一個動畫
+        updateZoomLayout(followZoomAnimation: UIView.inheritedAnimationDuration > 0)
         let s = elementContentScale
-        for v in pageViews.values { v.inkView.setRenderScale(s) }
+        UIView.performWithoutAnimation {
+            for v in pageViews.values { v.inkView.setRenderScale(s) }
+        }
     }
 
     func scrollViewWillBeginZooming(_ scrollView: UIScrollView, with view: UIView?) {
         DebugLog.add("zoom begin")
+        if !zoomTraceAttached, let pinch = canvas.pinchGestureRecognizer {
+            pinch.addTarget(zoomTrace, action: #selector(ZoomTrace.pinchChanged(_:)))
+            zoomTraceAttached = true
+        }
         endTextEditing()
     }
 
     func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
         DebugLog.add("zoom end x\(String(format: "%.2f", scale / max(fitZoom, 0.01)))")
+        zoomTrace.note("didEndZooming")
+        // 回彈的動畫裡只加不拿：值都定了，把看不到的頁面拿掉
+        updateVisiblePages()
         let s = elementContentScale
         for v in pageViews.values { v.updateContentScale(s) }
     }
@@ -696,11 +930,40 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         }
     }
 
-    func setDrawing(_ d: PKDrawing) {
+    /// 畫布換成 d 的筆跡。一律從畫布現在的筆跡改過去，不直接換上 d 這一份：
+    /// PencilKit 留著它自己最後寫進去的那一版，下一筆收尾時和畫布的筆跡合併；
+    /// 換上的是比較舊的一版（上一步、下一步記下的），合併就會把之後才拿掉的筆跡帶回來
+    func setDrawing(_ d: PKDrawing, file: StaticString = #fileID, line: UInt = #line) {
+        uiTestTrace("set \(file):\(line)", d)
+        var next = canvas.drawing
+        next.strokes = d.strokes
         isApplyingDrawing = true
-        canvas.drawing = d
+        canvas.drawing = next
         isApplyingDrawing = false
         scheduleSave()
+        updateUITestDump()
+    }
+
+    /// UI 測試：記下筆跡的變化（每一筆用建立時間的尾數當代號）
+    func uiTestTrace(_ what: String, _ d: PKDrawing) {
+        guard uiTestStrokes != nil else { return }
+        let ids = d.strokes.map { String(format: "%.2f", $0.path.creationDate.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 100)) }
+        DebugLog.add("\(what) n=\(d.strokes.count) [\(ids.joined(separator: ","))]")
+    }
+
+    func updateUITestDump() {
+        guard let l = uiTestStrokes else { return }
+        l.accessibilityLabel = "\(canvas.drawing.strokes.count)"
+        uiTestInk?.accessibilityLabel = canvas.drawing.strokes.last?.ink.inkType.rawValue ?? "-"
+        uiTestLog?.accessibilityLabel = DebugLog.text.split(separator: "\n").suffix(25).joined(separator: " / ")
+        uiTestTablePoint?.accessibilityLabel = uiTestTableSpot()
+    }
+
+    /// UI 測試要點表格：第一頁的表格現在看得到的那一塊的中心（視窗座標）。打開時頁面不一定捲在最上面
+    private func uiTestTableSpot() -> String {
+        guard didInitialLayout, let e = pages.first?.elements.first(where: \.isTable) else { return "-" }
+        let r = pagesContainer.convert(docFrame(of: e, pageIndex: 0), to: nil).intersection(view.convert(canvas.frame, to: nil))
+        return r.isEmpty ? "-" : "\(Int(r.midX)),\(Int(r.midY))"
     }
 
     /// 改變頁面尺寸、增刪頁面時：先依舊版面拆分筆跡，再依新版面組回去
@@ -720,7 +983,10 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         canvas.drawing = assembleDrawing()
         isApplyingDrawing = false
         history.removeAll()
-        for v in pageViews.values { v.removeFromSuperview() }
+        for v in pageViews.values {
+            v.removeFromSuperview()
+            v.inkView.removeFromSuperview()
+        }
         pageViews = [:]
         updateZoomLimits(resetZoom: false)
         canvas.zoomScale = min(max(canvas.zoomScale, canvas.minimumZoomScale), canvas.maximumZoomScale)
@@ -782,13 +1048,14 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         scheduleSave()
     }
 
-    /// 記下一步：筆跡回到 drawing（nil＝沒動到筆跡）、這些頁面回到現在的樣子。在改動之前呼叫
-    func recordEdit(drawing: PKDrawing?, pageIDs: [UUID]) {
+    /// 記下一步：筆跡回到 drawing（nil＝沒動到筆跡）、這些頁面回到現在的樣子。在改動之前呼叫。
+    /// newStep：一定自成一步（使用者明確下的指令，例如清除整頁），不併進同一輪剛記的動作
+    func recordEdit(drawing: PKDrawing?, pageIDs: [UUID], newStep: Bool = false) {
         var snaps: [UUID: PageContentSnapshot] = [:]
         for id in pageIDs {
             if let i = pageIndex(of: id) { snaps[id] = PageContentSnapshot(pages[i]) }
         }
-        history.record(.init(drawing: drawing, pages: snaps))
+        history.record(.init(drawing: drawing, pages: snaps), newStep: newStep)
     }
 
     /// 同一步範圍內的目前狀態（按上一步時記下來，給下一步用）
@@ -817,6 +1084,11 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         scheduleSave()
     }
 
+    /// 收回 id 這一步之後做的
+    func discardEdits(after id: Int) {
+        history.discard(after: id, apply: restoreEditState)
+    }
+
     @objc func undoTapped() {
         endTextEditing()
         if holdToShape.undo() { return }
@@ -825,7 +1097,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             undoTableDivider()
             return
         }
-        _ = history.undo(capture: currentEditState, apply: restoreEditState)
+        let done = history.undo(capture: currentEditState, apply: restoreEditState)
+        uiTestTrace("undo done=\(done)", canvas.drawing)
     }
 
     @objc func redoTapped() {
@@ -847,6 +1120,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     // MARK: - PKCanvasViewDelegate
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
+        uiTestTrace("pk changed applying=\(isApplyingDrawing)", canvas.drawing)
+        updateUITestDump()
         guard !isApplyingDrawing else { return }
         recordStrokeGesture(strokeGesture)
         holdToShape.drawingChanged()
@@ -857,8 +1132,6 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         pkUsingSince = CACurrentMediaTime()
         holdToShape.pencilKitBegan()
         strokeGesture = StrokeGesture(before: canvas.drawing, mark: history.recordCount)
-        // 下筆就關掉工具列的小視窗（粗細、虛線、筆刷設定）
-        dismissToolPopover()
         // 開始寫字 → 收起還沒點的調色盤小圖示
         if let p = paletteOverlay, p.mode == .launcher { dismissPalette() }
         toolBeganAt = CACurrentMediaTime()
@@ -873,13 +1146,6 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         if !tool.isDrawing {
             let before = strokeCountAtBegin
             DispatchQueue.main.async { [weak self] in self?.absorbStrayStroke(countBefore: before, gesture: gesture) }
-            return
-        }
-        if tool == .eraser && settings.eraserAutoReturn {
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.tool == .eraser else { return }
-                self.setTool(self.toolBeforeEraser)
-            }
             return
         }
         guard tool.isInking else { return }
@@ -903,6 +1169,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             setDrawing(drawing)
         }
         holdToShape.recordSample(of: stroke, presetID: BrushStore.shared.current.id)
+        if tool == .pen { DebugLog.add(Self.pencilKitStrokeSummary(stroke)) }
         // 虛線：筆放開後把這一筆切成一段一段
         let preset = BrushStore.shared.current
         if tool == .pen, preset.isDashed {
@@ -925,6 +1192,42 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             drawing.strokes[drawing.strokes.count - 1] = straight
             setDrawing(drawing)
         }
+        if tool == .highlighter { keepHighlightsBelowInk() }
+    }
+
+    /// 螢光筆的筆跡排在其他 PencilKit 筆跡前面（畫在底下），字才不會被螢光筆蓋住
+    func keepHighlightsBelowInk() {
+        guard let sorted = Self.highlightsBelowInk(canvas.drawing.strokes) else { return }
+        var d = canvas.drawing
+        d.strokes = sorted
+        setDrawing(d)
+    }
+
+    /// 螢光筆排到最前面、其他順序不變；本來就排好了回傳 nil
+    static func highlightsBelowInk(_ strokes: [PKStroke]) -> [PKStroke]? {
+        let isHighlight = isHighlighterStroke
+        guard let firstInk = strokes.firstIndex(where: { !isHighlight($0) }),
+              strokes[firstInk...].contains(where: isHighlight) else { return nil }
+        return strokes.filter(isHighlight) + strokes.filter { !isHighlight($0) }
+    }
+
+    /// 螢光筆畫的：螢光筆是半透明的 monoline 墨水（見 InkStyle.inkType），舊的筆記可能有 PencilKit 的 marker。
+    /// 存檔再讀回來，monoline 會變成 pen（顏色的透明度還在）：半透明的 pen 也是
+    static func isHighlighterStroke(_ s: PKStroke) -> Bool {
+        s.ink.inkType == .marker || ([.monoline, .pen].contains(s.ink.inkType) && s.ink.color.cgColor.alpha < 1)
+    }
+
+    /// 除錯紀錄：PencilKit 這一筆的取樣（墨水、點數、平均間隔，和平均挑的 8 個點的粗細、筆壓、傾斜、方位、透明度）。
+    /// 自製引擎照著 PencilKit 調的時候用：Pencil 的筆壓、傾斜怎麼變成粗細，只有真的用 Pencil 寫才知道
+    static func pencilKitStrokeSummary(_ s: PKStroke) -> String {
+        let pts = Array(s.path)
+        guard let last = pts.last else { return "pk stroke empty" }
+        let dt = pts.count > 1 ? last.timeOffset / Double(pts.count - 1) * 1000 : 0
+        let picks = (0..<8).map { pts[min(pts.count - 1, $0 * pts.count / 8)] } + [last]
+        let detail = picks.map {
+            String(format: "%.2f/%.2f/%.2f/%.2f/%.2f/%.2f", $0.size.width, $0.size.height, $0.force, $0.altitude, $0.azimuth, $0.opacity)
+        }.joined(separator: " ")
+        return "pk stroke ink=\(s.ink.inkType.rawValue) n=\(pts.count) dt=\(String(format: "%.1f", dt))ms w/h/force/alt/az/op: \(detail)"
     }
 
     /// 筆跡超出它所在的那一頁（存檔時歸到的頁）時，加上遮罩只顯示頁面裡的部分；沒超出回傳 nil
@@ -954,14 +1257,47 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     func deletePage(_ index: Int) {
         guard pages.count > 1 else {
-            showMessage("至少要保留一頁")
+            showMessage(L("至少要保留一頁"))
             return
         }
         // 移到「最近刪除的頁面」，30 天內可以還原
         performLayoutChange {
             session.trashPage(at: index)
         }
-        showToast("第 \(index + 1) 頁已移到「頁面 → 最近刪除的頁面」，30 天內可以還原")
+        showToast(L("第 \(index + 1) 頁已移到「頁面 → 最近刪除的頁面」，30 天內可以還原"))
+    }
+
+    /// 「⋯ → 清除該頁面所有物件」：先問一次
+    func confirmClearPage(_ index: Int) {
+        guard pages.indices.contains(index) else { return }
+        let a = UIAlertController(title: L("清除第 \(index + 1) 頁所有物件？"),
+                                  message: L("筆跡、螢光筆、文字框、圖片、表格、電路圖都會清掉，頁面和背景留著。可以按「上一步」復原。"),
+                                  preferredStyle: .alert)
+        a.addAction(UIAlertAction(title: L("取消"), style: .cancel))
+        a.addAction(UIAlertAction(title: L("清除"), style: .destructive) { [weak self] _ in self?.clearPage(index) })
+        present(a, animated: true)
+    }
+
+    /// 清掉一頁上的所有東西（筆跡、螢光標示、自製筆刷筆跡、文字框、圖片、表格、電路圖），一步就能復原。
+    /// 頁面本身、背景（PDF、格線）、擴展的大小都不動
+    func clearPage(_ index: Int) {
+        guard pages.indices.contains(index) else { return }
+        endTextEditing()
+        select(nil)
+        clearLassoSelection()
+        let id = pages[index].id
+        DebugLog.add("clear page \(index + 1)")
+        recordEdit(drawing: canvas.drawing, pageIDs: [id], newStep: true)
+        // PencilKit 的筆跡：和存檔時一樣，看每一筆最靠近哪一頁
+        var drawing = canvas.drawing
+        drawing.strokes.removeAll { nearestPageIndex(to: $0.renderBounds.center) == index }
+        if drawing.strokes.count != canvas.drawing.strokes.count { setDrawing(drawing) }
+        updatePage(index, undoable: false) { page in
+            page.elements = []
+            page.highlights = []
+            page.ink = []
+        }
+        showToast(L("已清除第 \(index + 1) 頁，按「上一步」可以復原"))
     }
 
     func presentTrashedPages(from source: UIView?) {
@@ -1019,30 +1355,35 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         }
     }
 
-    /// 匯出：畫面中間跳出小視窗選格式
+    /// 匯出：上面打頁碼、下面勾縮圖（兩邊同步），再選格式
     func presentExportChoice(from source: UIView) {
-        let alert = UIAlertController(title: "匯出「\(session.title)」", message: "要匯出成哪一種格式？", preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "PDF（給別人看、列印）", style: .default) { [weak self] _ in
-            self?.export(paperNote: false, from: source)
-        })
-        alert.addAction(UIAlertAction(title: "PaperNote（可以繼續編輯筆跡）", style: .default) { [weak self] _ in
-            self?.export(paperNote: true, from: source)
-        })
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-        present(alert, animated: true)
+        endTextEditing()
+        saveNow()
+        let vc = ExportPagesViewController(session: session)
+        vc.onExport = { [weak self, weak vc] paperNote, pages in
+            vc?.dismiss(animated: true) {
+                self?.export(paperNote: paperNote, pages: pages, from: source)
+            }
+        }
+        let nav = UINavigationController(rootViewController: vc)
+        nav.modalPresentationStyle = .formSheet
+        nav.preferredContentSize = CGSize(width: 720, height: 820)
+        present(nav, animated: true)
     }
 
-    func export(paperNote: Bool, from source: UIView) {
+    /// pages：要匯出的頁面索引（0 起算，排好）
+    func export(paperNote: Bool, pages: [Int], from source: UIView) {
         endTextEditing()
         saveNow()
         do {
-            let url = paperNote ? try NotebookExporter.exportPaperNote(session: session) : try NotebookExporter.exportPDF(session: session)
+            let url = paperNote ? try NotebookExporter.exportPaperNote(session: session, pages: pages)
+                                : try NotebookExporter.exportPDF(session: session, pages: pages)
             let vc = UIActivityViewController(activityItems: [url], applicationActivities: nil)
             vc.popoverPresentationController?.sourceView = source
             vc.popoverPresentationController?.sourceRect = source.bounds
             present(vc, animated: true)
         } catch {
-            showMessage("匯出失敗", error.localizedDescription)
+            showMessage(L("匯出失敗"), error.localizedDescription)
         }
     }
 
@@ -1074,10 +1415,10 @@ struct TrashedPagesHost: View {
     var body: some View {
         NavigationStack {
             TrashedPagesList(items: items, onRestore: onRestore, onDelete: onDelete)
-                .navigationTitle("最近刪除的頁面")
+                .navigationTitle(L("最近刪除的頁面"))
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .confirmationAction) { Button("完成", action: onDone) }
+                    ToolbarItem(placement: .confirmationAction) { Button(L("完成"), action: onDone) }
                 }
         }
     }

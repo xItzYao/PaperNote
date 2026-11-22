@@ -45,9 +45,9 @@ final class AddPagePullView: UIView {
         alpha = min(1, max(0, progress))
         icon.transform = CGAffineTransform(rotationAngle: min(progress, 1) * .pi / 2)
         switch stage {
-        case .none: label.text = "繼續往上拉，新增頁面"
-        case .blankPage: label.text = "放開新增空白頁，再拉選紙張"
-        case .paperPicker: label.text = "放開選紙張"
+        case .none: label.text = L("繼續往上拉，新增頁面")
+        case .blankPage: label.text = L("放開新增空白頁，再拉選紙張")
+        case .paperPicker: label.text = L("放開選紙張")
         }
     }
 }
@@ -68,8 +68,8 @@ extension NotebookViewController {
     /// 捲動時更新底下的＋（放在拉出來的空白中間）
     func updateAddPagePull() {
         let over = bottomOverscroll
-        // 擴展頁面時拉到底是要拉控制點，不是新增頁面
-        guard over > 1, !pages.isEmpty, tool != .pageResize else {
+        // 擴展頁面時拉到底是要拉控制點，不是新增頁面；預覽模式不新增頁面
+        guard over > 1, !pages.isEmpty, tool != .pageResize, !previewMode else {
             addPagePull.isHidden = true
             addPagePull.update(over: 0)
             return
@@ -101,7 +101,7 @@ extension NotebookViewController {
 
     /// 拉過最後一頁放開：中間跳出選紙張的小視窗，選好加在最後面
     func presentAddPageMenu() {
-        presentPaperPicker(title: "新增頁面", insertAt: pages.count)
+        presentPaperPicker(title: L("新增頁面"), insertAt: pages.count)
     }
 }
 

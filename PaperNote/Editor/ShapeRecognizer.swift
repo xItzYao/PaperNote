@@ -21,27 +21,6 @@ enum ShapeRecognizer {
         }
     }
 
-    /// 路徑是封閉圖形時回傳修正後的點，否則 nil（當成直線處理）
-    static func closedShapePoints(_ input: [CGPoint]) -> [CGPoint]? {
-        var pts = input
-        guard pts.count >= 6 else { return nil }
-        let end = pts[pts.count - 1]
-        while pts.count > 6, pts[pts.count - 2].distance(to: end) < 4 { pts.removeLast() }
-
-        var length: CGFloat = 0
-        for i in 1..<pts.count { length += pts[i].distance(to: pts[i - 1]) }
-        let bbox = boundingBox(pts)
-        let span = max(bbox.width, bbox.height)
-        guard length > 60, span > 20,
-              pts[0].distance(to: pts[pts.count - 1]) < span * 0.3,
-              pts[0].distance(to: pts[pts.count - 1]) / length < 0.5 else { return nil }
-
-        let poly = simplifyClosed(pts, epsilon: max(6, hypot(bbox.width, bbox.height) * 0.07))
-        if poly.count == 3 { return polygon(poly) }
-        if poly.count == 4 { return polygon(axisAlignIfNeeded(poly, bbox: bbox)) }
-        return ellipse(in: bbox)
-    }
-
     /// 封閉路徑簡化成多邊形後的角點
     static func closedCorners(_ pts: [CGPoint], box: CGRect) -> [CGPoint] {
         simplifyClosed(pts, epsilon: max(6, hypot(box.width, box.height) * 0.07))
@@ -72,12 +51,17 @@ enum ShapeRecognizer {
     }
 
     static func makeStroke(points: [CGPoint], preset: BrushPreset, sample: PKStrokePoint? = nil) -> PKStroke {
-        makeStroke(points: points, ink: preset.tool.ink, width: preset.width, sample: sample)
+        let t = preset.tool
+        return makeStroke(points: points, ink: t.ink, width: t.width, sample: sample)
     }
 
+    /// width：畫出來的線寬（和筆工具的粗細、預覽線一樣）。有手寫那一筆的取樣點就照它的 size，沒有就從線寬換算
     static func makeStroke(points: [CGPoint], ink: PKInk, width: CGFloat, sample: PKStrokePoint?,
                            creationDate: Date = Date()) -> PKStroke {
-        let size = sample?.size ?? CGSize(width: width, height: width)
+        let size = sample?.size ?? {
+            let s = PencilKitInkWidth.pointSize(ink.inkType, drawn: width)
+            return CGSize(width: s, height: s)
+        }()
         let strokePoints = points.enumerated().map { i, p in
             strokePoint(p, timeOffset: TimeInterval(i) * 0.005, size: size, like: sample)
         }
@@ -91,49 +75,6 @@ enum ShapeRecognizer {
     }
 
     // MARK: - Helpers
-
-    private static func boundingBox(_ pts: [CGPoint]) -> CGRect {
-        var minX = CGFloat.greatestFiniteMagnitude, minY = CGFloat.greatestFiniteMagnitude
-        var maxX = -CGFloat.greatestFiniteMagnitude, maxY = -CGFloat.greatestFiniteMagnitude
-        for p in pts {
-            minX = min(minX, p.x); minY = min(minY, p.y)
-            maxX = max(maxX, p.x); maxY = max(maxY, p.y)
-        }
-        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
-    }
-
-    private static func polygon(_ corners: [CGPoint]) -> [CGPoint] {
-        var out: [CGPoint] = []
-        for i in 0..<corners.count {
-            let a = corners[i], b = corners[(i + 1) % corners.count]
-            // 角落重複一個點讓轉角更銳利
-            out.append(a)
-            out.append(contentsOf: segment(a, b).dropLast())
-        }
-        out.append(corners[0])
-        out.append(corners[0])
-        return out
-    }
-
-    private static func ellipse(in r: CGRect) -> [CGPoint] {
-        let n = 96
-        return (0...n).map { i in
-            let a = CGFloat(i) / CGFloat(n) * 2 * .pi - .pi / 2
-            return CGPoint(x: r.midX + cos(a) * r.width / 2, y: r.midY + sin(a) * r.height / 2)
-        }
-    }
-
-    private static func axisAlignIfNeeded(_ q: [CGPoint], bbox: CGRect) -> [CGPoint] {
-        // 四條邊都接近水平/垂直 → 直接用外框矩形
-        for i in 0..<4 {
-            let a = q[i], b = q[(i + 1) % 4]
-            let deg = abs(atan2(b.y - a.y, b.x - a.x) * 180 / .pi)
-            let off = min(deg, abs(deg - 90), abs(180 - deg))
-            if off > 12 { return q }
-        }
-        return [CGPoint(x: bbox.minX, y: bbox.minY), CGPoint(x: bbox.maxX, y: bbox.minY),
-                CGPoint(x: bbox.maxX, y: bbox.maxY), CGPoint(x: bbox.minX, y: bbox.maxY)]
-    }
 
     /// 封閉路徑簡化成多邊形的角點
     private static func simplifyClosed(_ pts: [CGPoint], epsilon: CGFloat) -> [CGPoint] {
@@ -211,6 +152,13 @@ final class PencilHoldRecognizer: UIGestureRecognizer {
     private func location(_ t: UITouch) -> CGPoint { t.location(in: coordinateView) }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        // 上一筆的結束沒收到（見 UITouch.isOver）：當它取消了。不能用 finish，它會讓這一筆也失敗
+        if let old = tracked, old.isOver(in: event) {
+            timer?.invalidate()
+            if triggered { onEnd?(lastPoint, true) }
+            tracked = nil
+            triggered = false
+        }
         guard tracked == nil, let t = touches.first else { return }
         guard t.type == .pencil || (allowFinger && t.type == .direct) else { return }
         tracked = t
@@ -301,6 +249,11 @@ final class TouchTracker: UIGestureRecognizer {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        if let old = tracked, old.isOver(in: event) {
+            DebugLog.add("touch tracker: previous touch was lost (phase=\(old.phase.rawValue)), starting over")
+            tracked = nil
+            onEnded?()
+        }
         guard tracked == nil, let t = touches.first else { return }
         guard t.type == .pencil || (allowFinger && t.type == .direct) else { return }
         tracked = t
@@ -334,10 +287,25 @@ final class TouchTracker: UIGestureRecognizer {
     }
 }
 
+extension UITouch {
+    /// 已經放開了。系統的選單開著時下筆，這一筆的「結束」不一定會送到畫布上的辨識器：
+    /// 下一筆開始時看到記著的那一筆已經放開，就當它結束了，不然之後的筆都會被當成「上一筆還沒放開」而忽略
+    var isOver: Bool { phase == .ended || phase == .cancelled }
+
+    /// 這次觸碰事件裡已經沒有這個觸碰（系統把它收走了，放開的消息沒送來，phase 也停在「移動中」），
+    /// 或是已經放開。螢幕上還按著的觸碰一定在 event.allTouches 裡
+    func isOver(in event: UIEvent) -> Bool {
+        if isOver { return true }
+        guard let all = event.allTouches else { return false }
+        return !all.contains(self)
+    }
+}
+
 /// 手掌防誤觸：判定為手掌的觸碰一出現就「辨識成功」，讓畫布的捲動、縮放無法開始。
 /// 不攔截 Pencil，也不影響 PencilKit 書寫。
 final class PalmBlocker: UIGestureRecognizer {
-    var isPalm: ((UITouch) -> Bool)?
+    /// 觸碰、連它在內螢幕上同時按著幾個手指觸碰
+    var isPalm: ((UITouch, Int) -> Bool)?
     private var palmTouches = Set<UITouch>()
     /// 現在有手掌壓在螢幕上（這時候頁面不能捲動）
     var holdingPalm: Bool { !palmTouches.isEmpty }
@@ -354,8 +322,9 @@ final class PalmBlocker: UIGestureRecognizer {
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         Self.lastTouchCount = event.allTouches?.count ?? 0
+        let together = event.allTouches?.filter { $0.type == .direct && $0.phase != .ended && $0.phase != .cancelled }.count ?? touches.count
         for t in touches {
-            if isPalm?(t) == true {
+            if isPalm?(t, max(together, 1)) == true {
                 palmTouches.insert(t)
             } else if palmTouches.isEmpty {
                 ignore(t, for: event)

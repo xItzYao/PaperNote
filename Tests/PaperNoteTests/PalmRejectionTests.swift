@@ -67,4 +67,47 @@ final class PalmRejectionTests: XCTestCase {
         editor.lastPencilTime = CACurrentMediaTime()
         XCTAssertFalse(editor.isPalmTouch(FakeTouch(type: .direct, radius: 93.8)))
     }
+
+    /// 回報的問題（11/20）：開右手防誤觸，右手放上去頁面會快速跑掉。實機的除錯紀錄（筆尖在 (500, 600)）：
+    /// 手掌的觸碰半徑常常只有 31～62，跟手指差不多，但手放下去是好幾個觸碰一起出現
+    func testAHandPutDownIsAPalmEvenWhenItsTouchesAreFingerSized() {
+        // 寫完 6 秒後手放下：41.7、52.1、62.6 三個一起（62.6 比手指最大的 52.1 大一格）
+        pencilLifted(6.0)
+        XCTAssertTrue(editor.isPalmTouch(FakeTouch(type: .direct, radius: 62.6, location: CGPoint(x: 498, y: 674))), "比手指大一格")
+        XCTAssertTrue(editor.isPalmTouch(FakeTouch(type: .direct, radius: 41.7, location: CGPoint(x: 583, y: 756)), together: 3), "三個一起按下")
+        // 寫完 0.9 秒：三個 52.1 一起
+        pencilLifted(0.9)
+        XCTAssertTrue(editor.isPalmTouch(FakeTouch(type: .direct, radius: 52.1, location: CGPoint(x: 764, y: 614)), together: 3))
+        // 寫完 0.58 秒：兩個一起，一個在筆尖右下方（頁面被縮放、滑走）
+        pencilLifted(0.58)
+        XCTAssertTrue(editor.isPalmTouch(FakeTouch(type: .direct, radius: 52.1, location: CGPoint(x: 840, y: 818)), together: 2))
+    }
+
+    func testFingersStillScrollAndZoom() {
+        // 寫完馬上一個手指滑（之前的需求）
+        pencilLifted(0.5)
+        XCTAssertFalse(editor.isPalmTouch(FakeTouch(type: .direct, radius: 52.1, location: CGPoint(x: 620, y: 700))))
+        // 紀錄裡真的兩指縮放：很久沒寫字；寫完 1.7 秒在右邊縮放
+        pencilLifted(80)
+        XCTAssertFalse(editor.isPalmTouch(FakeTouch(type: .direct, radius: 52.1, location: CGPoint(x: 620, y: 700)), together: 2))
+        XCTAssertFalse(editor.isPalmTouch(FakeTouch(type: .direct, radius: 41.7, location: CGPoint(x: 478, y: 592)), together: 2))
+        pencilLifted(1.73)
+        XCTAssertFalse(editor.isPalmTouch(FakeTouch(type: .direct, radius: 31.3, location: CGPoint(x: 1008, y: 766)), together: 2))
+        // 寫完 0.58 秒，在筆尖的另一邊（左手）兩指縮放
+        pencilLifted(0.58)
+        XCTAssertFalse(editor.isPalmTouch(FakeTouch(type: .direct, radius: 41.7, location: CGPoint(x: 250, y: 700)), together: 2))
+    }
+
+    func testThreeTouchesLandingTogetherKeepThePageStill() {
+        // 擋住捲動、縮放的辨識器：三個一起按下（手放下去）就開始，頁面不會跟著滑
+        pencilLifted(6.0)
+        let hand = Set([41.7, 52.1, 52.1].enumerated().map { i, r in
+            FakeTouch(type: .direct, radius: r, location: CGPoint(x: 580 + CGFloat(i) * 30, y: 760)) as UITouch
+        })
+        editor.palmBlocker.touchesBegan(hand, with: FakeEvent(hand))
+        XCTAssertEqual(editor.palmBlocker.state, .began)
+        XCTAssertTrue(editor.palmBlocker.holdingPalm)
+        editor.palmBlocker.touchesEnded(hand, with: FakeEvent(hand))
+    }
+
 }

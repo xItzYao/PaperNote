@@ -41,6 +41,8 @@ final class EditHistory {
     var canUndo: Bool { !undoSteps.isEmpty }
     var canRedo: Bool { !redoSteps.isEmpty }
     var undoCount: Int { undoSteps.count }
+    /// 最上面那一步的編號
+    var topStepID: Int? { undoSteps.last?.id }
 
     /// 記下動作之前的狀態，回傳這一步的編號。newStep：不併進同一輪的前一步（之後可能要整步拿掉）
     @discardableResult
@@ -73,6 +75,15 @@ final class EditHistory {
     /// 拿掉一步（那個動作後來被整個取消了）
     func remove(_ id: Int) {
         undoSteps.removeAll { $0.id == id }
+    }
+
+    /// id 之後記的每一步都收回、也不能重做（那些動作其實是別的操作：點兩下編輯時點出來的墨點）
+    func discard(after id: Int, apply: (State) -> Void) {
+        while let s = undoSteps.last, s.id > id {
+            undoSteps.removeLast()
+            apply(s.restore)
+        }
+        groupOpen = false
     }
 
     func removeAll() {

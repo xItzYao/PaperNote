@@ -17,8 +17,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         textHandlePan.delegate = self
         canvas.addGestureRecognizer(textHandlePan)
 
-        doubleTapGesture = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
-        doubleTapGesture.numberOfTapsRequired = 2
+        doubleTapGesture = EditDoubleTapRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
         doubleTapGesture.delegate = self
         canvas.addGestureRecognizer(doubleTapGesture)
 
@@ -36,15 +35,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         textLongPress.delegate = self
         canvas.addGestureRecognizer(textLongPress)
 
-        eraserTracker = TouchTracker(target: nil, action: nil)
-        eraserTracker.coordinateView = pagesContainer
-        eraserTracker.delegate = self
-        eraserTracker.onPoint = { [weak self] p in
-            self?.eraseHighlights(at: p)
-            self?.eraseInk(at: p)
-        }
-        eraserTracker.onBegan = { [weak self] _ in self?.inkEraseUndoRegistered = [] }
-        canvas.addGestureRecognizer(eraserTracker)
+        setupEraser()
 
         // 記住筆尖最後的位置（調色盤小圖示出現在這附近）
         pencilPointTracker = TouchTracker(target: nil, action: nil)
@@ -63,10 +54,10 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             let g = self.canvas.drawingGestureRecognizer
             let since = self.pkUsingSince.map { String(format: "%.1fs", CACurrentMediaTime() - $0) } ?? "nil"
             DebugLog.add("pencil down tool=\(self.tool) customInk=\(self.customInkActive) drawGR enabled=\(g.isEnabled) state=\(g.state.rawValue) pkUsing=\(since) presented=\(self.presentedViewController.map { String(describing: type(of: $0)) } ?? "nil")")
-            // 保險：書寫工具下 PencilKit 的書寫手勢一定要開著
-            if self.tool.isDrawing, !g.isEnabled { g.isEnabled = true }
-            // 上一筆一直沒收到「結束」：PencilKit 卡在書寫中，之後的筆和橡皮擦都會被忽略 → 重設書寫手勢
-            if self.tool.isDrawing, let s = self.pkUsingSince, CACurrentMediaTime() - s > 0.8 {
+            // 保險：筆、螢光筆用 PencilKit 寫時，PencilKit 的書寫手勢一定要開著（橡皮擦是 App 自己擦）
+            if self.tool.isInking, !g.isEnabled { g.isEnabled = true }
+            // 上一筆一直沒收到「結束」：PencilKit 卡在書寫中，之後的筆都會被忽略 → 重設書寫手勢
+            if self.tool.isInking, let s = self.pkUsingSince, CACurrentMediaTime() - s > 0.8 {
                 DebugLog.add("pencilkit stuck in a stroke, resetting drawing gesture")
                 self.pkUsingSince = nil
                 g.isEnabled = false
@@ -90,16 +81,16 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
 
         palmBlocker = PalmBlocker(target: nil, action: nil)
         palmBlocker.delegate = self
-        palmBlocker.isPalm = { [weak self] t in
+        palmBlocker.isPalm = { [weak self] t, together in
             guard let self else { return false }
-            let palm = self.isPalmTouch(t)
+            let palm = self.isPalmTouch(t, together: together)
             // 除錯紀錄：每個手指觸碰被判成手掌與否，以及判斷的依據
             if t.type == .direct {
                 let since = String(format: "%.2f", CACurrentMediaTime() - self.lastPencilTime)
                 let p = t.location(in: self.view)
                 let rel = self.lastPencilPoint.map { String(format: "(%.0f, %.0f)", p.x - $0.x, p.y - $0.y) } ?? "nil"
                 let busy = self.busyGestures() + self.finishToolbarMenus()
-                DebugLog.add("finger down r=\(String(format: "%.1f", t.majorRadius)) palm=\(palm) pencilDown=\(self.pencilDown) sincePencil=\(since)s fromPencil=\(rel) holdingPalm=\(self.palmBlocker.holdingPalm) busy=\(busy)")
+                DebugLog.add("finger down r=\(String(format: "%.1f", t.majorRadius)) together=\(together) palm=\(palm) pencilDown=\(self.pencilDown) sincePencil=\(since)s fromPencil=\(rel) holdingPalm=\(self.palmBlocker.holdingPalm) busy=\(busy)")
                 if let dump = self.uiTestDump {
                     dump.accessibilityLabel = "down: " + busy
                     // 手指開始移動之後再看一次（捲動手勢這時候該開始了）
@@ -121,28 +112,42 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         toolPan.isEnabled = tool.usesToolPan
         // 筆／橡皮擦／套索模式下，手指點物件也能直接選取（見 shouldReceive）
         tapGesture.isEnabled = true
-        // 電路工具：點兩下導線輸入名稱
-        doubleTapGesture.isEnabled = tool == .select || tool == .circuit
+        // 每個工具都開著：手指點兩下表格、電路圖就編輯（收哪些觸碰見 shouldReceive）
+        doubleTapGesture.isEnabled = true
         pencilPointTracker.isEnabled = true
         holdRecognizer.isEnabled = tool.isInking && settings.shapeSnap && !customInkActive
         inkRecognizer.isEnabled = customInkActive
         inkRecognizer.allowFinger = settings.fingerDrawing
         holdRecognizer.allowFinger = settings.fingerDrawing
-        eraserTracker.isEnabled = tool == .eraser
-        eraserTracker.allowFinger = settings.fingerDrawing
-        longPressGesture.isEnabled = tool == .select || tool == .image || tool == .circuit
+        eraserCapture.isEnabled = tool == .eraser
+        eraserCapture.allowFinger = settings.fingerDrawing
+        longPressGesture.isEnabled = tool == .select || tool == .image || tool == .sticker
+        textLongPress.isEnabled = true
+        textHandlePan.isEnabled = true
+        // 預覽模式只能捲動、縮放
+        if previewMode {
+            let off: [UIGestureRecognizer] = [toolPan, tapGesture, doubleTapGesture, longPressGesture, textLongPress, textHandlePan,
+                                              holdRecognizer, inkRecognizer, eraserCapture]
+            for g in off { g.isEnabled = false }
+        }
     }
 
     func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
         if g === toolPan {
+            if tool == .lasso { DebugLog.add("lasso pan should begin") }
             switch tool {
             case .capture, .textSelect, .tableDraw:
                 return true
-            case .select, .image:
+            case .select, .image, .sticker:
                 // 用手指剛碰到的位置判斷：拖曳要移動一小段才開始，那時手指已經離開格線了
-                return editingTextView == nil && dragTarget(at: panTouchDownPoint(g)) != nil
+                let q = panTouchDownPoint(g)
+                guard editingTextView == nil else { return false }
+                if dragTarget(at: q) != nil || ((tool == .select || tool == .sticker) && lassoGrab(at: q) != nil) { return true }
+                // 選著物件時工具列亮的是套索：Pencil 從空白處拖就是用套索圈（手指照樣捲動頁面）
+                return tool == .select && toolPanByDrawingTouch
             case .pageResize:
-                return pageHandle(at: g.location(in: pagesContainer)) != nil
+                // 用剛碰到的位置判斷（拖曳要移動一小段才開始，那時手指可能已經離開控制點）
+                return pageHandle(at: panTouchDownPoint(g)) != nil
             case .lasso:
                 return true
             case .circuit:
@@ -151,31 +156,30 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
                 return false
             }
         }
-        // 電路圖：長按元件、導線才接手；空白處留給貼上、選字
-        if g === longPressGesture, tool == .circuit { return circuitHit(at: g.location(in: pagesContainer)) != nil }
         return true
     }
 
-    /// 這個手指觸碰是不是手掌（寫字時壓在螢幕上的手）
-    func isPalmTouch(_ t: UITouch) -> Bool {
+    /// 這個手指觸碰是不是手掌（寫字時壓在螢幕上的手）。together：連這個在內，螢幕上同時按著幾個手指觸碰。
+    /// 觸碰半徑是一格一格的（31.3、41.7、52.1、62.6、73.0…）。實機紀錄：手指（含用指腹滑）最大 52.1；
+    /// 手掌常常只回報 31～62，一個觸碰分不出來，但手掌放下去是好幾個觸碰一起出現
+    func isPalmTouch(_ t: UITouch, together: Int = 1) -> Bool {
         let mode = settings.palmRejection
         guard mode != "off", t.type == .direct else { return false }
-        // 實測手指（含用指腹滑）的觸碰半徑有 31、42、52；手掌比這大很多
-        // 只擋很大面積的觸碰（整個手掌）；手指壓得再用力也不會超過
-        if t.majorRadius >= 70 { return true }
+        // 比手指大一格以上：手掌（手指壓得再用力也沒超過 52.1）
+        if t.majorRadius >= 60 { return true }
         let now = CACurrentMediaTime()
-        // 筆尖正在接觸螢幕，或剛離開不到 0.3 秒
-        // （超過 3 秒沒收到筆尖移動就不算「正在寫字」，避免狀態卡住讓頁面一直沒反應）
+        // 筆尖正在接觸螢幕（超過 3 秒沒收到筆尖移動就不算「正在寫字」，避免狀態卡住讓頁面一直沒反應）
         if pencilDown && now - lastPencilTime < 3 { return true }
-        // 筆剛離開：只擋比手指大的觸碰，手指馬上就能捲動頁面
-        guard t.majorRadius >= 60 else { return false }
-        if now - lastPencilTime < 0.3 { return true }
-        // 剛寫完 1.5 秒內，筆尖附近下方、寫字那一側的觸碰（手掌常壓的位置）
+        // 單一個手指：剛寫完也要能馬上捲動頁面
+        guard together >= 2 else { return false }
+        // 三個以上一起按下：整個手放上去（畫布沒有三指的手勢）
+        if together >= 3 { return true }
+        // 兩個一起按下：剛寫完 1.5 秒內、在寫字那一側（筆尖旁邊、下方）的是手掌
         guard now - lastPencilTime < 1.5, let pp = lastPencilPoint else { return false }
         let p = t.location(in: view)
         guard p.y > pp.y - 40, p.y < pp.y + 320 else { return false }
-        if mode == "left" { return p.x < pp.x + 40 && p.x > pp.x - 320 }
-        return p.x > pp.x - 40 && p.x < pp.x + 320
+        if mode == "left" { return p.x < pp.x + 40 && p.x > pp.x - 450 }
+        return p.x > pp.x - 40 && p.x < pp.x + 450
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
@@ -185,12 +189,25 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             return !(o === canvas.panGestureRecognizer || o === canvas.pinchGestureRecognizer)
         }
         // 被動追蹤筆尖的辨識器要和 PencilKit 同時運作
-        let passive: [UIGestureRecognizer?] = [holdRecognizer, eraserTracker, pencilPointTracker]
-        return passive.contains { $0 === g || $0 === other }
+        let passive: [UIGestureRecognizer?] = [holdRecognizer, pencilPointTracker]
+        if passive.contains(where: { $0 === g || $0 === other }) { return true }
+        // 開了「用手指書寫」：寫字、擦除在手指一碰到就開始，不同時辨識的話點兩下永遠輪不到
+        guard g === doubleTapGesture || other === doubleTapGesture else { return false }
+        let o = g === doubleTapGesture ? other : g
+        return o === inkRecognizer || o === eraserCapture || o === canvas.drawingGestureRecognizer
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRequireFailureOf other: UIGestureRecognizer) -> Bool {
-        g === tapGesture && other === doubleTapGesture && tool == .select
+        g === tapGesture && other === doubleTapGesture && tool == .select && tapWaitsForDoubleTap(at: g.location(in: pagesContainer))
+    }
+
+    /// 選取工具點一下要不要先等「點兩下」失敗（大約 0.3～0.5 秒）。只有點一下會打開選單時要等：
+    /// 點在選起來的物件上（表格是選起來的格子上），不等的話點兩下會先閃出選單。
+    /// 選物件、選格子本來就是點兩下（打字、編輯）的第一步，馬上做；筆跡、空白處也馬上
+    func tapWaitsForDoubleTap(at p: CGPoint) -> Bool {
+        guard let hit = hitElement(at: p), hit == selected, case let (pi, ei)? = locate(hit) else { return false }
+        guard pages[pi].elements[ei].isTable else { return true }
+        return tableCellSel != nil && tableSelectionDocRect()?.contains(p) == true
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
@@ -198,18 +215,23 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         if g === inkRecognizer {
             return customInkActive && (other === canvas.drawingGestureRecognizer || other === canvas.panGestureRecognizer)
         }
+        // 橡皮擦也一樣：接住 Pencil 後頁面不會跟著捲動
+        if g === eraserCapture {
+            return tool == .eraser && (other === canvas.drawingGestureRecognizer || other === canvas.panGestureRecognizer)
+        }
         // 按在文字選取的控制點上：拖控制點，不捲動、不重新選
         if g === textHandlePan { return other === canvas.panGestureRecognizer || other === toolPan }
         return g === toolPan && other === canvas.panGestureRecognizer && tool.panYieldsToScroll
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        if g === tapGesture { tapOnlyClears = false }
         // 手掌的觸碰不觸發點選、長按、拖曳物件
         if g !== palmBlocker, touch.type == .direct, isPalmTouch(touch) { return false }
         // 編輯文字時，點文字框內部交給 UITextView
         if let tv = editingTextView, touch.view?.isDescendant(of: tv) == true { return false }
         // 自製筆刷只收 Pencil（開了「用手指書寫」才收手指）；沒收到觸碰就不會擋住頁面捲動
-        if g === inkRecognizer { return touch.type == .pencil || settings.fingerDrawing }
+        if g === inkRecognizer || g === eraserCapture { return touch.type == .pencil || settings.fingerDrawing }
         // 控制點：手指、Pencil 都可以拖；沒按在控制點上就不收，不會擋住捲動
         if g === textHandlePan { return textHandle(at: touch.location(in: pagesContainer)) != nil }
         if g === textLongPress {
@@ -219,25 +241,126 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             // 套索、截圖工具 Pencil 長按也可以貼上（套索長按圈選範圍內則打開套索選單）
             guard tool != .select, !(settings.fingerDrawing && tool.isDrawing) else { return false }
             let p = touch.location(in: pagesContainer)
-            if tool == .lasso, let sel = lassoSel, sel.bounds.insetBy(dx: -10, dy: -10).contains(p) { return true }
+            if tool == .lasso, lassoSelectionHit(p) { return true }
             if touch.type == .pencil { return (tool == .lasso || tool == .capture) && clipboardHasContent }
             guard touch.type == .direct, let i = pageIndex(containing: p) else { return false }
             return clipboardHasContent || session.pdfPage(for: pages[i]) != nil
         }
+        if g === doubleTapGesture { return doubleTapShouldReceive(touch) }
+        if g === toolPan, toolPan.numberOfTouches == 0 {
+            toolPanByDrawingTouch = touch.type == .pencil || settings.fingerDrawing
+        }
+        // 擴展頁面：選著的那一頁的控制點手指也能拉（按在控制點上不是捲動）；點一下換要擴展的頁面（頁面不是物件）
+        if tool == .pageResize, touch.type == .direct, !settings.fingerDrawing, g === toolPan || g === tapGesture {
+            return g === tapGesture || pageHandle(at: touch.location(in: pagesContainer)) != nil
+        }
+        // 手指（沒開「用手指書寫」）點空白處：取消選取。筆尖剛離開時碰到的是寫字的手、捲動中的是要停下來，都不算
+        if g === tapGesture, touch.type == .direct, !settings.fingerDrawing,
+           fingerTapClears(at: touch.location(in: pagesContainer)) {
+            tapOnlyClears = CACurrentMediaTime() - lastPencilTime >= 0.5 && !canvas.isDecelerating
+            return tapOnlyClears
+        }
+        // 手指（沒開「用手指書寫」）：只能拖動、點已經選起來的東西（和旁邊的控制點、按鈕），不能選新的；
+        // 其他地方交給捲動、縮放頁面
+        if touch.type == .direct, !settings.fingerDrawing,
+           g === tapGesture || g === toolPan || g === longPressGesture {
+            return fingerReachesSelection(at: touch.location(in: pagesContainer))
+        }
         // 截圖、PDF 文字、手繪表格、套索：沒開「用手指書寫」時只接受 Pencil，手指只用來捲動
         if g === toolPan, tool.drawsWithPan {
-            // 套索：手指按在圈選範圍內可以直接拖著移動（範圍外照樣捲動頁面）
-            if tool == .lasso, touch.type == .direct, lassoSelectionHit(touch.location(in: pagesContainer)) { return true }
+            // 套索：手指按在圈選範圍內（或縮放把手上）可以直接拖著移動、縮放（範圍外照樣捲動頁面）
+            if tool == .lasso, touch.type == .direct, lassoGrab(at: touch.location(in: pagesContainer)) != nil { return true }
             return touch.type == .pencil || settings.fingerDrawing
         }
         // 套索模式下 Pencil 或手指點鎖頭都可以
         if g === tapGesture, tool == .lasso, lockIconHit(at: touch.location(in: pagesContainer)) != nil { return true }
         if g === tapGesture, tool.isDrawing {
-            // 只有手指點在表格／圖片／文字框上才接手，其餘交給 PencilKit
-            guard touch.type == .direct, !settings.fingerDrawing else { return false }
-            return hitElement(at: touch.location(in: pagesContainer)) != nil
+            // 筆、螢光筆：Pencil 的點交給 PencilKit（手指已經在上面處理）
+            return false
         }
         return true
+    }
+
+    /// 點兩下收不收這個觸碰。手指：表格、電路圖上任何工具都收；Pencil：只有選取工具（別的工具是寫字、畫圖）
+    private func doubleTapShouldReceive(_ touch: UITouch) -> Bool {
+        let first = !doubleTapGesture.inProgress
+        if first { stepBeforeEditTap = nil }
+        guard touch.type == .direct else { return tool == .select }
+        let p = touch.location(in: pagesContainer)
+        if fingerEditTarget(at: p) != nil {
+            // 筆尖剛離開：碰到表格的是寫字的手
+            if tool != .select, CACurrentMediaTime() - lastPencilTime < 0.5 { return false }
+            if first, settings.fingerDrawing, tool != .select { stepBeforeEditTap = history.topStepID ?? 0 }
+            return true
+        }
+        return tool == .select && (settings.fingerDrawing || fingerReachesSelection(at: p))
+    }
+
+    /// 手指在 p 點兩下要編輯的表格、電路圖。正在編輯的電路圖除外（第二下是改名）；
+    /// 電路工具開了「用手指書寫」時，手指在電路圖上是放、選元件
+    func fingerEditTarget(at p: CGPoint) -> ElementRef? {
+        guard let hit = hitElement(at: p), case let (pi, ei)? = locate(hit) else { return nil }
+        let e = pages[pi].elements[ei]
+        if e.isTable { return hit }
+        guard e.isCircuit else { return nil }
+        if tool == .circuit, settings.fingerDrawing || hit == circuitTarget { return nil }
+        return hit
+    }
+
+    /// 有東西選著，p 是旁邊什麼都沒有的地方（手指點一下就取消選取）
+    private func fingerTapClears(at p: CGPoint) -> Bool {
+        switch tool {
+        case .select, .lasso, .image, .sticker:
+            return (selected != nil || lassoSel != nil) && isBlank(at: p)
+        case .circuit:
+            guard lockIconHit(at: p) == nil, !circuitSelectionHit(at: p), circuitHit(at: p) == nil else { return false }
+            // 沒選著元件：點在電路圖外面才算，裡面是在編輯它
+            return circuitSel != nil || (circuitTarget != nil && hitElement(at: p) == nil)
+        default:
+            return false
+        }
+    }
+
+    /// 沒有物件，也不是選起來的東西的控制點、按鈕（筆跡不算：手指本來就不能選）
+    private func isBlank(at p: CGPoint) -> Bool {
+        guard hitElement(at: p) == nil, lockIconHit(at: p) == nil, lassoGrab(at: p) == nil, dragTarget(at: p) == nil else { return false }
+        let z = canvas.zoomScale
+        if let t = imageDeleteTarget(), t.point.distance(to: p) < 20 / z { return false }
+        guard let h = selectedTableHandles()?.handles else { return true }
+        return !(h.plusCols + h.plusRows).contains { $0.point.distance(to: p) < 18 / z }
+    }
+
+    private func clearSelectionByTap(at p: CGPoint) {
+        endTextEditing()
+        if tool == .circuit {
+            // 外框跟著收掉；點在電路圖裡面的空白只取消元件
+            circuitSel = nil
+            if let ref = circuitTarget, let info = circuitInfo(ref),
+               !docFrame(of: info.element, pageIndex: info.pi).contains(p) {
+                circuitTarget = nil
+            }
+            rebuildSubBar()
+            updateCircuitChrome()
+        } else {
+            clearLassoSelection()
+            select(nil)
+        }
+        DebugLog.add("tap clears selection")
+    }
+
+    /// 手指按的地方是不是已經選起來的東西：選起來的物件（含表格的標頭、＋、控制點）、套索圈起來的範圍和縮放把手、
+    /// 選起來的電路元件／導線和旁邊的按鈕；鎖頭也可以點
+    func fingerReachesSelection(at p: CGPoint) -> Bool {
+        if lockIconHit(at: p) != nil { return true }
+        if lassoGrab(at: p) != nil { return true }
+        if tool == .circuit { return circuitSelectionHit(at: p) }
+        if dragTarget(at: p) != nil { return true }
+        guard let s = selected, case let (pi, ei)? = locate(s) else { return false }
+        // 點到別的物件：不能用手指選
+        if let hit = hitElement(at: p), hit != s { return false }
+        // 選起來的物件，和旁邊一圈（表格的標頭、＋在外框外面）
+        let m = 60 / canvas.zoomScale
+        return docFrame(of: pages[pi].elements[ei], pageIndex: pi).insetBy(dx: -m, dy: -m).contains(p)
     }
 
     /// 工具列的選單開著時滑頁面：頁面跟著捲、選單也看不見了，但系統沒有真的把選單關完（選單的容器還留在視窗裡），
@@ -314,11 +437,23 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
 
     @objc func handleToolPan(_ g: UIPanGestureRecognizer) {
         let p = g.location(in: pagesContainer)
+        if g.state == .began { DebugLog.add("tool pan began tool=\(tool)") }
         switch tool {
         case .capture: handleCapturePan(g, p)
         case .textSelect: handleTextPan(g, g.state == .began ? panTouchDownPoint(g) : p)
-        case .select, .image: handleElementPan(g, g.state == .began ? panTouchDownPoint(g) : p)
-        case .pageResize: handlePageResizePan(g, p)
+        // 選取工具選起的筆跡：和套索圈到的一樣拖曳移動、縮放
+        case .select where lassoMoveStart != nil || (g.state == .began && lassoGrab(at: panTouchDownPoint(g)) != nil):
+            handleLassoPan(g, g.state == .began ? panTouchDownPoint(g) : p)
+        // 選著物件、從空白處拖：換回套索圈選（工具列上本來就亮著套索）
+        case .select where g.state == .began && dragTarget(at: panTouchDownPoint(g)) == nil:
+            select(nil)
+            setTool(.lasso)
+            handleLassoPan(g, panTouchDownPoint(g))
+        // 貼紙工具選起來的筆跡貼紙：和套索圈到的一樣拖曳移動、縮放
+        case .sticker where lassoMoveStart != nil || (g.state == .began && lassoGrab(at: panTouchDownPoint(g)) != nil):
+            handleLassoPan(g, g.state == .began ? panTouchDownPoint(g) : p)
+        case .select, .image, .sticker: handleElementPan(g, g.state == .began ? panTouchDownPoint(g) : p)
+        case .pageResize: handlePageResizePan(g, g.state == .began ? panTouchDownPoint(g) : p)
         case .lasso: handleLassoPan(g, g.state == .began ? panTouchDownPoint(g) : p)
         case .tableDraw: handleTableDrawPan(g, p)
         case .circuit: handleCircuitPan(g, p)
@@ -328,16 +463,32 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
 
     @objc func handleTap(_ g: UITapGestureRecognizer) {
         let p = g.location(in: pagesContainer)
+        if tapOnlyClears {
+            tapOnlyClears = false
+            clearSelectionByTap(at: p)
+            return
+        }
         if editingTextView != nil {
+            // 點在空白處：一下就結束打字並取消選取（要先看，結束打字會拿掉空的文字框）
+            let clears = tool == .select && isBlank(at: p)
             endTextEditing()
+            if clears { clearSelectionByTap(at: p) }
             return
         }
         switch tool {
         case .lasso:
+            // 套索也是選取工具：點物件選起物件（表格選那一格），點筆跡選那一筆
             if let ref = lockIconHit(at: p) {
                 toggleLock(ref)
-            } else if let sel = lassoSel, sel.bounds.insetBy(dx: -10, dy: -10).contains(p) {
+            } else if lassoSelectionHit(p) {
                 presentLassoMenu()
+            } else if let hit = hitElement(at: p) {
+                clearLassoSelection()
+                setTool(.select)
+                select(hit)
+                if case let (pi, ei)? = locate(hit), pages[pi].elements[ei].isTable { updateCellSelection(from: p, to: p) }
+            } else if let ink = inkSelection(at: p) {
+                selectInk(ink)
             } else {
                 clearLassoSelection()
             }
@@ -363,6 +514,17 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
                 toggleLock(ref)
                 return
             }
+            // 點在選起來的筆跡上：打開選單（和套索一樣）
+            if lassoSelectionHit(p) {
+                presentLassoMenu()
+                return
+            }
+            // 點在筆跡上就選筆跡（選起來的物件、表格優先，才能繼續操作它）
+            if hitElement(at: p).map({ $0 != selected }) ?? true, let ink = inkSelection(at: p) {
+                selectInk(ink)
+                return
+            }
+            clearLassoSelection()
             if let hit = hitElement(at: p) {
                 if case let (pi, ei)? = locate(hit), pages[pi].elements[ei].isTable {
                     // 點在選起來的格子上：打開選單（和套索一樣）；點別格：改選那一格。打字是點兩下
@@ -388,21 +550,40 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
                 endTextSelection()
             }
         case .capture:
-            clearCapture()
+            if let region = captureRegion, region.bounds.contains(p) {
+                finishCapture(region)
+            } else {
+                clearCapture()
+            }
         case .pageResize:
             if let i = pageIndex(containing: p) {
                 resizePageIndex = i
                 updatePageResizeChrome()
             }
-        case .image:
-            // 圖片工具：點圖片選起來（可以拖曳、拉右下角調整大小），點空白處取消；左上角的鎖頭、紅色叉叉也能點
+        case .image, .sticker:
+            // 圖片、貼紙工具：點圖片選起來（可以拖曳、拉右下角調整大小），點空白處取消；左上角的鎖頭、紅色叉叉也能點
             if handleImageDeleteTap(at: p) { return }
             if let ref = lockIconHit(at: p) {
                 toggleLock(ref)
                 return
             }
+            if tool == .sticker {
+                // 筆跡貼紙（貼上的是真的筆跡）：點一下整張選起來，再點一下打開選單
+                if lassoSel != nil, lassoSelectionHit(p) {
+                    presentLassoMenu()
+                    return
+                }
+                if hitElement(at: p) == nil, let sel = stickerInkSelection(at: p) {
+                    selectInk(sel)
+                    return
+                }
+                clearLassoSelection()
+            }
             if let hit = hitElement(at: p), case let (pi, ei)? = locate(hit), case .image = pages[pi].elements[ei].content {
                 select(hit)
+            } else if tool == .sticker, let s = stickerStrip.selectedSticker, pageIndex(containing: p) != nil {
+                // 選著下面那一排的貼紙：點頁面就貼在那裡
+                placeSticker(s, at: p)
             } else {
                 select(nil)
             }
@@ -415,18 +596,41 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
 
     @objc func handleDoubleTap(_ g: UITapGestureRecognizer) {
         let p = g.location(in: pagesContainer)
-        if tool == .circuit {
-            handleCircuitDoubleTap(at: p)
+        guard let step = stepBeforeEditTap else {
+            editElement(at: p)
             return
         }
-        guard tool == .select else { return }
+        stepBeforeEditTap = nil
+        // 這時第二下還沒寫完（PencilKit 的那一筆也晚一點才送來）：等它記好，再一起收回
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self else { return }
+            self.discardEdits(after: step)
+            self.editElement(at: p)
+        }
+    }
+
+    /// 點兩下：表格打字、電路圖切到電路工具；選取工具裡還有文字框、圖片
+    private func editElement(at p: CGPoint) {
+        guard tool == .select || fingerEditTarget(at: p) != nil else { return }
         guard let hit = hitElement(at: p), case let (pi, ei)? = locate(hit) else { return }
-        select(hit)
         let e = pages[pi].elements[ei]
+        if tool != .select {
+            if e.isCircuit {
+                editCircuit(hit)
+                return
+            }
+            setTool(.select)
+        }
+        select(hit)
         switch e.content {
         case let .table(t):
             let local = p - contentOrigin(pi) - e.frame.origin
-            if let cell = t.cell(at: local) { beginTextEditing(hit, cell: cell) }
+            guard let cell = t.cell(at: local) else { return }
+            // 先結束上一格的打字：打字中不會更新選到的格子
+            endTextEditing()
+            updateCellSelection(from: p, to: p)
+            beginTextEditing(hit, cell: cell)
+            DebugLog.add("double tap edit table r\(cell.row) c\(cell.col)")
         case .text:
             beginTextEditing(hit, cell: nil)
         case .image:
@@ -438,7 +642,13 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
 
     /// 切到電路工具編輯這個電路圖
     func editCircuit(_ ref: ElementRef) {
+        if case let (pi, ei)? = locate(ref), pages[pi].elements[ei].locked {
+            showToast(L("電路圖已鎖定，點鎖頭解除才能編輯"))
+            return
+        }
         setTool(.circuit)
+        // 從別的電路圖換過來：選著的元件是那一張的
+        if circuitTarget != ref { circuitSel = nil }
         circuitTarget = ref
         rebuildSubBar()
         updateCircuitChrome()
@@ -448,7 +658,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
     @objc func handleTextLongPress(_ g: UILongPressGestureRecognizer) {
         guard g.state == .began else { return }
         let p = g.location(in: pagesContainer)
-        if tool == .lasso, let sel = lassoSel, sel.bounds.insetBy(dx: -10, dy: -10).contains(p) {
+        if tool == .lasso, lassoSelectionHit(p) {
             presentLassoMenu()
             return
         }
@@ -461,10 +671,10 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             return
         }
         var items: [UIMenuElement] = [
-            UIAction(title: "貼上", image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in self?.pasteFromClipboard(at: p) },
+            UIAction(title: L("貼上"), image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in self?.pasteFromClipboard(at: p) },
         ]
         if onPDF {
-            items.append(UIAction(title: "選取文字", image: UIImage(systemName: "character.cursor.ibeam")) { [weak self] _ in
+            items.append(UIAction(title: L("選取文字"), image: UIImage(systemName: "character.cursor.ibeam")) { [weak self] _ in
                 self?.setTool(.textSelect)
                 self?.tapText(at: p)
             })
@@ -481,23 +691,27 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
     }
 
     @objc func handleLongPress(_ g: UILongPressGestureRecognizer) {
-        guard g.state == .began, tool == .select || tool == .image || tool == .circuit else { return }
+        guard g.state == .began, tool == .select || tool == .image || tool == .sticker else { return }
         endTextEditing()
         let p = g.location(in: pagesContainer)
-        if tool == .circuit {
-            presentCircuitMenu(at: p)
-            return
-        }
         // 長按標頭：選整欄（整列，已經選了好幾欄就不變），跳出列與欄的選單
         if let h = tableHeaderHit(at: p) {
             presentTableHeaderMenu(h, at: p)
             return
         }
-        if let hit = hitElement(at: p) {
+        let hit = hitElement(at: p)
+        if tool == .select, lassoSelectionHit(p) {
+            presentLassoMenu()
+        } else if tool == .select, hit.map({ $0 != selected }) ?? true, let ink = inkSelection(at: p) {
+            // 長按筆跡：選起來並打開選單（和點一下一樣，選起來的物件優先）
+            selectInk(ink)
+            presentLassoMenu()
+        } else if let hit {
             select(hit)
             presentMenu(elementMenu(hit, at: p), atDocPoint: p)
         } else {
             select(nil)
+            clearLassoSelection()
             presentMenu(emptyAreaMenu(at: p), atDocPoint: p)
         }
     }
@@ -527,9 +741,6 @@ extension NotebookViewController: UIEditMenuInteractionDelegate {
 
     func editMenuInteraction(_ interaction: UIEditMenuInteraction, willDismissMenuFor configuration: UIEditMenuConfiguration,
                              animator: UIEditMenuInteractionAnimating) {
-        if tool == .capture {
-            animator.addCompletion { [weak self] in self?.clearCapture() }
-        }
     }
 }
 
@@ -563,6 +774,8 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
 
     func select(_ ref: ElementRef?) {
         let changed = ref != selected
+        // 選物件就不再選著筆跡（選取工具兩種只會選一種）
+        if ref != nil { clearLassoSelection() }
         selected = ref
         if changed { tableCellSel = nil }
         updateSelectionChrome()
@@ -575,6 +788,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             updateTableCellChrome()
             updateLockChrome()
             updateCircuitChrome()
+            updateLassoChrome()
         }
         guard let ref = selected, case let (pi, ei)? = locate(ref) else {
             overlay.showSelection(nil, locked: false, handle: nil)
@@ -582,7 +796,33 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         }
         let e = pages[pi].elements[ei]
         let r = docFrame(of: e, pageIndex: pi)
-        overlay.showSelection(r, locked: e.locked, handle: e.locked ? nil : CGPoint(x: r.maxX, y: r.maxY))
+        // 電路圖不能拉角落縮放（元件、導線照格點排），不顯示縮放把手
+        let handle = e.isTable ? tableScaleHandlePoint(r) : CGPoint(x: r.maxX, y: r.maxY)
+        let edges = e.locked ? [] : e.isTextBox ? Self.edgeHandlePoints(r) : e.isTable ? tableEdgeHandlePoints(r) : []
+        overlay.showSelection(r, locked: e.locked, handle: e.locked || e.isCircuit ? nil : handle, edges: edges)
+    }
+
+    /// 表格的縮放把手：右下角外面斜下方。角落本身是最後一條直線、橫線的圓點（在下方、右邊）和填滿點，
+    /// 放在角落上會互相搶，很難點到
+    func tableScaleHandlePoint(_ r: CGRect) -> CGPoint {
+        let off = 32 / canvas.zoomScale
+        return CGPoint(x: r.maxX + off, y: r.maxY + off)
+    }
+
+    /// 表格的整體寬、高把手：右邊最上面（只改寬度）、下面最左邊（只改高度）。
+    /// 第一條線是外框，那裡沒有格線圓點，不會和圓點疊在一起
+    func tableEdgeHandlePoints(_ r: CGRect) -> [(BoxEdge, CGPoint)] {
+        let off = 32 / canvas.zoomScale
+        return [(.right, CGPoint(x: r.maxX + off, y: r.minY)), (.bottom, CGPoint(x: r.minX, y: r.maxY + off))]
+    }
+
+    /// 文字框的字級（工具列的放大縮小、右下角的等比例縮放）
+    static let textSizeRange: ClosedRange<CGFloat> = 8...72
+
+    /// 文字框四邊中間的把手（上、下、左、右）
+    static func edgeHandlePoints(_ r: CGRect) -> [(BoxEdge, CGPoint)] {
+        [(.top, CGPoint(x: r.midX, y: r.minY)), (.bottom, CGPoint(x: r.midX, y: r.maxY)),
+         (.left, CGPoint(x: r.minX, y: r.midY)), (.right, CGPoint(x: r.maxX, y: r.midY))]
     }
 
     func dragTarget(at p: CGPoint) -> (ElementRef, DragKind)? {
@@ -591,14 +831,21 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         let r = docFrame(of: e, pageIndex: pi)
         let tol = 16 / canvas.zoomScale
         if case let .table(t) = e.content, t.size.width > 0, t.size.height > 0 {
+            // 縮放、整體寬高的把手和其他控制點分開放：按在附近（又比格線圓點近）就是它
+            if !e.locked {
+                let sizers = [(DragKind.resize, tableScaleHandlePoint(r))] + tableEdgeHandlePoints(r).map { (DragKind.edge($0.0), $0.1) }
+                if let s = sizers.min(by: { p.distance(to: $0.1) < p.distance(to: $1.1) }), p.distance(to: s.1) < tol * 1.5,
+                   p.distance(to: s.1) <= nearestTableGrip(to: p)?.distance ?? .greatestFiniteMagnitude {
+                    return (ref, s.0)
+                }
+            }
             // 上方、左邊的標頭：拖兩個標頭的分界＝調整欄寬（列高），拖標頭本身＝選好幾欄（列）
             if let line = tableHeaderBoundary(at: p) { return (ref, line) }
-            // 表格外側的格線圓點（比右下角的縮放點優先）
+            // 表格外側的格線圓點
             if let grip = tableGripTarget(at: p) { return (ref, grip) }
             if let h = tableHeaderHit(at: p) { return (ref, h.columns ? .colHeaders(h.index) : .rowHeaders(h.index)) }
             if !e.locked, let f = tableFillHandlePoint(), p.distance(to: f) < tol * 1.3 { return (ref, .fill) }
             if !e.locked {
-                if p.distance(to: CGPoint(x: r.maxX, y: r.maxY)) < tol * 1.5 { return (ref, .resize) }
                 if let m = tableMoveHandlePoint(), p.distance(to: m) < tol * 1.4 { return (ref, .move) }
                 // 外框邊緣也能拖動整個表格
                 let outer = r.insetBy(dx: -tol, dy: -tol), innerArea = r.insetBy(dx: tol * 0.6, dy: tol * 0.6)
@@ -624,6 +871,9 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         }
         guard !e.locked else { return nil }
         if !e.isCircuit, p.distance(to: CGPoint(x: r.maxX, y: r.maxY)) < tol * 1.5 { return (ref, .resize) }
+        if e.isTextBox, let edge = Self.edgeHandlePoints(r).first(where: { p.distance(to: $0.1) < tol * 1.5 })?.0 {
+            return (ref, .edge(edge))
+        }
         guard r.insetBy(dx: -tol, dy: -tol).contains(p) else { return nil }
         return (ref, .move)
     }
@@ -718,14 +968,52 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             case .image:
                 let w = min(max(30, o.width + dx), room.width, room.height * o.width / max(o.height, 1))
                 e.frame.size = CGSize(width: w, height: w * o.height / max(o.width, 1))
-            case .text:
-                e.frame.size = CGSize(width: min(max(40, o.width + dx), room.width), height: min(max(28, o.height + dy), room.height))
+            case var .text(t):
+                // 字和框一起等比例縮放（照拖的方向投影到對角線上，和縮放筆跡一樣）
+                let diag = o.width * o.width + o.height * o.height
+                var k = 1 + (dx * o.width + dy * o.height) / max(diag, 1)
+                k = max(k, 40 / max(o.width, 1), 28 / max(o.height, 1), Self.textSizeRange.lowerBound / t.fontSize)
+                k = min(k, room.width / max(o.width, 1), room.height / max(o.height, 1), Self.textSizeRange.upperBound / t.fontSize)
+                e.frame.size = CGSize(width: o.width * k, height: o.height * k)
+                t.fontSize = (t.fontSize * k * 2).rounded() / 2
+                e.content = .text(t)
             case var .table(t):
-                t.scale(to: CGSize(width: min(o.width + dx, room.width), height: min(o.height + dy, room.height)))
+                // 整個表格（格子和字）等比例縮放：照拖的方向投影到對角線上，和文字框一樣
+                let diag = o.width * o.width + o.height * o.height
+                var k = 1 + (dx * o.width + dy * o.height) / max(diag, 1)
+                k = max(k, Self.textSizeRange.lowerBound / t.fontSize)
+                k = min(k, room.width / max(o.width, 1), room.height / max(o.height, 1), Self.textSizeRange.upperBound / t.fontSize)
+                t.scale(to: CGSize(width: o.width * k, height: o.height * k))
+                t.fontSize = (t.fontSize * k * 2).rounded() / 2
                 e.content = .table(t)
                 e.frame.size = t.size
             case .circuit:
                 break
+            }
+        case let .edge(side):
+            // 只拉這一邊，對面那一邊不動；不超出頁面
+            guard case let (pi, _)? = locate(d.ref) else { break }
+            let ins = pages[pi].insets
+            let room = pageRoom(for: d.ref, from: o.origin)
+            if case var .table(t) = e.content {
+                // 表格：所有欄一起變寬（所有列一起變高），字不變
+                t.scale(to: CGSize(width: side == .right ? min(o.width + dx, room.width) : o.width,
+                                   height: side == .bottom ? min(o.height + dy, room.height) : o.height))
+                e.content = .table(t)
+                e.frame.size = t.size
+                break
+            }
+            switch side {
+            case .top:
+                let y = min(max(-ins.top, o.minY + dy), o.maxY - 28)
+                e.frame = CGRect(x: o.minX, y: y, width: o.width, height: o.maxY - y)
+            case .bottom:
+                e.frame.size.height = min(max(28, o.height + dy), room.height)
+            case .left:
+                let x = min(max(-ins.left, o.minX + dx), o.maxX - 40)
+                e.frame = CGRect(x: x, y: o.minY, width: o.maxX - x, height: o.height)
+            case .right:
+                e.frame.size.width = min(max(40, o.width + dx), room.width)
             }
         case let .colLine(c):
             if case var .table(t) = e.content {
@@ -814,10 +1102,13 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         guard case let (pi, ei)? = locate(ref) else { return UIMenu() }
         let e = pages[pi].elements[ei]
         var items: [UIMenuElement] = []
-        items.append(UIAction(title: e.locked ? "解除固定" : "固定位置",
-                              image: UIImage(systemName: e.locked ? "lock.open" : "lock")) { [weak self] _ in
-            self?.modifyElement(ref) { $0.locked.toggle() }
-        })
+        // 圖片、電路圖左上角有鎖頭，選單就不重複放「固定位置」
+        if !(e.isImage || e.isCircuit) {
+            items.append(UIAction(title: e.locked ? L("解除固定") : L("固定位置"),
+                                  image: UIImage(systemName: e.locked ? "lock.open" : "lock")) { [weak self] _ in
+                self?.modifyElement(ref) { $0.locked.toggle() }
+            })
+        }
         switch e.content {
         case let .table(t):
             // 長按的格子不在選取範圍裡：改選這一格
@@ -832,47 +1123,51 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             // 表格的長按選單只放文字、拷貝、剪下、貼上（其他功能在工具列；固定位置是左上角的鎖頭）
             return UIMenu(children: tableCellMenuItems(ref, cell: cell))
         case .text:
-            items.append(UIAction(title: "編輯文字", image: UIImage(systemName: "keyboard")) { [weak self] _ in
+            items.append(UIAction(title: L("編輯文字"), image: UIImage(systemName: "keyboard")) { [weak self] _ in
                 self?.beginTextEditing(ref, cell: nil)
             })
-            items.append(UIMenu(title: "樣式", image: UIImage(systemName: "textformat.size"), children: [
-                UIAction(title: "字放大") { [weak self] _ in self?.modifyTextBox(ref) { $0.fontSize = min($0.fontSize + 2, 72) } },
-                UIAction(title: "字縮小") { [weak self] _ in self?.modifyTextBox(ref) { $0.fontSize = max($0.fontSize - 2, 8) } },
-                UIAction(title: "無底色") { [weak self] _ in self?.modifyTextBox(ref) { $0.backgroundHex = nil } },
-                UIAction(title: "黃色便利貼") { [weak self] _ in self?.modifyTextBox(ref) { $0.backgroundHex = "#FFF59DFF" } },
-                UIAction(title: "藍色便利貼") { [weak self] _ in self?.modifyTextBox(ref) { $0.backgroundHex = "#BBDEFBFF" } },
-                UIAction(title: "紅字") { [weak self] _ in self?.modifyTextBox(ref) { $0.colorHex = "#D32F2FFF" } },
-                UIAction(title: "黑字") { [weak self] _ in self?.modifyTextBox(ref) { $0.colorHex = "#1A1A1AFF" } },
+            items.append(UIMenu(title: L("樣式"), image: UIImage(systemName: "textformat.size"), children: [
+                UIAction(title: L("字體…"), image: UIImage(systemName: "textformat")) { [weak self] _ in self?.presentFontPicker(ref) },
+                UIAction(title: L("字放大")) { [weak self] _ in self?.modifyTextBox(ref) { $0.fontSize = min($0.fontSize + 2, Self.textSizeRange.upperBound) } },
+                UIAction(title: L("字縮小")) { [weak self] _ in self?.modifyTextBox(ref) { $0.fontSize = max($0.fontSize - 2, Self.textSizeRange.lowerBound) } },
+                UIAction(title: L("無底色")) { [weak self] _ in self?.modifyTextBox(ref) { $0.backgroundHex = nil } },
+                UIAction(title: L("黃色便利貼")) { [weak self] _ in self?.modifyTextBox(ref) { $0.backgroundHex = "#FFF59DFF" } },
+                UIAction(title: L("藍色便利貼")) { [weak self] _ in self?.modifyTextBox(ref) { $0.backgroundHex = "#BBDEFBFF" } },
+                UIAction(title: L("紅字")) { [weak self] _ in self?.modifyTextBox(ref) { $0.colorHex = "#D32F2FFF" } },
+                UIAction(title: L("黑字")) { [weak self] _ in self?.modifyTextBox(ref) { $0.colorHex = "#1A1A1AFF" } },
             ]))
         case let .image(d):
-            items.append(UIAction(title: "釘選在畫面上", image: UIImage(systemName: "pin")) { [weak self] _ in
+            items.append(UIAction(title: L("釘選在畫面上"), image: UIImage(systemName: "pin")) { [weak self] _ in
                 guard let self, let img = self.session.image(named: d.file) else { return }
                 self.pinOverlay.addPin(image: img, near: self.docRectInView(self.docFrame(of: e, pageIndex: pi)))
             })
+            // 變成貼紙：先選分類，再選裁切範圍、要不要去背
+            let file = d.file
+            items.append(UIAction(title: L("變成貼紙"), image: UIImage(systemName: "seal")) { [weak self] _ in
+                self?.makeSticker(fromImageFile: file)
+            })
         case .circuit:
-            items.append(UIAction(title: "編輯電路", image: UIImage(systemName: "bolt")) { [weak self] _ in
+            items.append(UIAction(title: L("編輯電路"), image: UIImage(systemName: "bolt")) { [weak self] _ in
                 self?.editCircuit(ref)
             })
-            items.append(UIAction(title: "匯出 SVG", image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
-                self?.exportCircuitSVG(ref)
-            })
+            items.append(contentsOf: circuitExportMenu(ref) { nil })
         }
         items.append(UIMenu(options: .displayInline, children: [
-            UIAction(title: "拷貝", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in self?.copyElement(ref) },
-            UIAction(title: "剪下", image: UIImage(systemName: "scissors")) { [weak self] _ in self?.cutElement(ref) },
-            UIAction(title: "複製一份", image: UIImage(systemName: "plus.square.on.square")) { [weak self] _ in self?.duplicateElement(ref) },
-            UIAction(title: "刪除", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in self?.deleteElement(ref) },
+            UIAction(title: L("拷貝"), image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in self?.copyElement(ref) },
+            UIAction(title: L("剪下"), image: UIImage(systemName: "scissors")) { [weak self] _ in self?.cutElement(ref) },
+            UIAction(title: L("複製一份"), image: UIImage(systemName: "plus.square.on.square")) { [weak self] _ in self?.duplicateElement(ref) },
+            UIAction(title: L("刪除"), image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in self?.deleteElement(ref) },
         ]))
         return UIMenu(children: items)
     }
 
     func emptyAreaMenu(at p: CGPoint) -> UIMenu {
         UIMenu(children: [
-            UIAction(title: "貼上", image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in self?.pasteFromClipboard(at: p) },
-            UIAction(title: "插入表格…", image: UIImage(systemName: "tablecells")) { [weak self] _ in
+            UIAction(title: L("貼上"), image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in self?.pasteFromClipboard(at: p) },
+            UIAction(title: L("插入表格…"), image: UIImage(systemName: "tablecells")) { [weak self] _ in
                 self?.presentInsertTablePanel(anchor: .doc(CGRect(x: p.x, y: p.y, width: 1, height: 1)), at: p)
             },
-            UIAction(title: "插入文字框", image: UIImage(systemName: "character.textbox")) { [weak self] _ in self?.insertTextBox(at: p) },
+            UIAction(title: L("插入文字框"), image: UIImage(systemName: "character.textbox")) { [weak self] _ in self?.insertTextBox(at: p) },
         ])
     }
 
@@ -889,6 +1184,12 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             e.content = .table(t)
             e.frame.size = t.size
         }
+    }
+
+    /// 換字體；新的文字框沿用
+    func setTextBoxFont(_ ref: ElementRef, name: String?) {
+        TextFonts.lastUsed = name
+        modifyTextBox(ref) { $0.fontName = name }
     }
 
     func modifyTextBox(_ ref: ElementRef, _ change: @escaping (inout TextBoxData) -> Void) {
@@ -928,6 +1229,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         var e = pages[pi].elements[ei]
         e.id = UUID()
         e.locked = false
+        e.refreshCircuitIDs()
         e.frame = e.frame.offsetBy(dx: 24, dy: 24)
         e.snapCircuitToGrid()
         let copy = e
@@ -967,8 +1269,8 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
                             content: content)
         updatePage(pi) { $0.elements.append(e) }
         let ref = ElementRef(pageID: page.id, elementID: e.id)
-        // 圖片工具：留在工具裡，可以接著加下一張；剛加的先選起來，可以馬上拖曳、調整大小
-        if tool == .image {
+        // 圖片、貼紙工具：留在工具裡，可以接著加下一張；剛加的先選起來，可以馬上拖曳、調整大小
+        if tool == .image || tool == .sticker {
             select(ref)
             return ref
         }
@@ -979,6 +1281,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
 
     func insertTextBox(at p: CGPoint?, text: String = "") {
         var t = TextBoxData(text: text)
+        t.fontName = TextFonts.lastUsed
         let width: CGFloat = 260
         t.text = text
         let h = max(44, ElementRenderer.textHeight(t, width: width))
@@ -1012,7 +1315,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             k += 1
         }
         insertImage(image, jpeg: true, at: c)
-        showToast("已加到第 \(pageIndex(containing: c).map { $0 + 1 } ?? pi + 1) 頁")
+        showToast(L("已加到第 \(pageIndex(containing: c).map { $0 + 1 } ?? pi + 1) 頁"))
     }
 
     func pasteFromClipboard(at p: CGPoint?) {
@@ -1026,6 +1329,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
             var e = clip.element
             e.id = UUID()
             e.locked = false
+            e.refreshCircuitIDs()
             _ = insertElement(e.content, size: e.frame.size, at: p)
             return
         }
@@ -1034,7 +1338,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         } else if let s = pb.string, !s.isEmpty {
             insertTextBox(at: p, text: s)
         } else {
-            showMessage("剪貼簿是空的")
+            showMessage(L("剪貼簿是空的"))
         }
     }
 
@@ -1066,6 +1370,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         var rect = docFrame(of: e, pageIndex: pi)
         var text = ""
         var fontSize: CGFloat = 16
+        var fontName: String?
         var color = UIColor(hex: TableData.defaultTextColor)
         switch e.content {
         case let .table(t):
@@ -1078,6 +1383,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         case let .text(t):
             text = t.text
             fontSize = t.fontSize
+            fontName = t.fontName
             color = UIColor(hex: t.colorHex)
             rect.size.height = max(rect.height, 80)
         case .image, .circuit:
@@ -1085,7 +1391,7 @@ extension NotebookViewController: UITextViewDelegate, PHPickerViewControllerDele
         }
         let z = canvas.zoomScale
         let tv = EditorTextView(frame: pagesContainer.convert(rect, to: canvas))
-        tv.font = .systemFont(ofSize: fontSize * z)
+        tv.font = TextFonts.font(fontName, size: fontSize * z)
         tv.textColor = color
         tv.text = text
         tv.backgroundColor = UIColor.white.withAlphaComponent(0.97)
@@ -1140,16 +1446,69 @@ extension NotebookViewController {
     func handleCapturePan(_ g: UIPanGestureRecognizer, _ p: CGPoint) {
         switch g.state {
         case .began:
+            // 從截好的範圍的錨點（或框裡）開始拖：調整大小（移動），不是重新截
+            let down = panTouchDownPoint(g)
+            if let region = captureRegion, let h = captureHandle(at: down, in: region.bounds) {
+                captureDrag = (h, down, region.copy() as! UIBezierPath)
+                editMenu.dismissMenu()
+                updateCaptureDrag(to: p)
+                return
+            }
+            captureRegion = nil
             capturePoints = [p]
         case .changed:
+            if captureDrag != nil { updateCaptureDrag(to: p); return }
             capturePoints.append(p)
             overlay.showCapture(currentCapturePath())
         case .ended:
+            if captureDrag != nil {
+                updateCaptureDrag(to: p)
+                captureDrag = nil
+                finishCapture(captureRegion)
+                return
+            }
             capturePoints.append(p)
             finishCapture(currentCapturePath())
         default:
             clearCapture()
         }
+    }
+
+    /// 截圖範圍的錨點（文件座標）：四個角、四邊的中點
+    static func captureHandlePoints(_ r: CGRect) -> [CGPoint] {
+        [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY), CGPoint(x: r.maxX, y: r.maxY), CGPoint(x: r.minX, y: r.maxY),
+         CGPoint(x: r.midX, y: r.minY), CGPoint(x: r.maxX, y: r.midY), CGPoint(x: r.midX, y: r.maxY), CGPoint(x: r.minX, y: r.midY)]
+    }
+
+    /// p 碰到哪個錨點（0…7）；在框裡但沒碰到錨點是 -1（移動）；都不是 nil
+    func captureHandle(at p: CGPoint, in r: CGRect) -> Int? {
+        let reach = 26 / max(canvas.zoomScale, 0.01)
+        let pts = Self.captureHandlePoints(r)
+        if let i = pts.indices.min(by: { pts[$0].distance(to: p) < pts[$1].distance(to: p) }), pts[i].distance(to: p) <= reach { return i }
+        return r.contains(p) ? -1 : nil
+    }
+
+    /// 拉錨點：只動那個角（邊）；-1 整個移動。手繪的範圍跟著縮放
+    static func resizedCaptureRect(_ r: CGRect, handle: Int, dx: CGFloat, dy: CGFloat, minSide: CGFloat = 16) -> CGRect {
+        if handle < 0 { return r.offsetBy(dx: dx, dy: dy) }
+        var minX = r.minX, minY = r.minY, maxX = r.maxX, maxY = r.maxY
+        if [0, 3, 7].contains(handle) { minX = min(minX + dx, maxX - minSide) }
+        if [1, 2, 5].contains(handle) { maxX = max(maxX + dx, minX + minSide) }
+        if [0, 1, 4].contains(handle) { minY = min(minY + dy, maxY - minSide) }
+        if [2, 3, 6].contains(handle) { maxY = max(maxY + dy, minY + minSide) }
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
+    private func updateCaptureDrag(to p: CGPoint) {
+        guard let d = captureDrag else { return }
+        let old = d.path.bounds
+        let new = Self.resizedCaptureRect(old, handle: d.handle, dx: p.x - d.start.x, dy: p.y - d.start.y)
+        let path = d.path.copy() as! UIBezierPath
+        path.apply(CGAffineTransform(translationX: new.minX, y: new.minY)
+            .scaledBy(x: new.width / max(old.width, 0.01), y: new.height / max(old.height, 0.01))
+            .translatedBy(x: -old.minX, y: -old.minY))
+        captureRegion = path
+        overlay.showCapture(path, handles: Self.captureHandlePoints(path.bounds))
     }
 
     func currentCapturePath() -> UIBezierPath? {
@@ -1167,49 +1526,87 @@ extension NotebookViewController {
 
     func clearCapture() {
         capturePoints = []
+        captureRegion = nil
+        captureDrag = nil
         overlay.showCapture(nil)
     }
 
-    private func finishCapture(_ path: UIBezierPath?) {
+    /// 截好（或調整完）：畫出範圍和錨點，跳出選單
+    func finishCapture(_ path: UIBezierPath?) {
         guard let path, path.bounds.width > 8, path.bounds.height > 8, let img = renderRegion(path) else {
             clearCapture()
             return
         }
-        overlay.showCapture(path)
+        capturePoints = []
+        captureRegion = path
+        overlay.showCapture(path, handles: Self.captureHandlePoints(path.bounds))
         let rect = path.bounds
-        let viewRect = docRectInView(rect)
-        let menu = UIMenu(children: [
-            UIAction(title: "釘選在畫面上", image: UIImage(systemName: "pin")) { [weak self] _ in
+        presentMenu(captureMenu(img, viewRect: docRectInView(rect)), atDocPoint: CGPoint(x: rect.midX, y: rect.minY), avoiding: rect)
+    }
+
+    /// 分享、翻譯的小視窗指的位置：截圖範圍上緣中間（放不下就下緣）的一點，限制在畫面裡。
+    /// 指著整個範圍的話，範圍很大時小視窗沒有地方放，只畫出一半
+    func captureAnchor(_ viewRect: CGRect) -> CGRect {
+        let safe = view.bounds.inset(by: view.safeAreaInsets).insetBy(dx: 20, dy: 20)
+        guard !safe.isEmpty else { return CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1) }
+        let top = viewRect.minY > safe.minY + 60 ? viewRect.minY : min(viewRect.maxY, safe.maxY)
+        let x = min(max(viewRect.midX, safe.minX), safe.maxX)
+        let y = min(max(top, safe.minY), safe.maxY)
+        return CGRect(x: x, y: y, width: 1, height: 1)
+    }
+
+    /// 等選單收起來再跳出分享（同時進行動畫會畫壞）
+    func presentShareSheet(_ items: [Any], anchor: CGRect) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.presentedViewController == nil else { return }
+            let vc = UIActivityViewController(activityItems: items, applicationActivities: nil)
+            if let pop = vc.popoverPresentationController {
+                pop.sourceView = self.view
+                pop.sourceRect = anchor
+                pop.permittedArrowDirections = .any
+            }
+            self.present(vc, animated: true)
+        }
+    }
+
+    /// 截圖的選單。選單列放不下時後面的會收到第二頁：分享放最前面，不用再翻
+    func captureMenu(_ img: UIImage, viewRect: CGRect) -> UIMenu {
+        UIMenu(children: [
+            UIAction(title: L("分享…"), image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
+                guard let self else { return }
+                self.presentShareSheet([img], anchor: self.captureAnchor(viewRect))
+                self.clearCapture()
+            },
+            UIAction(title: L("釘選在畫面上"), image: UIImage(systemName: "pin")) { [weak self] _ in
                 self?.pinOverlay.addPin(image: img, near: viewRect)
+                self?.clearCapture()
             },
-            UIAction(title: "拷貝", image: UIImage(systemName: "doc.on.doc")) { _ in
+            UIAction(title: L("拷貝"), image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
                 UIPasteboard.general.image = img
+                self?.clearCapture()
             },
-            UIAction(title: "翻譯文字", image: UIImage(systemName: "translate")) { [weak self] _ in
-                TextServices.recognizeText(in: img) { text in
+            UIAction(title: L("翻譯文字"), image: UIImage(systemName: "translate")) { [weak self] _ in
+                guard let self else { return }
+                let anchor = self.captureAnchor(viewRect)
+                self.clearCapture()
+                TextServices.recognizeText(in: img) { [weak self] text in
                     guard let self else { return }
-                    if text.isEmpty { self.showMessage("沒有辨識到文字"); return }
-                    TextServices.translate(text, from: self, anchor: viewRect)
+                    if text.isEmpty { self.showMessage(L("沒有辨識到文字")); return }
+                    TextServices.translate(text, from: self, anchor: anchor)
                 }
             },
-            UIAction(title: "拷貝文字", image: UIImage(systemName: "text.viewfinder")) { [weak self] _ in
+            UIAction(title: L("拷貝文字"), image: UIImage(systemName: "text.viewfinder")) { [weak self] _ in
+                self?.clearCapture()
                 TextServices.recognizeText(in: img) { text in
-                    if text.isEmpty { self?.showMessage("沒有辨識到文字"); return }
+                    if text.isEmpty { self?.showMessage(L("沒有辨識到文字")); return }
                     UIPasteboard.general.string = text
                 }
             },
-            UIAction(title: "存到照片", image: UIImage(systemName: "photo.badge.arrow.down")) { _ in
+            UIAction(title: L("存到照片"), image: UIImage(systemName: "photo.badge.arrow.down")) { [weak self] _ in
                 UIImageWriteToSavedPhotosAlbum(img, nil, nil, nil)
-            },
-            UIAction(title: "分享…", image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
-                guard let self else { return }
-                let vc = UIActivityViewController(activityItems: [img], applicationActivities: nil)
-                vc.popoverPresentationController?.sourceView = self.view
-                vc.popoverPresentationController?.sourceRect = viewRect
-                self.present(vc, animated: true)
+                self?.clearCapture()
             },
         ])
-        presentMenu(menu, atDocPoint: CGPoint(x: rect.midX, y: rect.minY))
     }
 
     /// 把文件座標中的區域（含 PDF、物件、筆跡）畫成圖片
@@ -1238,10 +1635,16 @@ extension NotebookViewController {
                 ctx.saveGState()
                 ctx.translateBy(x: f.minX, y: f.minY)
                 PageRenderer.drawPageWithoutInk(pages[i], session: session, in: ctx)
-                PageRenderer.drawCustomInk(pages[i], in: ctx)
                 ctx.restoreGState()
             }
             ink.draw(in: rect)
+            // 自製筆刷在 PencilKit 筆跡（螢光筆）上面，和畫面上一樣
+            for (i, f) in pageFrames.enumerated() where f.intersects(rect) {
+                ctx.saveGState()
+                ctx.translateBy(x: f.minX, y: f.minY)
+                PageRenderer.drawCustomInk(pages[i], in: ctx)
+                ctx.restoreGState()
+            }
         }
     }
 }
@@ -1477,28 +1880,28 @@ extension NotebookViewController {
             }
         }
         let menu = UIMenu(children: [
-            UIAction(title: "翻譯", image: UIImage(systemName: "translate")) { [weak self] _ in
+            UIAction(title: L("翻譯"), image: UIImage(systemName: "translate")) { [weak self] _ in
                 guard let self else { return }
                 TextServices.translate(text, from: self, anchor: anchor) { [weak self] translated in
                     self?.insertTextBox(at: CGPoint(x: bounds.midX, y: bounds.maxY + 50), text: translated)
                 }
             },
-            UIAction(title: "拷貝", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
+            UIAction(title: L("拷貝"), image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
                 UIPasteboard.general.string = text
                 self?.endTextSelection()
             },
-            UIAction(title: "查詢", image: UIImage(systemName: "character.book.closed")) { [weak self] _ in
+            UIAction(title: L("查詢"), image: UIImage(systemName: "character.book.closed")) { [weak self] _ in
                 guard let self else { return }
                 TextServices.lookUp(text, from: self, anchor: anchor)
             },
-            UIMenu(title: "螢光標示", image: UIImage(systemName: "highlighter"), children: colors),
+            UIMenu(title: L("螢光標示"), image: UIImage(systemName: "highlighter"), children: colors),
         ] + removeHighlightActions(removableHighlight))
         presentMenu(menu, atDocPoint: CGPoint(x: bounds.midX, y: bounds.minY), avoiding: bounds)
     }
 
     private func removeHighlightActions(_ h: (Int, UUID)?) -> [UIMenuElement] {
         guard case let (pi, hid)? = h else { return [] }
-        return [UIAction(title: "移除螢光標示", image: UIImage(systemName: "eraser"), attributes: .destructive) { [weak self] _ in
+        return [UIAction(title: L("移除螢光標示"), image: UIImage(systemName: "eraser"), attributes: .destructive) { [weak self] _ in
             self?.updatePage(pi) { $0.highlights.removeAll { $0.id == hid } }
             self?.endTextSelection()
         }]

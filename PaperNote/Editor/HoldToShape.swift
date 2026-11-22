@@ -5,13 +5,11 @@ import PencilKit
 struct LiveShape {
     var start: CGPoint
     var end: CGPoint
-    var shapePoints: [CGPoint]?   // 有值＝封閉圖形；nil＝直線
+    var shapePoints: [CGPoint]?   // 有值＝圖形（圓弧、圓、矩形、曲線…）；nil＝直線
     var preset: BrushPreset
     var countBefore: Int
-    /// 封閉圖形剛辨識出來的樣子、停住時筆尖的位置、縮放時固定不動的角
-    var baseShape: [CGPoint]? = nil
-    var grab: CGPoint = .zero
-    var anchor: CGPoint = .zero
+    /// 認出來的圖形（筆不放開繼續移動時用它調整）；nil＝直線
+    var shape: InkShape? = nil
 
     var points: [CGPoint] { shapePoints ?? ShapeRecognizer.segment(start, end) }
 }
@@ -44,14 +42,30 @@ enum HoldToShape {
         return corners.max { $0.distance(to: p) < $1.distance(to: p) }
     }
 
-    /// 長寬分別依筆尖相對固定角的距離縮放（0.1～10 倍）
+    /// 跟著筆尖走的角：固定角的對角
+    static func movingCorner(of shape: [CGPoint], anchor a: CGPoint) -> CGPoint? {
+        guard let minX = shape.map(\.x).min(), let maxX = shape.map(\.x).max(),
+              let minY = shape.map(\.y).min(), let maxY = shape.map(\.y).max() else { return nil }
+        return CGPoint(x: abs(a.x - minX) <= abs(a.x - maxX) ? maxX : minX,
+                       y: abs(a.y - minY) <= abs(a.y - maxY) ? maxY : minY)
+    }
+
+    /// 筆尖移到 p 時，跟著走的角要到哪裡：停住時筆尖離那個角多遠，之後就一直保持（角和筆尖一起移動）。
+    /// 不能拿筆尖本身當角：筆停的地方通常離角還有一段，用它算比例的話角會比筆尖跑得快或慢，越拉越偏
+    static func cornerTarget(corner c: CGPoint, grab: CGPoint, pen p: CGPoint) -> CGPoint {
+        CGPoint(x: p.x + c.x - grab.x, y: p.y + c.y - grab.y)
+    }
+
+    /// 長寬分別縮放，固定角不動、對角跟著筆尖走（0.1～10 倍）
     static func scaled(_ base: [CGPoint], grab: CGPoint, anchor a: CGPoint, to p: CGPoint) -> [CGPoint] {
-        func scale(_ now: CGFloat, _ grab: CGFloat, _ anchor: CGFloat) -> CGFloat {
-            let d = grab - anchor
+        guard let c = movingCorner(of: base, anchor: a) else { return base }
+        let t = cornerTarget(corner: c, grab: grab, pen: p)
+        func scale(_ target: CGFloat, _ corner: CGFloat, _ anchor: CGFloat) -> CGFloat {
+            let d = corner - anchor
             guard abs(d) > 8 else { return 1 }
-            return min(max((now - anchor) / d, 0.1), 10)
+            return min(max((target - anchor) / d, 0.1), 10)
         }
-        let sx = scale(p.x, grab.x, a.x), sy = scale(p.y, grab.y, a.y)
+        let sx = scale(t.x, c.x, a.x), sy = scale(t.y, c.y, a.y)
         return base.map { CGPoint(x: a.x + ($0.x - a.x) * sx, y: a.y + ($0.y - a.y) * sy) }
     }
 
@@ -112,25 +126,25 @@ final class HoldToShapeController {
     func hold(_ pts: [CGPoint]) {
         guard let editor, editor.tool.isInking, let start = pts.first, let last = pts.last else { return }
         let preset = BrushStore.shared.current
-        let shape = ShapeRecognizer.closedShapePoints(pts)
-        var ls = LiveShape(start: start, end: ShapeRecognizer.snappedLineEnd(from: start, to: last),
-                           shapePoints: shape, preset: preset, countBefore: editor.strokeCountAtBegin)
-        // 封閉圖形：筆不放開繼續拖曳可以調整長寬
-        if let shape, let anchor = HoldToShape.anchorCorner(of: shape, farthestFrom: last) {
-            ls.baseShape = shape
-            ls.grab = last
-            ls.anchor = anchor
-        }
+        // 和自製筆刷一樣認（InkShapes）；直線照舊用起點、終點畫
+        let recognized = InkShapes.recognize(pts)
+        let shape = recognized?.kind == .line ? nil : recognized
+        var ls = LiveShape(start: start, end: recognized?.kind == .line ? recognized!.end : ShapeRecognizer.snappedLineEnd(from: start, to: last),
+                           shapePoints: shape?.points, preset: preset, countBefore: editor.strokeCountAtBegin)
+        ls.shape = shape
         live = ls
-        DebugLog.add("hold countBefore=\(ls.countBefore) strokes=\(editor.canvas.drawing.strokes.count) shape=\(shape != nil) pkDrawing=\(pencilKitDrawing)")
+        DebugLog.add("hold countBefore=\(ls.countBefore) strokes=\(editor.canvas.drawing.strokes.count) shape=\(String(describing: shape?.kind)) pkDrawing=\(pencilKitDrawing)")
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         showPreview()
     }
 
     func move(_ p: CGPoint) {
         guard var ls = live else { return }
-        if let base = ls.baseShape {
-            ls.shapePoints = HoldToShape.scaled(base, grab: ls.grab, anchor: ls.anchor, to: p)
+        // 筆不放開繼續移動：圖形跟著調整（圓弧、曲線的終點跟著筆尖；封閉圖形縮放）
+        if let s = ls.shape {
+            let m = InkShapes.moved(s, to: p)
+            ls.shape = m
+            ls.shapePoints = m.points
         } else {
             ls.end = ShapeRecognizer.snappedLineEnd(from: ls.start, to: p)
         }
@@ -243,7 +257,10 @@ final class HoldToShapeController {
             d.strokes = HoldToShape.replacingHandStroke(in: d.strokes, countBefore: p.countBefore, with: lines)
             let w = line.path.first?.size.width ?? -1
             DebugLog.add("replace lines=\(lines.count) newStrokes=\(d.strokes.count) width=\(String(format: "%.2f", w)) ink=\(line.ink.inkType.rawValue)")
-            editor.setDrawingAddingStrokes(d, added: lines.count) { [weak self] in self?.clearPreview() }
+            editor.setDrawingAddingStrokes(d, added: lines.count) { [weak self, weak editor] in
+                self?.clearPreview()
+                editor?.keepHighlightsBelowInk()
+            }
         } else {
             clearPreview()
         }
@@ -269,8 +286,9 @@ final class HoldToShapeController {
 
     private func showPreview() {
         guard let ls = live, let editor else { return }
-        // 預覽線用這支筆實際畫出來的粗細；點是文件座標，換成畫布座標
-        let width = samples[ls.preset.id]?.size.width ?? ls.preset.width
+        // 預覽線用這支筆實際畫出來的粗細（和放開後的圖形一樣）；點是文件座標，換成畫布座標
+        let tool = ls.preset.tool
+        let width = samples[ls.preset.id].map { PencilKitInkWidth.drawn(tool.ink.inkType, size: $0.size.width) } ?? tool.width
         let pts = ls.points.map { editor.pagesContainer.convert($0, to: editor.canvas) }
         CATransaction.begin()
         CATransaction.setDisableActions(true)

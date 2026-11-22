@@ -103,6 +103,131 @@ final class InkShapeTests: XCTestCase {
         XCTAssertEqual(s.points.last!.distance(to: pts.last!), 0, accuracy: 3)
     }
 
+    // MARK: 扁的曲線不能變成圓弧（回報的問題：上下比較小的曲線停住後變成一個弧）
+
+    /// 300pt 寬的手畫路徑，y = f(x 的比例)，加上手抖
+    private func flat(_ f: (CGFloat) -> CGFloat, n: Int = 120) -> [CGPoint] {
+        (0...n).map { i in
+            let t = CGFloat(i) / CGFloat(n)
+            return CGPoint(x: t * 300 + wobble(i), y: 200 - f(t) + wobble(i + 4))
+        }
+    }
+
+    func testAFlatBellIsACurveNotAnArc() throws {
+        // 中間凸起、兩邊平的鐘形
+        let s = try XCTUnwrap(InkShapes.recognize(flat { 45 * exp(-pow(($0 - 0.5) / 0.15, 2)) }))
+        XCTAssertEqual(s.kind, .curve)
+    }
+
+    func testTwoUnevenBumpsAreACurveNotAnArc() throws {
+        let s = try XCTUnwrap(InkShapes.recognize(flat { 45 * (sin($0 * .pi) + 0.35 * sin($0 * 3 * .pi)) }))
+        XCTAssertEqual(s.kind, .curve)
+    }
+
+    func testALopsidedBumpIsACurveNotAnArc() throws {
+        // 左邊平、右邊才拱起來
+        let s = try XCTUnwrap(InkShapes.recognize(flat { 50 * sin(.pi * pow($0, 2.2)) }))
+        XCTAssertEqual(s.kind, .curve)
+    }
+
+    func testAFlatArcIsStillAnArc() throws {
+        // 弦 300pt、拱高 40pt 的圓弧（半徑約 300pt）
+        let c: CGFloat = 300, h: CGFloat = 40
+        let r = c * c / (8 * h) + h / 2
+        let half = asin(c / 2 / r)
+        let pts = (0...120).map { i -> CGPoint in
+            let a = -half + 2 * half * CGFloat(i) / 120
+            return CGPoint(x: 150 + r * sin(a) + wobble(i), y: 200 - (r * cos(a) - (r - h)) + wobble(i + 4))
+        }
+        let s = try XCTUnwrap(InkShapes.recognize(pts))
+        XCTAssertEqual(s.kind, .arc)
+        XCTAssertEqual(InkShapes.bounds(s.points).height, h, accuracy: 4, "拱高照手畫的")
+    }
+
+    func testTheArcToleranceFollowsTheHeight() {
+        // 很扁（半徑很大）時門檻還是拱高的 8%；超過半圓（拱高比半徑大）時不超過半徑的 14%
+        XCTAssertEqual(InkShapes.arcTolerance(height: 40, radius: 300), 4, accuracy: 0.001)
+        XCTAssertEqual(InkShapes.arcTolerance(height: 80, radius: 300), 6.4, accuracy: 0.001)
+        XCTAssertEqual(InkShapes.arcTolerance(height: 100, radius: 50), 7, accuracy: 0.001)
+        XCTAssertEqual(InkShapes.arcTolerance(height: 10, radius: 20), 4, accuracy: 0.001, "最少 4pt")
+    }
+
+    // MARK: 平滑的曲線（回報的需求：停住後不是基本圖形也要修，像用多項式逼近）
+
+    /// S 形的波浪（晃動很明顯）
+    private func wave(n: Int = 120) -> [CGPoint] {
+        (0...n).map { i in
+            let t = CGFloat(i) / CGFloat(n)
+            return CGPoint(x: t * 300 + wobble(i, 2.5), y: 100 + sin(t * 2 * .pi) * 60 + wobble(i + 4, 2.5))
+        }
+    }
+
+    /// 轉彎方向（左彎、右彎）換了幾次：晃動的線換很多次，S 形只換一次
+    private func wiggles(_ pts: [CGPoint]) -> Int {
+        let segs = zip(pts, pts.dropFirst()).filter { $0.distance(to: $1) > 0.01 }.map { atan2($1.y - $0.y, $1.x - $0.x) }
+        let signs: [Bool] = zip(segs, segs.dropFirst()).compactMap { a, b in
+            var d = b - a
+            while d > .pi { d -= 2 * .pi }
+            while d < -.pi { d += 2 * .pi }
+            return abs(d) * 180 / .pi > 0.5 ? d > 0 : nil
+        }
+        return zip(signs, signs.dropFirst()).filter { $0 != $1 }.count
+    }
+
+    func testAnOpenStrokeBecomesASmoothCurve() throws {
+        let pts = wave()
+        let s = try XCTUnwrap(InkShapes.recognize(pts))
+        XCTAssertEqual(s.kind, .curve, "S 形不是直線也不是圓弧：修成曲線")
+        XCTAssertFalse(s.closed)
+        XCTAssertEqual(s.points.first!.distance(to: pts.first!), 0, accuracy: 0.01, "頭不動")
+        XCTAssertEqual(s.points.last!.distance(to: pts.last!), 0, accuracy: 0.01, "尾不動")
+        XCTAssertLessThan(InkShapes.fitError(pts, s.points), 4, "形狀照手畫的走")
+        XCTAssertLessThanOrEqual(wiggles(s.points), 3, "晃動拿掉了：S 形只換一次彎的方向")
+        XCTAssertGreaterThan(wiggles(pts), 20, "（手畫的本來很抖）")
+    }
+
+    func testAClosedBlobBecomesASmoothClosedCurve() throws {
+        // 星形：不是圓、矩形、三角形
+        let pts = (0...150).map { i -> CGPoint in
+            let t = CGFloat(i) / 150 * 2 * .pi
+            let r = 100 + 35 * sin(5 * t)
+            return CGPoint(x: 200 + cos(t) * r + wobble(i), y: 200 + sin(t) * r + wobble(i + 3))
+        }
+        let s = try XCTUnwrap(InkShapes.recognize(pts))
+        XCTAssertEqual(s.kind, .curve)
+        XCTAssertTrue(s.closed)
+        XCTAssertEqual(s.points.first!.distance(to: s.points.last!), 0, accuracy: 0.01, "頭尾接起來")
+        XCTAssertLessThan(InkShapes.fitError(pts, s.points), 5)
+        let m = InkShapes.moved(s, to: CGPoint(x: s.grab.x + (s.grab.x - s.anchor.x) * 0.5, y: s.grab.y + (s.grab.y - s.anchor.y) * 0.5))
+        XCTAssertGreaterThan(InkShapes.bounds(m.points).width, InkShapes.bounds(s.points).width + 50, "筆不放開繼續拉可以放大")
+    }
+
+    func testTheCurveEndFollowsThePen() throws {
+        let s = try XCTUnwrap(InkShapes.recognize(wave()))
+        let m = InkShapes.moved(s, to: CGPoint(x: 600, y: 100))
+        XCTAssertEqual(m.points.first!.distance(to: s.points.first!), 0, accuracy: 0.01, "起點不動")
+        XCTAssertEqual(m.points.last!.x, 600, accuracy: 3)
+        XCTAssertEqual(m.points.last!.y, 100, accuracy: 3)
+        XCTAssertGreaterThan(InkShapes.bounds(m.points).height, 200, "整條一起放大，還是 S 形")
+    }
+
+    func testBasicShapesAreForgiving() throws {
+        // 有點歪的圓（長寬差 20%）還是圓
+        let c = try XCTUnwrap(InkShapes.recognize(ellipsePoints(CGRect(x: 0, y: 0, width: 160, height: 130))))
+        XCTAssertEqual(c.kind, .circle)
+        // 差不多是正方形就畫成正方形
+        let sq = try XCTUnwrap(InkShapes.recognize(roughRectangle(CGRect(x: 0, y: 0, width: 200, height: 180))))
+        XCTAssertEqual(sq.kind, .rectangle)
+        let b = InkShapes.bounds(sq.points)
+        XCTAssertEqual(b.width, b.height, accuracy: 1, "正方形")
+        // 有點彎的直線還是直線
+        let bent = (0...60).map { i -> CGPoint in
+            let t = CGFloat(i) / 60
+            return CGPoint(x: t * 300, y: sin(t * .pi) * 18 + wobble(i, 1.5))
+        }
+        XCTAssertEqual(try XCTUnwrap(InkShapes.recognize(bent)).kind, .line)
+    }
+
     // MARK: 大小跟著筆尖
 
     func testLineEndFollowsThePen() throws {
@@ -128,6 +253,21 @@ final class InkShapeTests: XCTestCase {
         let after = InkShapes.bounds(m.points)
         XCTAssertGreaterThan(after.width, before.width + 50)
         XCTAssertGreaterThan(after.height, before.height + 20)
+    }
+
+    /// 回報的問題：手畫的矩形停在上緣（不在角上），拖的時候角要和筆尖一起移動，不能越拉越偏
+    func testTheRectangleCornerFollowsThePen() throws {
+        let s = try XCTUnwrap(InkShapes.recognize(roughRectangle(CGRect(x: 0, y: 0, width: 200, height: 100))))
+        XCTAssertEqual(s.kind, .rectangle)
+        let before = InkShapes.bounds(s.points)
+        XCTAssertGreaterThan(abs(s.grab.x - before.minX), 10, "（筆停的地方離角還有一段）")
+        let move = CGPoint(x: -60, y: -40)
+        let m = InkShapes.moved(s, to: CGPoint(x: s.grab.x + move.x, y: s.grab.y + move.y))
+        let after = InkShapes.bounds(m.points)
+        XCTAssertEqual(after.minX, before.minX + move.x, accuracy: 0.5, "左上角和筆尖移動一樣多")
+        XCTAssertEqual(after.minY, before.minY + move.y, accuracy: 0.5, "左上角和筆尖移動一樣多")
+        XCTAssertEqual(after.maxX, before.maxX, accuracy: 0.5, "右下角不動")
+        XCTAssertEqual(after.maxY, before.maxY, accuracy: 0.5, "右下角不動")
     }
 
     func testCircleStaysACircleWhenResized() throws {

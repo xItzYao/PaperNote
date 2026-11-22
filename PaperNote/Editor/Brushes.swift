@@ -9,13 +9,13 @@ enum InkStyle: String, Codable, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .pen: return "鋼筆"
-        case .monoline: return "原子筆"
-        case .fountainPen: return "毛筆／沾水筆"
-        case .pencil: return "鉛筆"
-        case .marker: return "螢光筆"
-        case .crayon: return "蠟筆"
-        case .watercolor: return "水彩"
+        case .pen: return L("鋼筆")
+        case .monoline: return L("原子筆")
+        case .fountainPen: return L("毛筆／沾水筆")
+        case .pencil: return L("鉛筆")
+        case .marker: return L("螢光筆")
+        case .crayon: return L("蠟筆")
+        case .watercolor: return L("水彩")
         }
     }
 
@@ -31,30 +31,103 @@ enum InkStyle: String, Codable, CaseIterable, Identifiable {
         }
     }
 
-    /// 筆工具列的「細、中、粗」
+    /// 筆工具列的「細、中、粗」（PencilKit 畫的筆不會比它畫得出來的最細值更細，見 pencilKitWidthRange）
     var styleWidths: [CGFloat] {
         switch self {
-        case .pen, .monoline: return [1.5, 3, 6]
-        case .fountainPen: return [2, 4, 8]
+        case .monoline: return [0.8, 2, 4]
+        case .pen: return [1, 2.5, 5]
+        case .fountainPen: return [1.5, 4, 8]
         case .pencil: return [2.4, 4, 8]
         case .marker: return [10, 18, 30]
-        case .crayon: return [10, 16, 26]
-        case .watercolor: return [10, 20, 36]
+        case .crayon: return [6, 12, 24]
+        case .watercolor: return [6, 16, 30]
         }
     }
 
-    /// 可以調的粗細。下限是這種筆 PencilKit 真正畫得出來的最細值（再細會完全畫不出來）；
-    /// 上限不照 PencilKit 宣稱的範圍（螢光筆 18pt 用的就是宣稱上限 4pt 的墨水，照樣畫得出來）
+    /// 自製筆刷只畫原子筆。其他筆要和 PencilKit 一模一樣（寫的時候、放開後都是），交給 PencilKit 畫
+    var usesCustomInk: Bool { self == .monoline }
+
+    /// 這種筆實際可以調的粗細（自製筆刷可以更細）
+    var usableWidthRange: ClosedRange<CGFloat> {
+        usesCustomInk && EditorSettings.shared.customInk ? widthRange : pencilKitWidthRange
+    }
+
+    /// 自製筆刷最細可以到多細
+    static let finestWidth: CGFloat = 0.3
+
+    /// 自製筆刷可以調的粗細（上限不照 PencilKit 宣稱的範圍：螢光筆 18pt 用的就是宣稱上限 4pt 的墨水，照樣畫得出來）
     var widthRange: ClosedRange<CGFloat> {
-        let lower = max(0.1, (inkType.validWidthRange.lowerBound * 10 - 0.01).rounded(.up) / 10)
         switch self {
-        case .pen, .monoline: return lower...20
-        case .fountainPen: return lower...26
-        case .pencil: return lower...16
+        case .pen, .monoline: return Self.finestWidth...20
+        case .fountainPen: return Self.finestWidth...26
+        case .pencil: return Self.finestWidth...16
         case .marker: return 4...40
-        case .crayon: return lower...40
-        case .watercolor: return lower...60
+        case .crayon: return Self.finestWidth...40
+        case .watercolor: return Self.finestWidth...60
         }
+    }
+
+    /// PencilKit 的筆可以調的粗細：下限是這種筆真正畫得出來的最細值（再細會完全畫不出來）
+    var pencilKitWidthRange: ClosedRange<CGFloat> {
+        let lower = max(0.1, (inkType.validWidthRange.lowerBound * 10 - 0.01).rounded(.up) / 10)
+        return max(lower, widthRange.lowerBound)...widthRange.upperBound
+    }
+
+    /// 之前自製筆刷畫的鉛筆、蠟筆、水彩的質感。現在這些筆交給 PencilKit 畫，已經存下來的筆跡照這個畫
+    var look: InkLook? {
+        switch self {
+        case .pencil: return InkLook(alpha: 0.55, grain: 0.55, gapRatio: 0.7)
+        case .crayon: return InkLook(alpha: 0.7, grain: 0.4, gapRatio: 1.4)
+        case .watercolor: return InkLook(alpha: 0.32, halo: 0.16)
+        default: return nil
+        }
+    }
+
+    /// 預覽用的一筆的形狀
+    static func samplePath(in size: CGSize) -> [CGPoint] {
+        (0...60).map { i in
+            let t = CGFloat(i) / 60
+            return CGPoint(x: 12 + (size.width - 24) * t, y: size.height / 2 - sin(t * .pi * 2) * size.height * 0.28)
+        }
+    }
+}
+
+/// 自製筆刷的質感：底色的透明度＋顆粒（一樣的顏色，斷斷續續疊上去）＋水彩的外暈
+struct InkLook: Equatable {
+    var alpha: CGFloat
+    /// 顆粒的透明度；0＝沒有顆粒
+    var grain: CGFloat = 0
+    /// 顆粒的間隔（線寬的幾倍）
+    var gapRatio: CGFloat = 1
+    /// 外暈的透明度；0＝沒有
+    var halo: CGFloat = 0
+
+    /// 外暈比線寬寬多少
+    static let haloSpread: CGFloat = 1.35
+    var spread: CGFloat { halo > 0 ? Self.haloSpread : 1 }
+    /// 放大很多時改用向量，只有一個透明度
+    var flatOpacity: CGFloat { min(1, alpha + grain * 0.4 + halo * 0.5) }
+}
+
+/// 可以加進調色盤的喜歡的顏色（接在固定的 12 色後面），存在這台裝置
+enum FavoriteColors {
+    private static let key = "favoriteColors"
+    static let limit = 36
+
+    static var all: [String] { UserDefaults.standard.stringArray(forKey: key) ?? [] }
+
+    /// 已經有了（或滿了）回傳 false
+    @discardableResult
+    static func add(_ hex: String, besides fixed: [String] = BrushSettingsView.swatches) -> Bool {
+        var list = all
+        guard !list.contains(hex), !fixed.contains(hex), list.count < limit else { return false }
+        list.append(hex)
+        UserDefaults.standard.set(list, forKey: key)
+        return true
+    }
+
+    static func remove(_ hex: String) {
+        UserDefaults.standard.set(all.filter { $0 != hex }, forKey: key)
     }
 }
 
@@ -77,7 +150,7 @@ struct BrushPreset: Codable, Identifiable, Equatable {
     var effectiveOpacity: CGFloat { style == .marker ? (opacity ?? Self.defaultMarkerOpacity) : 1 }
     var inkColor: UIColor { style == .marker ? color.withAlphaComponent(effectiveOpacity) : color }
     /// 交給 PencilKit 的筆。粗細不低於這種筆畫得出來的最細值（舊設定可能更細）；上限不限制
-    var tool: PKInkingTool { PKInkingTool(style.inkType, color: inkColor, width: max(width, style.widthRange.lowerBound)) }
+    var tool: PKInkingTool { PKInkingTool(style.inkType, color: inkColor, width: max(width, style.pencilKitWidthRange.lowerBound)) }
     var isDashed: Bool { dashed == true && style != .marker }
 
     /// 預設的虛線每一段長度與間隔，依粗細決定
@@ -182,6 +255,17 @@ final class BrushStore {
         return saved
     }
 
+    /// 換筆型：粗細留在同一格（細、中、粗），顏色不變
+    func restyled(_ preset: BrushPreset, to style: InkStyle) -> BrushPreset {
+        guard preset.style != style, preset.style != .marker, style != .marker else { return preset }
+        let old = styleWidths(preset.style)
+        let slot = old.indices.min { abs(old[$0] - preset.width) < abs(old[$1] - preset.width) } ?? 1
+        var p = preset
+        p.style = style
+        p.width = styleWidths(style)[slot]
+        return p
+    }
+
     func setStyleWidth(_ width: CGFloat, slot: Int, style: InkStyle) {
         var widths = styleWidths(style)
         guard widths.indices.contains(slot) else { return }
@@ -234,38 +318,78 @@ final class BrushStore {
 struct BrushSettingsView: View {
     @State var preset: BrushPreset
     let onChange: (BrushPreset) -> Void
+    /// 刪除這支筆刷；nil＝不能刪（這一類只剩這一支）
+    var onDelete: (() -> Void)? = nil
 
-    private let swatches = ["#1A1A1AFF", "#555555FF", "#1E5BD8FF", "#0F8A7EFF", "#2E7D32FF", "#D32F2FFF",
-                            "#E65100FF", "#8E24AAFF", "#FFE14DFF", "#8BE38BFF", "#FF9EC4FF", "#8FD3FFFF"]
+    static let swatches = ["#1A1A1AFF", "#555555FF", "#1E5BD8FF", "#0F8A7EFF", "#2E7D32FF", "#D32F2FFF",
+                           "#E65100FF", "#8E24AAFF", "#FFE14DFF", "#8BE38BFF", "#FF9EC4FF", "#8FD3FFFF"]
+    @State private var favorites = FavoriteColors.all
+
+    private func swatch(_ hex: String) -> some View {
+        Circle()
+            .fill(Color(uiColor: UIColor(hex: hex)))
+            .frame(width: 30, height: 30)
+            .overlay(Circle().stroke(Color.primary.opacity(preset.colorHex == hex ? 0.9 : 0.15),
+                                     lineWidth: preset.colorHex == hex ? 3 : 1))
+            .onTapGesture { preset.colorHex = hex }
+    }
+
+    private func styleTile(_ s: InkStyle) -> some View {
+        let on = s == preset.style
+        return Button { preset = BrushStore.shared.restyled(preset, to: s) } label: {
+            VStack(spacing: 2) {
+                Image(uiImage: s.previewImage(color: preset.colorHex, size: CGSize(width: 64, height: 22)))
+                Text(s.title).font(.caption2).lineLimit(1).minimumScaleFactor(0.7)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 8).fill(on ? Color.accentColor.opacity(0.18) : Color(uiColor: .secondarySystemFill)))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(on ? Color.accentColor : .clear, lineWidth: 2))
+            .contentShape(Rectangle())
+        }
+        // 同一列有好幾個按鈕：plain 才會各自點
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(s.title)
+        .accessibilityIdentifier("penStyle.\(s.rawValue)")
+        .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+    }
 
     var body: some View {
         Form {
+            // 筆型和顏色在同一個選單：直接點格子換，不另外開下拉選單
             if preset.style != .marker {
-                Section("筆型") {
-                    Picker("筆型", selection: $preset.style) {
-                        ForEach(InkStyle.allCases.filter { $0 != .marker }) { Text($0.title).tag($0) }
+                Section(L("筆型")) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
+                        ForEach(InkStyle.allCases.filter { $0 != .marker }) { styleTile($0) }
                     }
-                    .pickerStyle(.menu)
                 }
             }
-            Section("顏色") {
+            Section(L("色票")) {
                 LazyVGrid(columns: Array(repeating: GridItem(.fixed(34), spacing: 10), count: 6), spacing: 10) {
-                    ForEach(swatches, id: \.self) { hex in
-                        Circle()
-                            .fill(Color(uiColor: UIColor(hex: hex)))
-                            .frame(width: 30, height: 30)
-                            .overlay(Circle().stroke(Color.primary.opacity(preset.colorHex == hex ? 0.9 : 0.15),
-                                                     lineWidth: preset.colorHex == hex ? 3 : 1))
-                            .onTapGesture { preset.colorHex = hex }
+                    ForEach(Self.swatches, id: \.self) { swatch($0) }
+                    // 喜歡的顏色：長按可以拿掉
+                    ForEach(favorites, id: \.self) { hex in
+                        swatch(hex).contextMenu {
+                            Button(L("從色票移除"), systemImage: "trash", role: .destructive) {
+                                FavoriteColors.remove(hex)
+                                favorites = FavoriteColors.all
+                            }
+                        }
                     }
                 }
-                ColorPicker("自訂顏色", selection: Binding(
+                ColorPicker(L("自訂顏色"), selection: Binding(
                     get: { Color(uiColor: preset.color) },
                     set: { preset.colorHex = UIColor($0).hexString }
                 ))
+                Button(L("把這個顏色加進色票"), systemImage: "plus.circle") {
+                    FavoriteColors.add(preset.colorHex)
+                    favorites = FavoriteColors.all
+                }
+                .disabled(favorites.contains(preset.colorHex) || Self.swatches.contains(preset.colorHex) || favorites.count >= FavoriteColors.limit)
             }
             if preset.style == .marker {
-                Section("不透明度：\(Int((preset.opacity ?? BrushPreset.defaultMarkerOpacity) * 100))%") {
+                Section(L("不透明度：\(Int((preset.opacity ?? BrushPreset.defaultMarkerOpacity) * 100))%")) {
                     Slider(value: Binding(
                         get: { preset.opacity ?? BrushPreset.defaultMarkerOpacity },
                         set: { preset.opacity = $0 }
@@ -273,16 +397,21 @@ struct BrushSettingsView: View {
                 }
             }
             if preset.style == .marker {
-                Section("粗細：\(String(format: "%.1f", preset.width))") {
+                Section(L("粗細：\(String(format: "%.1f", preset.width))")) {
                     Slider(value: $preset.width, in: preset.style.widthRange)
                     StrokePreview(preset: preset)
                         .frame(height: 44)
                 }
             } else {
                 // 筆的粗細在工具列的細、中、粗調整，這裡只留預覽
-                Section("預覽") {
+                Section(L("預覽")) {
                     StrokePreview(preset: preset)
                         .frame(height: 44)
+                }
+            }
+            if let onDelete {
+                Section {
+                    Button(L("刪除這支筆刷"), systemImage: "trash", role: .destructive, action: onDelete)
                 }
             }
         }
@@ -296,10 +425,45 @@ struct BrushSettingsView: View {
     }
 }
 
+extension InkStyle {
+    /// 這種筆型用這個顏色畫的一筆（中等粗細）
+    func previewImage(color: String, size: CGSize) -> UIImage {
+        let path = (0...40).map { i -> CGPoint in
+            let t = CGFloat(i) / 40
+            return CGPoint(x: 4 + (size.width - 8) * t, y: size.height / 2 - sin(t * .pi * 2) * size.height * 0.25)
+        }
+        let width = min(max(styleWidths[1], 1.5), 4)
+        return BrushPreset(style: self, colorHex: color, width: width)
+            .strokePreview(path, in: size, scale: UIScreen.main.scale)
+            .withRenderingMode(.alwaysOriginal)
+    }
+}
+
+extension BrushPreset {
+    /// 用這支筆畫一筆：和真正寫出來的一樣（原子筆用自製筆刷畫，其他筆是 PencilKit 畫）
+    func strokePreview(_ path: [CGPoint], in size: CGSize, scale: CGFloat) -> UIImage {
+        let rect = CGRect(origin: .zero, size: size)
+        if style.usesCustomInk && EditorSettings.shared.customInk {
+            let stroke = InkStroke(colorHex: colorHex, points: path.map { InkPoint($0, width: width) })
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = scale
+            return UIGraphicsImageRenderer(size: size, format: format).image { InkRenderer.draw([stroke], in: $0.cgContext) }
+        }
+        let t = tool
+        let stroke = ShapeRecognizer.makeStroke(points: path, ink: t.ink, width: t.width, sample: nil)
+        return PKDrawing(strokes: [stroke]).image(from: rect, scale: scale)
+    }
+}
+
 private struct StrokePreview: View {
     let preset: BrushPreset
     var body: some View {
         Canvas { ctx, size in
+            if preset.style != .marker {
+                let image = preset.strokePreview(InkStyle.samplePath(in: size), in: size, scale: ctx.environment.displayScale)
+                ctx.draw(Image(uiImage: image), in: CGRect(origin: .zero, size: size))
+                return
+            }
             var path = Path()
             path.move(to: CGPoint(x: 12, y: size.height * 0.65))
             path.addCurve(to: CGPoint(x: size.width - 12, y: size.height * 0.35),

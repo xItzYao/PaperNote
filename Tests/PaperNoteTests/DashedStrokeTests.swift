@@ -142,7 +142,7 @@ final class PenToolTests: XCTestCase {
     func testWidthNeverGoesBelowWhatPencilKitCanDraw() {
         for style in InkStyle.allCases where style != .marker {
             let min = style.inkType.validWidthRange.lowerBound
-            XCTAssertGreaterThanOrEqual(style.widthRange.lowerBound, min - 0.001, "\(style)")
+            XCTAssertGreaterThanOrEqual(style.pencilKitWidthRange.lowerBound, min - 0.001, "\(style)")
             XCTAssertGreaterThanOrEqual(BrushPreset(style: style, colorHex: "#000000FF", width: 0.1).tool.width, min - 0.001, "\(style)")
         }
     }

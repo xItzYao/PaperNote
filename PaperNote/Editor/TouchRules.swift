@@ -4,9 +4,14 @@ import Foundation
 ///
 /// | 工具 | 誰處理拖曳 | Pencil | 手指（沒開「用手指書寫」） |
 /// |---|---|---|---|
-/// | 筆、螢光筆、橡皮擦 | PencilKit | 書寫／擦除 | 捲動頁面 |
-/// | 套索、截圖、PDF 文字、手繪表格、電路 | App 的 toolPan | 圈選／框選／畫線 | 捲動頁面 |
+/// | 筆、螢光筆 | PencilKit（筆型是自製筆刷時是 App 的 inkRecognizer） | 書寫 | 捲動頁面 |
+/// | 橡皮擦 | App 的 eraserCapture（一邊擦一邊消失） | 擦除 | 捲動頁面 |
+/// | 貼紙 | 點一下：貼上選著的貼紙 | 貼上 | 捲動、縮放頁面（不會貼上） |
+/// | 套索、截圖、PDF 文字、手繪表格 | App 的 toolPan | 圈選／框選／畫線 | 捲動頁面 |
+/// | 電路 | App 的 toolPan、點一下 | 放、選、拖元件、接線 | 捲動、縮放頁面（開了「用手指書寫」才放、選元件） |
 /// | 選取、擴展頁面 | App 的 toolPan | 拖曳物件／控制點 | 拖曳物件／控制點，空白處捲動 |
+///
+/// 任何工具、有沒有開「用手指書寫」都一樣：手指在表格、電路圖上點兩下＝編輯（見 `fingerEditTarget`）。
 ///
 /// 手掌（面積很大，或寫字時壓在螢幕上的觸碰）一律不觸發任何手勢，見 `isPalmTouch`。
 extension EditorTool {
@@ -24,7 +29,7 @@ extension EditorTool {
     /// 拖曳要先讓頁面捲動判斷，沒捲動才算工具的拖曳（拖到物件、控制點時才會由工具接手）
     var panYieldsToScroll: Bool {
         switch self {
-        case .select, .image, .pageResize, .lasso, .circuit: return true
+        case .select, .image, .sticker, .pageResize, .lasso, .circuit: return true
         default: return false
         }
     }

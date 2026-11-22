@@ -19,6 +19,8 @@ extension NotebookViewController {
         sep.backgroundColor = UIColor(white: 0.82, alpha: 1)
         view.addSubview(sep)
 
+        canvasBelowBars = canvas.topAnchor.constraint(equalTo: sep.bottomAnchor)
+        canvasFullHeight = canvas.topAnchor.constraint(equalTo: view.topAnchor)
         NSLayoutConstraint.activate([
             topBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             topBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -32,21 +34,27 @@ extension NotebookViewController {
             sep.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             sep.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             sep.heightAnchor.constraint(equalToConstant: 0.5),
-            canvas.topAnchor.constraint(equalTo: sep.bottomAnchor),
+            canvasBelowBars,
             canvas.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             canvas.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             canvas.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
 
-        // 電路元件庫：浮在畫布左邊，只在電路工具顯示
-        view.addSubview(circuitLibrary)
+        // 電路元件庫：浮在畫布下面（「⋯」可以改放左邊），只在電路工具顯示
+        circuitLibrary.install(in: view, top: canvas.topAnchor, onLeft: settings.circuitLibraryOnLeft)
         circuitLibrary.isHidden = true
-        NSLayoutConstraint.activate([
-            circuitLibrary.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 10),
-            circuitLibrary.topAnchor.constraint(equalTo: canvas.topAnchor, constant: 10),
-            circuitLibrary.bottomAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -10),
-        ])
+        circuitLibrary.onLayoutChange = { [weak self] in
+            guard let self else { return }
+            self.applyCanvasInsets()
+        }
         circuitLibrary.onSelectMode = { [weak self] mode in self?.selectCircuitMode(mode) }
+        circuitLibrary.onDropCustom = { [weak self] id, p in self?.dropCustomCircuit(id, at: p) }
+        circuitLibrary.onAddCustom = { [weak self] in self?.addSelectionToCustomCircuits() }
+        circuitLibrary.onDrawSymbol = { [weak self] id in self?.presentSymbolEditor(editing: id) }
+        circuitLibrary.onRenameCustom = { [weak self] id in self?.promptRenameCustomCircuit(id) }
+        circuitLibrary.onDeleteCustom = { [weak self] id in self?.deleteCustomCircuit(id) }
+        circuitLibrary.onNewCategory = { [weak self] id in self?.promptNewCircuitCategory(moving: id) }
+        circuitLibrary.onDeleteCategory = { [weak self] key in self?.deleteCircuitCategory(key) }
 
         // 插入圖片：一排照片浮在畫布下方，只在圖片工具顯示
         photoStrip.translatesAutoresizingMaskIntoConstraints = false
@@ -61,6 +69,7 @@ extension NotebookViewController {
         photoStrip.presenter = self
         photoStrip.onPick = { [weak self] img in self?.insertPhotoFromStrip(img) }
         photoStrip.onBrowse = { [weak self] in self?.presentPhotoPicker() }
+        setupStickerStrip()
         circuitLibrary.onDrop = { [weak self] part, p in self?.dropCircuitPart(part, at: p) }
 
         // 安全區頂端也塗上底色
@@ -74,6 +83,8 @@ extension NotebookViewController {
             topFill.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             topFill.bottomAnchor.constraint(equalTo: topBar.topAnchor),
         ])
+        barChrome = [topFill, topBar, subBar, sep]
+        setupPreviewLongPress()
 
         // 左：標題（回資料庫用分頁列最左邊的「<」）；長按看完整名稱、改名
         let titleLabel = UILabel()
@@ -82,7 +93,7 @@ extension NotebookViewController {
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         titleLabel.isUserInteractionEnabled = true
-        titleLabel.accessibilityHint = "長按可以看完整名稱、改名"
+        titleLabel.accessibilityHint = L("長按可以看完整名稱、改名")
         titleLabel.addGestureRecognizer(UILongPressGestureRecognizer(target: self, action: #selector(titleLongPressed(_:))))
         notebookTitleLabel = titleLabel
         let left = UIStackView(arrangedSubviews: [titleLabel])
@@ -90,20 +101,9 @@ extension NotebookViewController {
         left.alignment = .center
 
         // 中：工具
-        let tools: [(EditorTool, String, String)] = [
-            (.pen, "pencil.tip", "筆"),
-            (.highlighter, "highlighter", "螢光筆"),
-            (.eraser, "eraser", "橡皮擦"),
-            (.lasso, "lasso", "套索"),
-            (.capture, "camera.viewfinder", "截圖"),
-            (.select, "hand.point.up.left", "選取"),
-            (.image, "photo", "圖片"),
-            (.pageResize, "arrow.up.left.and.arrow.down.right", "擴展"),
-            (.circuit, "bolt", "電路"),
-        ]
         let center = UIStackView()
         center.spacing = 4
-        for (t, symbol, label) in tools {
+        for (t, symbol, label) in Self.toolbarTools {
             let b = makeButton(symbol: symbol, title: nil, action: nil)
             b.accessibilityLabel = label
             b.addAction(UIAction { [weak self] _ in self?.setTool(t) }, for: .touchUpInside)
@@ -112,7 +112,7 @@ extension NotebookViewController {
         }
         let insert = makeButton(symbol: "plus.circle", title: nil, action: nil)
         insertButton = insert
-        insert.accessibilityLabel = "插入"
+        insert.accessibilityLabel = L("插入")
         insert.menu = makeInsertMenu()
         insert.showsMenuAsPrimaryAction = true
         center.addArrangedSubview(insert)
@@ -120,6 +120,8 @@ extension NotebookViewController {
         // 右：復原、最愛、頁面、設定
         let undo = makeButton(symbol: "arrow.uturn.backward", title: nil, action: #selector(undoTapped))
         let redo = makeButton(symbol: "arrow.uturn.forward", title: nil, action: #selector(redoTapped))
+        undo.accessibilityLabel = L("上一步")
+        redo.accessibilityLabel = L("下一步")
         favoriteButton = makeButton(symbol: "star", title: nil, action: #selector(favoriteTapped))
         let favList = makeButton(symbol: "list.star", title: nil, action: nil)
         favList.addAction(UIAction { [weak self, weak favList] _ in
@@ -127,7 +129,7 @@ extension NotebookViewController {
             self.presentFavoritesList(from: favList)
         }, for: .touchUpInside)
         let overview = makeButton(symbol: "square.grid.2x2", title: nil, action: nil)
-        overview.accessibilityLabel = "全部頁面"
+        overview.accessibilityLabel = L("全部頁面")
         overview.addAction(UIAction { [weak self] _ in self?.presentPageOverview() }, for: .touchUpInside)
         let pageMenu = makeButton(symbol: "doc.on.doc", title: nil, action: nil)
         pageMenu.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] done in
@@ -140,7 +142,7 @@ extension NotebookViewController {
         }])
         settingsButton.showsMenuAsPrimaryAction = true
         let export = makeButton(symbol: "square.and.arrow.up", title: nil, action: nil)
-        export.accessibilityLabel = "匯出"
+        export.accessibilityLabel = L("匯出")
         export.addAction(UIAction { [weak self, weak export] _ in
             guard let self, let export else { return }
             self.presentExportChoice(from: export)
@@ -193,6 +195,19 @@ extension NotebookViewController {
         ])
     }
 
+    /// 工具列中間的工具（Pencil Pro 按壓也從這裡選）
+    static let toolbarTools: [(EditorTool, String, String)] = [
+        (.pen, "pencil.tip", L("筆")),
+        (.highlighter, "highlighter", L("螢光筆")),
+        (.eraser, "eraser", L("橡皮擦")),
+        (.lasso, "lasso", L("套索")),
+        (.capture, "camera.viewfinder", L("截圖")),
+        (.image, "photo", L("圖片")),
+        (.sticker, "seal", L("貼紙")),
+        (.pageResize, "arrow.up.left.and.arrow.down.right", L("擴展")),
+        (.circuit, "bolt", L("電路")),
+    ]
+
     static var pageLabelWidth: CGFloat {
         let font = UIFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
         return ceil(("99999 / 99999" as NSString).size(withAttributes: [.font: font]).width)
@@ -240,6 +255,11 @@ extension NotebookViewController {
             circuitMode = .select
             wireDraft = nil
             overlay.showCircuitDraft(nil, ink: nil)
+            clearCircuitErasing()
+            if circuitMarquee != nil {
+                circuitMarquee = nil
+                overlay.showLassoPath(nil)
+            }
         }
         if t == .pageResize, resizePageIndex == nil || t != tool { resizePageIndex = currentPageIndex }
         if t == .eraser, tool.isInking || tool == .lasso { toolBeforeEraser = tool }
@@ -257,11 +277,58 @@ extension NotebookViewController {
         updateCircuitChrome()
     }
 
+    // MARK: - 預覽模式
+
+    private func setupPreviewLongPress() {
+        previewLongPress.addTarget(self, action: #selector(previewLongPressed(_:)))
+        previewLongPress.minimumPressDuration = 0.5
+        previewLongPress.isEnabled = false
+        canvas.addGestureRecognizer(previewLongPress)
+    }
+
+    @objc func previewLongPressed(_ g: UILongPressGestureRecognizer) {
+        guard g.state == .began, previewMode, presentedViewController == nil else { return }
+        askToLeavePreview()
+    }
+
+    /// 長按頁面跳出：是否回到筆記模式
+    func askToLeavePreview() {
+        let a = UIAlertController(title: L("是否回到筆記模式？"), message: nil, preferredStyle: .alert)
+        a.addAction(UIAlertAction(title: L("取消"), style: .cancel))
+        a.addAction(UIAlertAction(title: L("回到筆記模式"), style: .default) { [weak self] _ in self?.setPreviewMode(false) })
+        present(a, animated: true)
+    }
+
+    /// 預覽模式：工具列、貼圖收起來，頁面佔滿畫面，只能捲動、縮放（筆跡還是看得到）
+    func setPreviewMode(_ on: Bool) {
+        guard on != previewMode else { return }
+        let oldTop = canvas.frame.minY
+        if on {
+            toolBeforePreview = tool
+            setTool(.select)
+        }
+        previewMode = on
+        barChrome.forEach { $0.isHidden = on }
+        pinOverlay.isHidden = on
+        previewLongPress.isEnabled = on
+        canvasBelowBars.isActive = false
+        canvasFullHeight.isActive = false
+        (on ? canvasFullHeight : canvasBelowBars)?.isActive = true
+        if on { applyTool() } else { setTool(toolBeforePreview) }
+        if on { showToast(L("長按頁面可以回到筆記模式")) }
+        view.layoutIfNeeded()
+        // 畫布變高或變矮：頁面留在畫面上原本的位置
+        let maxY = max(0, canvas.contentSize.height + canvas.contentInset.bottom - canvas.bounds.height)
+        canvas.contentOffset.y = min(max(0, canvas.contentOffset.y + oldTop - canvas.frame.minY), maxY)
+    }
+
     func applyTool() {
-        canvas.drawingGestureRecognizer.isEnabled = tool.isDrawing
+        canvas.drawingGestureRecognizer.isEnabled = tool.isInking && !previewMode
         circuitLibrary.isHidden = tool != .circuit
         photoStrip.isHidden = tool != .image
         if tool == .image { photoStrip.reload() }
+        stickerStrip.isHidden = tool != .sticker
+        if tool == .sticker { stickerStrip.reload() }
         if tool.isInking { BrushStore.shared.activeCategory = tool == .highlighter ? .highlighter : .pen }
         switch tool {
         case .pen, .highlighter:
@@ -274,17 +341,15 @@ extension NotebookViewController {
             break
         }
         canvas.drawingPolicy = settings.fingerDrawing ? .anyInput : .pencilOnly
-        canvas.contentInset.bottom = bottomInset
-        // 只有開啟「用手指書寫」時，手指才用來截圖、選字、畫表格線、圈選；否則單指捲動
-        let fingerUsedByTool = settings.fingerDrawing && (tool.drawsWithPan || customInkActive)
-        canvas.panGestureRecognizer.minimumNumberOfTouches = fingerUsedByTool ? 2 : 1
-        updateGestureAvailability()
-        configurePencilKitGestures()
+        applyCanvasInsets()
+        applyInkEngine()
 
+        // 工具列沒有「選取」（套索就能選）：選起物件時亮著套索
+        let lit = tool == .select ? EditorTool.lasso : tool
         for (t, b) in toolButtons {
             var c = b.configuration ?? .plain()
-            c.background.backgroundColor = t == tool ? UIColor.systemBlue.withAlphaComponent(0.15) : .clear
-            c.baseForegroundColor = t == tool ? .systemBlue : .label
+            c.background.backgroundColor = t == lit ? UIColor.systemBlue.withAlphaComponent(0.15) : .clear
+            c.baseForegroundColor = t == lit ? .systemBlue : .label
             c.background.cornerRadius = 8
             // UIButton 換 configuration 時預設會淡入淡出：工具切換要馬上變色
             UIView.performWithoutAnimation {
@@ -293,6 +358,16 @@ extension NotebookViewController {
             }
         }
         rebuildSubBar()
+        scrollCurrentPresetIntoView()
+    }
+
+    /// 筆用自製筆刷還是 PencilKit 畫（看工具和目前的筆型）：換筆、改筆型後也要重新設定
+    func applyInkEngine() {
+        // 只有開啟「用手指書寫」時，手指才用來截圖、選字、畫表格線、圈選；否則單指捲動
+        let fingerUsedByTool = settings.fingerDrawing && (tool.drawsWithPan || customInkActive || tool == .eraser)
+        canvas.panGestureRecognizer.minimumNumberOfTouches = fingerUsedByTool ? 2 : 1
+        updateGestureAvailability()
+        configurePencilKitGestures()
     }
 
     func rebuildSubBar() {
@@ -303,23 +378,23 @@ extension NotebookViewController {
         penWidthButtons = []
         switch tool {
         case .pen, .highlighter:
-            for p in BrushStore.shared.presets {
-                let b = UIButton(type: .custom)
-                b.setImage(presetImage(p, selected: p.id == BrushStore.shared.currentID), for: .normal)
-                b.widthAnchor.constraint(equalToConstant: 36).isActive = true
-                b.heightAnchor.constraint(equalToConstant: 36).isActive = true
-                b.accessibilityLabel = p.style.title
-                b.addAction(UIAction { [weak self] _ in self?.selectPreset(p.id) }, for: .touchUpInside)
-                b.menu = presetMenu(p.id, source: b)
-                presetButtons[p.id] = b
-                subBarStack.addArrangedSubview(b)
-            }
+            subBarStack.addArrangedSubview(makePresetStrip())
+            // 新增緊接在常用筆刷的右邊
+            let add = makeButton(symbol: "plus", title: nil, action: nil)
+            add.accessibilityLabel = L("新增常用筆刷")
+            add.addAction(UIAction { [weak self] _ in
+                guard let self else { return }
+                let p = BrushStore.shared.add(basedOn: BrushStore.shared.current)
+                self.applyTool()
+                if let b = self.presetButtons[p.id] { self.presentBrushSettings(p, from: b) }
+            }, for: .touchUpInside)
+            subBarStack.addArrangedSubview(add)
             if tool == .pen {
                 subBarStack.addArrangedSubview(toolbarSeparator())
                 for v in penStyleControls() { subBarStack.addArrangedSubview(v) }
                 subBarStack.addArrangedSubview(toolbarSeparator())
                 let ruler = makeButton(symbol: "ruler", title: nil, action: nil)
-                ruler.accessibilityLabel = "尺規"
+                ruler.accessibilityLabel = L("尺規")
                 ruler.addAction(UIAction { [weak self] _ in self?.canvas.isRulerActive.toggle() }, for: .touchUpInside)
                 subBarStack.addArrangedSubview(ruler)
                 return
@@ -329,29 +404,20 @@ extension NotebookViewController {
                 subBarStack.addArrangedSubview(toolbarSeparator())
                 for v in penStyleControls(dash: false) { subBarStack.addArrangedSubview(v) }
             }
-            let add = makeButton(symbol: "plus", title: nil, action: nil)
-            add.accessibilityLabel = "新增常用筆刷"
-            add.addAction(UIAction { [weak self] _ in
-                guard let self else { return }
-                let p = BrushStore.shared.add(basedOn: BrushStore.shared.current)
-                self.applyTool()
-                if let b = self.presetButtons[p.id] { self.presentBrushSettings(p, from: b) }
-            }, for: .touchUpInside)
             let edit = makeButton(symbol: "slider.horizontal.3", title: nil, action: nil)
-            edit.accessibilityLabel = "調整筆刷"
+            edit.accessibilityLabel = L("調整筆刷")
             edit.addAction(UIAction { [weak self, weak edit] _ in
                 guard let self, let edit else { return }
                 self.presentBrushSettings(BrushStore.shared.current, from: edit)
             }, for: .touchUpInside)
             let ruler = makeButton(symbol: "ruler", title: nil, action: nil)
-            ruler.accessibilityLabel = "尺規"
+            ruler.accessibilityLabel = L("尺規")
             ruler.addAction(UIAction { [weak self] _ in self?.canvas.isRulerActive.toggle() }, for: .touchUpInside)
-            subBarStack.addArrangedSubview(add)
             subBarStack.addArrangedSubview(edit)
             subBarStack.addArrangedSubview(ruler)
 
         case .eraser:
-            let kind = UISegmentedControl(items: ["整筆擦除", "局部擦除"])
+            let kind = UISegmentedControl(items: [L("整筆擦除"), L("局部擦除")])
             kind.selectedSegmentIndex = settings.pixelEraser ? 1 : 0
             kind.addAction(UIAction { [weak self, weak kind] _ in
                 self?.settings.pixelEraser = kind?.selectedSegmentIndex == 1
@@ -372,7 +438,7 @@ extension NotebookViewController {
                     }.withRenderingMode(.alwaysOriginal)
                 }
                 let size = UISegmentedControl(items: icons)
-                for (i, name) in ["小", "中", "大"].enumerated() { icons[i].accessibilityLabel = "橡皮擦\(name)" }
+                for (i, name) in [L("小"), L("中"), L("大")].enumerated() { icons[i].accessibilityLabel = L("橡皮擦\(name)") }
                 size.selectedSegmentIndex = sizes.firstIndex(of: settings.eraserWidth) ?? 1
                 size.addAction(UIAction { [weak self, weak size] _ in
                     guard let i = size?.selectedSegmentIndex, sizes.indices.contains(i) else { return }
@@ -381,7 +447,7 @@ extension NotebookViewController {
                 }, for: .valueChanged)
                 subBarStack.addArrangedSubview(size)
             }
-            let autoLabel = hintLabel("自動切回筆")
+            let autoLabel = hintLabel(L("自動切回筆"))
             autoLabel.textColor = .label
             let autoSwitch = UISwitch()
             autoSwitch.isOn = settings.eraserAutoReturn
@@ -395,7 +461,7 @@ extension NotebookViewController {
             break
 
         case .capture:
-            let shape = UISegmentedControl(items: ["矩形", "自由形狀"])
+            let shape = UISegmentedControl(items: [L("矩形"), L("自由形狀")])
             shape.selectedSegmentIndex = settings.captureFreeform ? 1 : 0
             shape.addAction(UIAction { [weak self, weak shape] _ in
                 self?.settings.captureFreeform = shape?.selectedSegmentIndex == 1
@@ -412,25 +478,28 @@ extension NotebookViewController {
         case .textSelect:
             break
 
+        case .sticker:
+            for v in buildStickerBar() { subBarStack.addArrangedSubview(v) }
+
         case .image:
             let hint = UILabel()
-            hint.text = "點下面的照片，放到目前這一頁；捲到別頁可以接著加"
+            hint.text = L("點下面的照片，放到目前這一頁；捲到別頁可以接著加")
             hint.font = .systemFont(ofSize: 13)
             hint.textColor = .secondaryLabel
             subBarStack.addArrangedSubview(hint)
 
         case .pageResize:
-            let reset = makeButton(symbol: "arrow.counterclockwise", title: "重設", action: nil)
+            let reset = makeButton(symbol: "arrow.counterclockwise", title: L("重設"), action: nil)
             reset.addAction(UIAction { [weak self] _ in
                 guard let self, let i = self.resizePageIndex else { return }
                 self.applyInsets(PageInsets(), pageIndex: i, toAll: false)
             }, for: .touchUpInside)
-            let all = makeButton(symbol: "doc.on.doc", title: "套用全部", action: nil)
+            let all = makeButton(symbol: "doc.on.doc", title: L("套用全部"), action: nil)
             all.addAction(UIAction { [weak self] _ in
                 guard let self, let i = self.resizePageIndex, self.pages.indices.contains(i) else { return }
                 self.applyInsets(self.pages[i].insets, pageIndex: i, toAll: true)
             }, for: .touchUpInside)
-            let numbers = makeButton(symbol: "number", title: "數值", action: nil)
+            let numbers = makeButton(symbol: "number", title: L("數值"), action: nil)
             numbers.addAction(UIAction { [weak self] _ in
                 self?.presentExpandSheet(pageIndex: self?.resizePageIndex)
             }, for: .touchUpInside)
@@ -444,23 +513,23 @@ extension NotebookViewController {
                 let mode = UISegmentedControl(items: [UIImage(systemName: "pencil")!, UIImage(systemName: "eraser")!])
                 mode.setTitle(nil, forSegmentAt: 0)
                 mode.selectedSegmentIndex = tableEraseLines ? 1 : 0
-                mode.accessibilityLabel = "畫線或擦線"
+                mode.accessibilityLabel = L("畫線或擦線")
                 mode.addAction(UIAction { [weak self, weak mode] _ in
                     guard let self, let mode, (mode.selectedSegmentIndex == 1) != self.tableEraseLines else { return }
                     self.toggleTableEraseLines()
                 }, for: .valueChanged)
                 subBarStack.addArrangedSubview(mode)
-                let done = makeButton(symbol: "checkmark.circle.fill", title: "完成", action: nil)
+                let done = makeButton(symbol: "checkmark.circle.fill", title: L("完成"), action: nil)
                 done.configuration?.baseForegroundColor = .systemBlue
                 done.addAction(UIAction { [weak self] _ in self?.finishTableEditDraw() }, for: .touchUpInside)
                 subBarStack.addArrangedSubview(done)
                 return
             }
-            let done = makeButton(symbol: "checkmark.circle.fill", title: "完成", action: nil)
+            let done = makeButton(symbol: "checkmark.circle.fill", title: L("完成"), action: nil)
             done.configuration?.baseForegroundColor = .systemBlue
             done.addAction(UIAction { [weak self] _ in self?.finishTableDraft() }, for: .touchUpInside)
             // 收回一條線：用右上角的「上一步」
-            let cancel = makeButton(symbol: "xmark", title: "取消", action: nil)
+            let cancel = makeButton(symbol: "xmark", title: L("取消"), action: nil)
             cancel.addAction(UIAction { [weak self] _ in self?.setTool(.pen) }, for: .touchUpInside)
             subBarStack.addArrangedSubview(done)
             subBarStack.addArrangedSubview(cancel)
@@ -513,10 +582,10 @@ extension NotebookViewController {
             // 筆型字樣
             let mark: String
             switch p.style {
-            case .pencil: mark = "鉛"
-            case .fountainPen: mark = "毛"
-            case .crayon: mark = "蠟"
-            case .watercolor: mark = "水"
+            case .pencil: mark = L("鉛")
+            case .fountainPen: mark = L("毛")
+            case .crayon: mark = L("蠟")
+            case .watercolor: mark = L("水")
             default: mark = ""
             }
             if !mark.isEmpty {
@@ -535,12 +604,58 @@ extension NotebookViewController {
         }
         BrushStore.shared.select(id)
         setCanvasTool(BrushStore.shared.current.tool)
+        applyInkEngine()
         refreshPresetButtons()
+    }
+
+    /// 常用筆刷（沒有數量上限）：放不下的時候左右捲動，不會把第二列撐出畫面
+    func makePresetStrip() -> UIScrollView {
+        let stack = UIStackView()
+        stack.spacing = 8
+        stack.alignment = .center
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        for p in BrushStore.shared.presets {
+            let b = UIButton(type: .custom)
+            b.setImage(presetImage(p, selected: p.id == BrushStore.shared.currentID), for: .normal)
+            b.widthAnchor.constraint(equalToConstant: 36).isActive = true
+            b.heightAnchor.constraint(equalToConstant: 36).isActive = true
+            b.accessibilityLabel = p.style.title
+            b.addAction(UIAction { [weak self] _ in self?.selectPreset(p.id) }, for: .touchUpInside)
+            b.menu = presetMenu(p.id, source: b)
+            presetButtons[p.id] = b
+            stack.addArrangedSubview(b)
+        }
+        let strip = UIScrollView()
+        strip.showsHorizontalScrollIndicator = false
+        strip.addSubview(stack)
+        // 放得下就和筆刷一樣寬；比置中還優先（放不下時第二列先往旁邊移，再不夠才捲動）
+        let fit = strip.widthAnchor.constraint(equalTo: stack.widthAnchor)
+        fit.priority = UILayoutPriority(UILayoutPriority.defaultHigh.rawValue + 1)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: strip.contentLayoutGuide.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: strip.contentLayoutGuide.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: strip.contentLayoutGuide.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: strip.contentLayoutGuide.bottomAnchor),
+            stack.heightAnchor.constraint(equalTo: strip.frameLayoutGuide.heightAnchor),
+            strip.heightAnchor.constraint(equalToConstant: 36),
+            fit,
+        ])
+        presetStrip = strip
+        return strip
+    }
+
+    /// 目前的筆刷捲到看得到的地方（剛新增的在最後面）
+    func scrollCurrentPresetIntoView() {
+        guard let strip = presetStrip, let b = presetButtons[BrushStore.shared.currentID] else { return }
+        subBar.layoutIfNeeded()
+        strip.scrollRectToVisible(b.convert(b.bounds, to: strip).insetBy(dx: -8, dy: 0), animated: false)
     }
 
     func refreshPresetButtons() {
         for p in BrushStore.shared.presets {
             presetButtons[p.id]?.setImage(presetImage(p, selected: p.id == BrushStore.shared.currentID), for: .normal)
+            // 換了筆型，名稱也跟著換
+            presetButtons[p.id]?.accessibilityLabel = p.style.title
         }
         refreshPenStyleControls()
     }
@@ -550,7 +665,7 @@ extension NotebookViewController {
     /// 細、中、粗（不同粗細的橫線圖示）＋虛線：改的是目前選的這支筆。長按粗細圖示可以自訂 pt
     /// 細、中、粗（筆和螢光筆都有）；dash：筆才有虛線
     func penStyleControls(dash withDash: Bool = true) -> [UIView] {
-        let names = ["細", "中", "粗"]
+        let names = [L("細"), L("中"), L("粗")]
         penWidthButtons = (0..<3).map { slot in
             let b = UIButton(configuration: .plain())
             b.accessibilityLabel = names[slot]
@@ -577,7 +692,7 @@ extension NotebookViewController {
             return penWidthButtons
         }
         let dash = UIButton(configuration: .plain())
-        dash.accessibilityLabel = "虛線"
+        dash.accessibilityLabel = L("虛線")
         dash.addAction(UIAction { [weak self] _ in
             guard let self else { return }
             var p = BrushStore.shared.current
@@ -600,7 +715,7 @@ extension NotebookViewController {
     func presentWidthEditor(slot: Int, from button: UIView) {
         let style = BrushStore.shared.current.style
         let wasUsing = currentWidthSlot() == slot
-        let editor = WidthSlotEditor(title: ["細", "中", "粗"][slot], range: style.widthRange,
+        let editor = WidthSlotEditor(title: [L("細"), L("中"), L("粗")][slot], range: style.usableWidthRange,
                                      width: BrushStore.shared.styleWidths(style)[slot]) { [weak self] w in
             guard let self else { return }
             BrushStore.shared.setStyleWidth(w, slot: slot, style: style)
@@ -656,7 +771,8 @@ extension NotebookViewController {
 
     // MARK: 工具列的小視窗
 
-    /// 粗細、虛線、筆刷設定的小視窗：開著時筆照樣可以在畫布上寫（一下筆就關掉），換工具也會關掉
+    /// 粗細、虛線、筆刷設定的小視窗。開著時碰到頁面（筆或手指，點或畫）都當作點旁邊：
+    /// 關掉它、這一下不寫字也不捲動，關好了才照常寫。換工具也會關掉
     /// rect：指著 source 裡的這一塊（沒給就是整個 source）
     func presentToolPopover(_ vc: UIViewController, from source: UIView, rect: CGRect? = nil, size: CGSize) {
         dismissToolPopover()
@@ -665,16 +781,21 @@ extension NotebookViewController {
         if let pop = vc.popoverPresentationController {
             pop.sourceView = source
             pop.sourceRect = rect ?? source.bounds
-            pop.passthroughViews = [canvas]
+            // 頁面上的觸碰交給 popoverShield（不讓系統的透明底接走：點旁邊關掉後頁面的手勢會卡住）
+            pop.passthroughViews = [popoverShield]
         }
         present(vc, animated: true)
     }
 
-    /// 關掉小視窗。工具列重建時它依附的按鈕會被拿掉，不關的話可能卡在看不到的地方擋住所有觸控
-    func dismissToolPopover() {
+    /// 關掉小視窗。工具列重建時它依附的按鈕會被拿掉，不關的話可能卡在看不到的地方擋住所有觸控（這時不要動畫）。
+    /// animated：點旁邊關掉時縮回去
+    func dismissToolPopover(animated: Bool = false) {
         guard let p = presentedViewController, p.modalPresentationStyle == .popover, !p.isBeingDismissed else { return }
-        p.dismiss(animated: false)
+        p.dismiss(animated: animated)
     }
+
+    /// 工具列的小視窗開著（包含正在關的時候）
+    var toolPopoverShown: Bool { presentedViewController?.modalPresentationStyle == .popover }
 
     /// 依目前的筆更新「細、中、粗」與虛線按鈕
     func refreshPenStyleControls() {
@@ -740,18 +861,19 @@ extension NotebookViewController {
 
     func presetMenu(_ id: UUID, source: UIButton) -> UIMenu {
         UIMenu(children: [
-            UIAction(title: "調整", image: UIImage(systemName: "slider.horizontal.3")) { [weak self, weak source] _ in
+            UIAction(title: L("調整"), image: UIImage(systemName: "slider.horizontal.3")) { [weak self, weak source] _ in
                 guard let self, let source, let p = BrushStore.shared.presets.first(where: { $0.id == id }) else { return }
                 BrushStore.shared.select(id)
                 self.setCanvasTool(p.tool)
+                self.applyInkEngine()
                 self.refreshPresetButtons()
                 self.presentBrushSettings(p, from: source)
             },
-            UIAction(title: "往左移", image: UIImage(systemName: "arrow.left")) { [weak self] _ in
+            UIAction(title: L("往左移"), image: UIImage(systemName: "arrow.left")) { [weak self] _ in
                 BrushStore.shared.moveLeft(id)
                 self?.rebuildSubBar()
             },
-            UIAction(title: "刪除", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
+            UIAction(title: L("刪除"), image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
                 BrushStore.shared.remove(id)
                 self?.applyTool()
             },
@@ -759,25 +881,38 @@ extension NotebookViewController {
     }
 
     func presentBrushSettings(_ preset: BrushPreset, from source: UIView) {
-        let view = BrushSettingsView(preset: preset) { [weak self] p in
+        var view = BrushSettingsView(preset: preset) { [weak self] p in
             BrushStore.shared.update(p)
-            if BrushStore.shared.currentID == p.id { self?.setCanvasTool(BrushStore.shared.current.tool) }
+            if BrushStore.shared.currentID == p.id {
+                self?.setCanvasTool(BrushStore.shared.current.tool)
+                // 改了筆型：可能從自製筆刷換成 PencilKit（或相反）
+                self?.applyInkEngine()
+            }
             self?.refreshPresetButtons()
         }
-        presentToolPopover(UIHostingController(rootView: view), from: source, size: CGSize(width: 340, height: 460))
+        // 每一類至少留一支
+        if BrushStore.shared.presets(preset.category).count > 1 {
+            view.onDelete = { [weak self] in
+                self?.dismissToolPopover()
+                BrushStore.shared.remove(preset.id)
+                self?.applyTool()
+            }
+        }
+        // 筆多了最上面的筆型
+        presentToolPopover(UIHostingController(rootView: view), from: source, size: CGSize(width: 340, height: preset.style == .marker ? 460 : 600))
     }
 
     // MARK: - Menus
 
     func makeInsertMenu() -> UIMenu {
         UIMenu(children: [
-            UIAction(title: "表格…", image: UIImage(systemName: "tablecells")) { [weak self] _ in
+            UIAction(title: L("表格…"), image: UIImage(systemName: "tablecells")) { [weak self] _ in
                 guard let self else { return }
                 let r = self.visibleDocRect()
                 self.presentInsertTablePanel(anchor: self.insertButton.map { .view($0) } ?? .doc(CGRect(x: r.midX, y: r.midY, width: 1, height: 1)))
             },
-            UIAction(title: "手繪新表格", image: UIImage(systemName: "pencil.and.outline")) { [weak self] _ in self?.setTool(.tableDraw) },
-            UIAction(title: "文字框", image: UIImage(systemName: "character.textbox")) { [weak self] _ in self?.insertTextBox(at: nil) },
+            UIAction(title: L("手繪新表格"), image: UIImage(systemName: "pencil.and.outline")) { [weak self] _ in self?.setTool(.tableDraw) },
+            UIAction(title: L("文字框"), image: UIImage(systemName: "character.textbox")) { [weak self] _ in self?.insertTextBox(at: nil) },
         ])
     }
 
@@ -834,88 +969,124 @@ extension NotebookViewController {
         let i = currentPageIndex
         // 全部頁面、跳到頁碼、擴展頁面在工具列上都有，這裡不重複
         var items: [UIMenuElement] = [
-            UIAction(title: "在此頁後新增頁面…", image: UIImage(systemName: "doc.badge.plus")) { [weak self] _ in
-                self?.presentPaperPicker(title: "在第 \(i + 1) 頁後新增頁面", insertAt: i + 1)
+            UIAction(title: L("在此頁後新增頁面…"), image: UIImage(systemName: "doc.badge.plus")) { [weak self] _ in
+                self?.presentPaperPicker(title: L("在第 \(i + 1) 頁後新增頁面"), insertAt: i + 1)
             },
-            UIAction(title: "在此頁前新增頁面…", image: UIImage(systemName: "doc.badge.plus")) { [weak self] _ in
-                self?.presentPaperPicker(title: "在第 \(i + 1) 頁前新增頁面", insertAt: i)
+            UIAction(title: L("在此頁前新增頁面…"), image: UIImage(systemName: "doc.badge.plus")) { [weak self] _ in
+                self?.presentPaperPicker(title: L("在第 \(i + 1) 頁前新增頁面"), insertAt: i)
+            },
+            UIAction(title: L("將該頁加入大綱…"), image: UIImage(systemName: "list.bullet.indent")) { [weak self] _ in
+                self?.promptAddToOutline(i)
             },
         ]
         if !pages[i].insets.isZero {
-            items.append(UIAction(title: "移除此頁擴展", image: UIImage(systemName: "arrow.down.right.and.arrow.up.left")) { [weak self] _ in
+            items.append(UIAction(title: L("移除此頁擴展"), image: UIImage(systemName: "arrow.down.right.and.arrow.up.left")) { [weak self] _ in
                 self?.applyInsets(PageInsets(), pageIndex: i, toAll: false)
             })
         }
         let trashed = session.trashedPages.count
-        items.append(UIAction(title: trashed > 0 ? "最近刪除的頁面（\(trashed)）…" : "最近刪除的頁面…",
+        items.append(UIAction(title: trashed > 0 ? L("最近刪除的頁面（\(trashed)）…") : L("最近刪除的頁面…"),
                               image: UIImage(systemName: "trash.slash")) { [weak self] _ in
             self?.presentTrashedPages(from: nil)
         })
-        items.append(UIAction(title: "刪除此頁", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
+        items.append(UIAction(title: L("刪除此頁"), image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
             self?.deletePage(i)
         })
         return items
     }
 
-    /// 常用筆刷列靠左或靠右
+    /// Pencil Pro 按壓：調色盤，或工具列的某個工具
+    func squeezeMenuItems() -> [UIMenuElement] {
+        let s = settings
+        let palette = UIAction(title: L("調色盤"), image: UIImage(systemName: "paintpalette"),
+                               state: s.squeezeAction == "palette" ? .on : .off) { _ in s.squeezeAction = "palette" }
+        let tools: [UIMenuElement] = Self.toolbarTools.map { item in
+            let key = EditorSettings.squeezeKey(item.0)
+            return UIAction(title: item.2, image: UIImage(systemName: item.1),
+                            state: s.squeezeAction == key ? .on : .off) { _ in s.squeezeAction = key }
+        }
+        return [palette] + tools
+    }
+
+    /// 右上角「⋯」：分成 Apple Pencil 設定、書寫設定、電路圖設定、其他四段（每段有標題，選單還是只有兩層）
     func makeSettingsMenuItems() -> [UIMenuElement] {
         let s = settings
-        let toggles = UIMenu(options: .displayInline, children: [
-            UIAction(title: "Pencil 點兩下時顯示調色盤圖示", image: UIImage(systemName: "paintpalette"), state: s.paletteOnDoubleTap ? .on : .off) { _ in
+        let pencil = UIMenu(title: L("Apple Pencil 設定"), options: .displayInline, children: [
+            UIAction(title: L("Pencil 點兩下時顯示調色盤圖示"), image: UIImage(systemName: "paintpalette"), state: s.paletteOnDoubleTap ? .on : .off) { _ in
                 s.paletteOnDoubleTap.toggle()
             },
-            UIMenu(title: "手掌防誤觸", image: UIImage(systemName: "hand.raised"), children: [
-                UIAction(title: "右手寫字", state: s.palmRejection == "right" ? .on : .off) { _ in s.palmRejection = "right" },
-                UIAction(title: "左手寫字", state: s.palmRejection == "left" ? .on : .off) { _ in s.palmRejection = "left" },
-                UIAction(title: "關閉", state: s.palmRejection == "off" ? .on : .off) { _ in s.palmRejection = "off" },
+            UIMenu(title: L("Pencil Pro 按壓"), image: UIImage(systemName: "hand.pinch"), children: squeezeMenuItems()),
+            UIMenu(title: L("手掌防誤觸"), image: UIImage(systemName: "hand.raised"), children: [
+                UIAction(title: L("右手寫字"), state: s.palmRejection == "right" ? .on : .off) { _ in s.palmRejection = "right" },
+                UIAction(title: L("左手寫字"), state: s.palmRejection == "left" ? .on : .off) { _ in s.palmRejection = "left" },
+                UIAction(title: L("關閉"), state: s.palmRejection == "off" ? .on : .off) { _ in s.palmRejection = "off" },
             ]),
-            UIAction(title: "用手指書寫", image: UIImage(systemName: "hand.draw"), state: s.fingerDrawing ? .on : .off) { [weak self] _ in
+        ])
+        let writing = UIMenu(title: L("書寫設定"), options: .displayInline, children: [
+            UIAction(title: L("用手指書寫"), image: UIImage(systemName: "hand.draw"), state: s.fingerDrawing ? .on : .off) { [weak self] _ in
                 s.fingerDrawing.toggle()
                 self?.applyTool()
             },
-            UIAction(title: "橡皮擦擦完自動切回筆", image: UIImage(systemName: "eraser"), state: s.eraserAutoReturn ? .on : .off) { [weak self] _ in
+            UIAction(title: L("橡皮擦擦完自動切回筆"), image: UIImage(systemName: "eraser"), state: s.eraserAutoReturn ? .on : .off) { [weak self] _ in
                 s.eraserAutoReturn.toggle()
                 if self?.tool == .eraser { self?.rebuildSubBar() }
             },
-            UIAction(title: "畫線停住變直線／圖形", image: UIImage(systemName: "line.diagonal"), state: s.shapeSnap ? .on : .off) { [weak self] _ in
+            UIAction(title: L("畫線停住變直線／圖形"), image: UIImage(systemName: "line.diagonal"), state: s.shapeSnap ? .on : .off) { [weak self] _ in
                 s.shapeSnap.toggle()
                 self?.updateGestureAvailability()
             },
-            UIAction(title: "自製筆刷（不圓滑）", image: UIImage(systemName: "scribble"), state: s.customInk ? .on : .off) { [weak self] _ in
+            UIAction(title: L("原子筆用自製筆刷（不圓滑）"), image: UIImage(systemName: "scribble"), state: s.customInk ? .on : .off) { [weak self] _ in
                 s.customInk.toggle()
                 self?.applyTool()
-                self?.showToast(s.customInk ? "「筆」改用自製筆刷：照筆尖原始軌跡畫，不做圓滑" : "「筆」改回 PencilKit")
+                self?.showToast(s.customInk ? L("原子筆改用自製筆刷：照筆尖原始軌跡畫，不做圓滑（其他筆照樣是 PencilKit）") : L("原子筆改回 PencilKit"))
             },
-            UIAction(title: "拷貝除錯紀錄", image: UIImage(systemName: "ladybug")) { [weak self] _ in
-                UIPasteboard.general.string = DebugLog.text
-                self?.showToast("已拷貝除錯紀錄，可以貼給開發者")
-            },
-            UIAction(title: "螢光筆自動對齊 PDF 文字", image: UIImage(systemName: "highlighter"), state: s.smartHighlight ? .on : .off) { _ in
+            UIAction(title: L("螢光筆自動對齊 PDF 文字"), image: UIImage(systemName: "highlighter"), state: s.smartHighlight ? .on : .off) { _ in
                 s.smartHighlight.toggle()
             },
-        ])
-        // 最下面：使用說明、關於我
-        let help = UIMenu(options: .displayInline, children: [
-            UIAction(title: "使用說明…", image: UIImage(systemName: "questionmark.circle")) { [weak self] _ in
-                guard let self else { return }
-                self.presentHelp(from: self.settingsButton)
+            UIAction(title: L("調色盤設定…"), image: UIImage(systemName: "swatchpalette")) { [weak self] _ in
+                self?.presentBrushManager()
             },
-            UIAction(title: "關於我…", image: UIImage(systemName: "person.crop.circle")) { [weak self] _ in
+        ])
+        let circuit = UIMenu(title: L("電路圖設定"), options: .displayInline, children: [
+            UIAction(title: L("連續放置元件"), image: UIImage(systemName: "square.on.square"), state: s.circuitContinuousPlace ? .on : .off) { _ in
+                s.circuitContinuousPlace.toggle()
+            },
+            UIMenu(title: L("電路圖選取模式"), image: UIImage(systemName: "lasso"), children: [
+                ("default", L("預設選取模式"), L("順時針圈：完整圈到才選；逆時針圈：碰到就選")),
+                ("reversed", L("反轉選取模式"), L("順時針圈：碰到就選；逆時針圈：完整圈到才選")),
+                ("window", L("僅窗選"), L("不管方向，完整圈到才選")),
+                ("crossing", L("僅交集選取"), L("不管方向，碰到就選")),
+            ].map { mode in
+                UIAction(title: mode.1, subtitle: mode.2, state: s.circuitLassoMode == mode.0 ? .on : .off) { _ in s.circuitLassoMode = mode.0 }
+            }),
+            UIAction(title: L("電路圖橡皮擦擦完切回"), image: UIImage(systemName: "eraser"), state: s.circuitEraserAutoReturn ? .on : .off) { [weak self] _ in
+                s.circuitEraserAutoReturn.toggle()
+                if self?.tool == .circuit { self?.rebuildSubBar() }
+            },
+            UIAction(title: L("電路元件庫放左邊"), image: UIImage(systemName: "sidebar.left"), state: s.circuitLibraryOnLeft ? .on : .off) { [weak self] _ in
+                self?.setCircuitLibraryOnLeft(!s.circuitLibraryOnLeft)
+            },
+        ])
+        // 其他：最下面是關於我
+        let other = UIMenu(title: L("其他"), options: .displayInline, children: [
+            UIAction(title: L("預覽模式（收合工具列）"), image: UIImage(systemName: "eye")) { [weak self] _ in
+                self?.setPreviewMode(true)
+            },
+            UIAction(title: L("清除該頁面所有物件"), image: UIImage(systemName: "trash.slash"), attributes: .destructive) { [weak self] _ in
+                guard let self else { return }
+                self.confirmClearPage(self.currentPageIndex)
+            },
+            UIAction(title: L("拷貝除錯紀錄"), image: UIImage(systemName: "ladybug")) { [weak self] _ in
+                UIPasteboard.general.string = DebugLog.text
+                self?.showToast(L("已拷貝除錯紀錄，可以貼給開發者"))
+            },
+            UIAction(title: L("關於我…"), image: UIImage(systemName: "person.crop.circle")) { [weak self] _ in
                 let about = UIHostingController(rootView: AboutView())
                 about.modalPresentationStyle = .formSheet
                 self?.present(about, animated: true)
             },
         ])
-        let actions = UIMenu(options: .displayInline, children: [
-            UIAction(title: "管理常用筆刷…", image: UIImage(systemName: "swatchpalette")) { [weak self] _ in
-                self?.presentBrushManager()
-            },
-            UIAction(title: "清除畫面上所有貼圖", image: UIImage(systemName: "pin.slash"), attributes: .destructive) { [weak self] _ in
-                PinStore.shared.removeAll()
-                self?.pinOverlay.reload()
-            },
-        ])
-        return [toggles, actions, help]
+        return [pencil, writing, circuit, other]
     }
 
     // MARK: - Favorites
@@ -930,41 +1101,51 @@ extension NotebookViewController {
     }
 
     @objc func favoriteTapped() {
-        let i = currentPageIndex
+        toggleFavorite(currentPageIndex, from: self, source: favoriteButton)
+    }
+
+    /// 星號：還不是我的最愛 → 跳出備註再加入；已經是 → 編輯備註或移除。
+    /// presenter、source：從哪個畫面、哪個按鈕跳出來（「全部頁面」的縮圖右上角也有星號）
+    func toggleFavorite(_ i: Int, from presenter: UIViewController, source: UIView, then: (() -> Void)? = nil) {
+        guard pages.indices.contains(i) else { return }
         if pages[i].favorite {
-            let a = UIAlertController(title: "第 \(i + 1) 頁", message: pages[i].note.isEmpty ? nil : pages[i].note, preferredStyle: .actionSheet)
-            a.addAction(UIAlertAction(title: "編輯備註", style: .default) { [weak self] _ in self?.promptFavoriteNote(i, isNew: false) })
-            a.addAction(UIAlertAction(title: "從我的最愛移除", style: .destructive) { [weak self] _ in
+            let a = UIAlertController(title: L("第 \(i + 1) 頁"), message: pages[i].note.isEmpty ? nil : pages[i].note, preferredStyle: .actionSheet)
+            a.addAction(UIAlertAction(title: L("編輯備註"), style: .default) { [weak self, weak presenter] _ in
+                self?.promptFavoriteNote(i, isNew: false, from: presenter, then: then)
+            })
+            a.addAction(UIAlertAction(title: L("從我的最愛移除"), style: .destructive) { [weak self] _ in
                 guard let self else { return }
                 self.session.document.pages[i].favorite = false
                 self.afterFavoriteChange(i)
+                then?()
             })
-            a.addAction(UIAlertAction(title: "取消", style: .cancel))
-            a.popoverPresentationController?.sourceView = favoriteButton
-            a.popoverPresentationController?.sourceRect = favoriteButton.bounds
-            present(a, animated: true)
+            a.addAction(UIAlertAction(title: L("取消"), style: .cancel))
+            a.popoverPresentationController?.sourceView = source
+            a.popoverPresentationController?.sourceRect = source.bounds
+            presenter.present(a, animated: true)
         } else {
-            promptFavoriteNote(i, isNew: true)
+            promptFavoriteNote(i, isNew: true, from: presenter, then: then)
         }
     }
 
-    func promptFavoriteNote(_ i: Int, isNew: Bool) {
-        let a = UIAlertController(title: isNew ? "加入我的最愛" : "編輯備註",
-                                  message: "第 \(i + 1) 頁：寫下這頁有什麼資料，之後比較好找（可留空）",
+    func promptFavoriteNote(_ i: Int, isNew: Bool, from presenter: UIViewController? = nil, then: (() -> Void)? = nil) {
+        let a = UIAlertController(title: isNew ? L("加入我的最愛") : L("編輯備註"),
+                                  message: L("第 \(i + 1) 頁：寫下這頁有什麼資料，之後比較好找（可留空）"),
                                   preferredStyle: .alert)
         a.addTextField { [weak self] tf in
             tf.text = self?.pages[i].note
-            tf.placeholder = "例如：第三章公式整理"
+            tf.placeholder = L("例如：第三章公式整理")
             tf.clearButtonMode = .whileEditing
         }
-        a.addAction(UIAlertAction(title: "取消", style: .cancel))
-        a.addAction(UIAlertAction(title: isNew ? "加入" : "儲存", style: .default) { [weak self, weak a] _ in
+        a.addAction(UIAlertAction(title: L("取消"), style: .cancel))
+        a.addAction(UIAlertAction(title: isNew ? L("加入") : L("儲存"), style: .default) { [weak self, weak a] _ in
             guard let self, self.pages.indices.contains(i) else { return }
             self.session.document.pages[i].favorite = true
             self.session.document.pages[i].note = a?.textFields?.first?.text ?? ""
             self.afterFavoriteChange(i)
+            then?()
         })
-        present(a, animated: true)
+        (presenter ?? self).present(a, animated: true)
     }
 
     func afterFavoriteChange(_ i: Int) {
@@ -1013,14 +1194,6 @@ extension NSLayoutConstraint {
 }
 
 extension NotebookViewController {
-    func presentHelp(from source: UIView) {
-        let host = UIHostingController(rootView: HelpView())
-        host.modalPresentationStyle = .popover
-        host.preferredContentSize = CGSize(width: 460, height: 640)
-        host.popoverPresentationController?.sourceView = source
-        host.popoverPresentationController?.sourceRect = source.bounds
-        present(host, animated: true)
-    }
 }
 
 extension NotebookViewController {
@@ -1077,23 +1250,23 @@ struct DashSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("虛線樣式").font(.headline)
+            Text(L("虛線樣式")).font(.headline)
             DashPreview(preset: preset).frame(height: 80)
             HStack {
-                Text("線段長度")
+                Text(L("線段長度"))
                 Spacer()
                 Text(String(format: "%.1f pt", Double(pattern.dash))).monospacedDigit().foregroundStyle(.secondary)
             }
             Slider(value: Binding(get: { pattern.dash }, set: { preset.dashLength = ($0 * 10).rounded() / 10 }),
                    in: 0.3...30, step: 0.1)
             HStack {
-                Text("間距")
+                Text(L("間距"))
                 Spacer()
                 Text(String(format: "%.1f pt", Double(pattern.gap))).monospacedDigit().foregroundStyle(.secondary)
             }
             Slider(value: Binding(get: { pattern.gap }, set: { preset.gapLength = ($0 * 10).rounded() / 10 }),
                    in: 0.3...30, step: 0.1)
-            Button("恢復預設") {
+            Button(L("恢復預設")) {
                 preset.dashLength = nil
                 preset.gapLength = nil
             }
@@ -1129,5 +1302,20 @@ private struct DashPreview: View {
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.white))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.3)))
         .environment(\.colorScheme, .light)
+    }
+}
+
+/// 蓋在頁面上：工具列的小視窗開著時接下頁面上的觸碰（一碰到就通知），這整個觸碰都不會到頁面；
+/// 小視窗關好了就讓觸碰穿過去
+final class PopoverShieldView: UIView {
+    var isActive: () -> Bool = { false }
+    var onTouch: () -> Void = {}
+
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        isActive() && super.point(inside: point, with: event)
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        onTouch()
     }
 }

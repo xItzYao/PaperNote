@@ -123,6 +123,53 @@ final class InkEngineTests: XCTestCase {
         XCTAssertGreaterThan(inkAlpha(v, 150, 300), 200, "沒動的筆跡還在")
     }
 
+    /// 背景畫好時內容已經改很多：不能先換上舊的那張再重畫（移走的字會先跳回原位）
+    func testAnOutdatedBackgroundRenderIsNeverShown() {
+        let v = PageInkView(frame: CGRect(x: 0, y: 0, width: 600, height: 850))
+        let old = (0..<100).map { _ in stroke([(100, 100), (200, 100)], width: 6) }
+        v.set(strokes: old, offset: .zero)
+        // 還在背景畫的時候全部搬走
+        v.set(strokes: old.map { InkGeometry.offset($0, by: CGPoint(x: 0, y: 400)) }, offset: .zero)
+        var atOldPlace = false
+        let watch = v.layer.observe(\.contents) { [unowned self] _, _ in
+            if self.inkAlpha(v, 150, 100) > 0 { atOldPlace = true }
+        }
+        waitUntilBuilt(v)
+        watch.invalidate()
+        XCTAssertFalse(atOldPlace, "舊內容的圖不能上畫面")
+        XCTAssertGreaterThan(inkAlpha(v, 150, 500), 200)
+    }
+
+    /// 藏起來、放回來改成當場畫：最糟的情況（整頁 1500 筆都圈起來）也不能卡很久
+    func testHidingAWholePageAtOnceIsQuick() {
+        let v = PageInkView(frame: CGRect(x: 0, y: 0, width: 600, height: 850))
+        let page = fullPage()
+        v.set(strokes: page, offset: .zero)
+        waitUntilBuilt(v)
+        let t0 = CACurrentMediaTime()
+        v.setHidden(Set(page.map(\.id)))
+        let t1 = CACurrentMediaTime()
+        v.setHidden([])
+        let t2 = CACurrentMediaTime()
+        print("INKDIAG hide page \(Int((t1 - t0) * 1000))ms show page \(Int((t2 - t1) * 1000))ms")
+        XCTAssertLessThan(max(t1 - t0, t2 - t1), 1.5)
+        XCTAssertFalse(v.isBuilding)
+    }
+
+    /// 放很大（向量）時把整頁都藏起來再放回來：也要在同一次畫面更新裡好
+    func testHiddenVectorInkComesBackRightAway() {
+        let v = PageInkView(frame: CGRect(x: 0, y: 0, width: 600, height: 850))
+        let a = stroke([(100, 100), (200, 100)], width: 4)
+        v.set(strokes: [a], offset: .zero)
+        v.setRenderScale(12, immediately: true)
+        waitUntilBuilt(v)
+        v.setHidden([a.id])
+        XCTAssertEqual(v.layer.sublayers?.count ?? 0, 0)
+        v.setHidden([])
+        XCTAssertFalse(v.isBuilding, "不能等背景算")
+        XCTAssertEqual(v.layer.sublayers?.count ?? 0, 1)
+    }
+
     /// 放大很多時點陣圖會太大：改用向量，放大也清楚
     func testZoomedFarInUsesVector() {
         let v = PageInkView(frame: CGRect(x: 0, y: 0, width: 600, height: 850))
@@ -390,7 +437,7 @@ final class InkEngineFlowTests: XCTestCase {
     func testThinStrokeKeepsItsLookAfterLift() {
         let saved = BrushStore.shared.current
         var p = saved
-        p.style = .pen
+        p.style = .monoline
         p.width = 0.4
         BrushStore.shared.update(p)
         defer { BrushStore.shared.update(saved) }
@@ -486,13 +533,15 @@ final class InkEngineFlowTests: XCTestCase {
     func testPenWidthDoesNotThinWithPressure() {
         var p = BrushStore.shared.current
         let style = p.style
-        p.style = .pen
+        func widths(_ forces: [CGFloat]) -> [CGFloat] {
+            editor.inkBegan(.init(point: docPoint(100, 200), force: forces[0]))
+            editor.inkMoved([.init(point: docPoint(120, 200), force: forces[1]), .init(point: docPoint(140, 200), force: forces[2])])
+            editor.inkEnded(cancelled: false)
+            return editor.pages[0].ink.last?.points.map(\.width) ?? []
+        }
+        p.style = .monoline
         BrushStore.shared.update(p)
-        editor.inkBegan(.init(point: docPoint(100, 200), force: 0.9))
-        editor.inkMoved([.init(point: docPoint(120, 200), force: 0.5), .init(point: docPoint(140, 200), force: 0.05)])
-        editor.inkEnded(cancelled: false)
-        let ws = editor.pages[0].ink[0].points.map(\.width)
-        XCTAssertEqual(Set(ws).count, 1, "筆照設定的粗細畫，放開前不會變細")
+        XCTAssertEqual(Set(widths([0.9, 0.5, 0.05])).count, 1, "原子筆照設定的粗細畫，放開前不會變細")
         p.style = style
         BrushStore.shared.update(p)
     }
@@ -580,7 +629,7 @@ final class InkEngineFlowTests: XCTestCase {
     func testDashedCustomPen() {
         let saved = BrushStore.shared.current
         var p = saved
-        p.style = .pen
+        p.style = .monoline
         p.width = 2
         p.dashed = true
         p.dashLength = 10

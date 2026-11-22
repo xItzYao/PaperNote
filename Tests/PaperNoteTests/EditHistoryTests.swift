@@ -109,18 +109,23 @@ final class EditHistoryTests: XCTestCase {
         drawStroke(y: 200)
         drawStroke(y: 300)
         drawStroke(y: 400)
+        let savedPixel = EditorSettings.shared.pixelEraser
+        let savedReturn = EditorSettings.shared.eraserAutoReturn
+        EditorSettings.shared.pixelEraser = false
+        EditorSettings.shared.eraserAutoReturn = false
+        defer {
+            EditorSettings.shared.pixelEraser = savedPixel
+            EditorSettings.shared.eraserAutoReturn = savedReturn
+        }
         editor.setTool(.eraser)
-        // PencilKit 的橡皮擦一次擦掉一筆，每擦一筆通知一次
-        editor.canvasViewDidBeginUsingTool(editor.canvas)
-        var d = editor.canvas.drawing
-        d.strokes.removeLast()
-        editor.canvas.drawing = d
-        spin(0.05)
-        d.strokes.removeLast()
-        editor.canvas.drawing = d
-        editor.canvasViewDidEndUsingTool(editor.canvas)
-        spin(0.2)
+        // 橡皮擦一路往下擦，先擦到第一筆、再擦到第二筆
+        editor.eraserBegan(at: docPoint(160, 160))
+        editor.eraserMoved([docPoint(160, 250)])
+        XCTAssertEqual(strokeCount, 2)
+        editor.eraserMoved([docPoint(160, 340)])
         XCTAssertEqual(strokeCount, 1)
+        editor.eraserEnded()
+        spin(0.2)
         editor.undoTapped()
         XCTAssertEqual(strokeCount, 3, "一次擦除，一次上一步全部回來")
     }

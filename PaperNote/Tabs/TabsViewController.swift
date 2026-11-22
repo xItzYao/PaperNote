@@ -31,7 +31,7 @@ final class TabsViewController: UIViewController {
         let library = UIButton(type: .system)
         library.setImage(UIImage(systemName: "chevron.left", withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold)), for: .normal)
         library.tintColor = .label
-        library.accessibilityLabel = "資料庫"
+        library.accessibilityLabel = L("資料庫")
         library.translatesAutoresizingMaskIntoConstraints = false
         library.addAction(UIAction { [weak self] _ in self?.exitToLibrary() }, for: .touchUpInside)
         tabBar.addSubview(library)
@@ -88,6 +88,9 @@ final class TabsViewController: UIViewController {
             self?.rebuildTabs()
         }
 
+        // 筆記本開著的時候從別的 App 分享 PDF 進來：匯入後要切到那一本（之前只改了分頁資料，畫面沒跟著換）
+        NotificationCenter.default.addObserver(self, selector: #selector(notebookTabOpened(_:)), name: .notebookTabOpened, object: nil)
+
         store.prune(existing: Set(LibraryStore.shared.visibleNotebooks.map(\.id)))
         if let a = store.state.active {
             show(a)
@@ -97,6 +100,16 @@ final class TabsViewController: UIViewController {
     }
 
     // MARK: - 切換分頁
+
+    @objc private func notebookTabOpened(_ note: Notification) {
+        guard let id = note.object as? UUID else { return }
+        show(id)
+    }
+
+    /// 現在顯示的筆記本
+    var shownNotebookID: UUID? {
+        children.compactMap { $0 as? NotebookViewController }.first?.session.id
+    }
 
     private func show(_ id: UUID) {
         guard let vc = editor(for: id) else {
@@ -181,7 +194,7 @@ final class TabsViewController: UIViewController {
     // MARK: - 分頁列
 
     private func title(_ id: UUID) -> String {
-        LibraryStore.shared.notebook(id)?.title ?? "筆記本"
+        LibraryStore.shared.notebook(id)?.title ?? L("筆記本")
     }
 
     private func rebuildTabs() {
@@ -228,13 +241,14 @@ final class TabsViewController: UIViewController {
         config.baseForegroundColor = active ? .label : .secondaryLabel
         config.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 4)
         let titleButton = UIButton(configuration: config)
+        if active { titleButton.accessibilityTraits.insert(.selected) }
         titleButton.addAction(UIAction { [weak self] _ in self?.show(id) }, for: .touchUpInside)
         titleButton.widthAnchor.constraint(lessThanOrEqualToConstant: 190).isActive = true
 
         let close = UIButton(type: .system)
         close.setImage(UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .bold)), for: .normal)
         close.tintColor = .secondaryLabel
-        close.accessibilityLabel = "關閉分頁"
+        close.accessibilityLabel = L("關閉分頁")
         close.widthAnchor.constraint(equalToConstant: 26).isActive = true
         close.addAction(UIAction { [weak self] _ in self?.closeTab(id) }, for: .touchUpInside)
 
@@ -307,17 +321,17 @@ final class TabsViewController: UIViewController {
                 self?.rebuildTabs()
             }
         }
-        groupItems.append(UIAction(title: "新增群組…", image: UIImage(systemName: "plus")) { [weak self] _ in
+        groupItems.append(UIAction(title: L("新增群組…"), image: UIImage(systemName: "plus")) { [weak self] _ in
             self?.promptNewGroup(with: id)
         })
-        var items: [UIMenuElement] = [UIMenu(title: "加入群組", image: UIImage(systemName: "folder.badge.plus"), children: groupItems)]
+        var items: [UIMenuElement] = [UIMenu(title: L("加入群組"), image: UIImage(systemName: "folder.badge.plus"), children: groupItems)]
         if tab?.groupID != nil {
-            items.append(UIAction(title: "移出群組", image: UIImage(systemName: "folder.badge.minus")) { [weak self] _ in
+            items.append(UIAction(title: L("移出群組"), image: UIImage(systemName: "folder.badge.minus")) { [weak self] _ in
                 self?.store.move(id, to: nil)
                 self?.rebuildTabs()
             })
         }
-        items.append(UIAction(title: "關閉其他分頁", image: UIImage(systemName: "xmark.square")) { [weak self] _ in
+        items.append(UIAction(title: L("關閉其他分頁"), image: UIImage(systemName: "xmark.square")) { [weak self] _ in
             guard let self else { return }
             for (other, e) in self.editors where other != id {
                 e.prepareForClose()
@@ -328,7 +342,7 @@ final class TabsViewController: UIViewController {
             self.store.closeOthers(than: id)
             self.show(id)
         })
-        items.append(UIAction(title: "關閉分頁", image: UIImage(systemName: "xmark"), attributes: .destructive) { [weak self] _ in
+        items.append(UIAction(title: L("關閉分頁"), image: UIImage(systemName: "xmark"), attributes: .destructive) { [weak self] _ in
             self?.closeTab(id)
         })
         return UIMenu(title: title(id), children: items)
@@ -342,13 +356,13 @@ final class TabsViewController: UIViewController {
             }
         }
         return UIMenu(title: g.name, children: [
-            UIAction(title: "重新命名…", image: UIImage(systemName: "pencil")) { [weak self] _ in self?.promptRename(g) },
-            UIMenu(title: "顏色", image: UIImage(systemName: "paintpalette"), options: .displayInline, children: [UIMenu(options: .displayInline, children: colors)]),
-            UIAction(title: "解散群組（保留分頁）", image: UIImage(systemName: "rectangle.stack.badge.minus")) { [weak self] _ in
+            UIAction(title: L("重新命名…"), image: UIImage(systemName: "pencil")) { [weak self] _ in self?.promptRename(g) },
+            UIMenu(title: L("顏色"), image: UIImage(systemName: "paintpalette"), options: .displayInline, children: [UIMenu(options: .displayInline, children: colors)]),
+            UIAction(title: L("解散群組（保留分頁）"), image: UIImage(systemName: "rectangle.stack.badge.minus")) { [weak self] _ in
                 self?.store.ungroup(g.id)
                 self?.rebuildTabs()
             },
-            UIAction(title: "關閉群組內所有分頁", image: UIImage(systemName: "xmark"), attributes: .destructive) { [weak self] _ in
+            UIAction(title: L("關閉群組內所有分頁"), image: UIImage(systemName: "xmark"), attributes: .destructive) { [weak self] _ in
                 guard let self else { return }
                 let ids = self.store.state.tabs.filter { $0.groupID == g.id }.map(\.notebookID)
                 for id in ids {
@@ -365,10 +379,10 @@ final class TabsViewController: UIViewController {
     }
 
     private func promptNewGroup(with tab: UUID) {
-        let a = UIAlertController(title: "新增群組", message: nil, preferredStyle: .alert)
-        a.addTextField { tf in tf.placeholder = "群組名稱（例如：電子學）" }
-        a.addAction(UIAlertAction(title: "取消", style: .cancel))
-        a.addAction(UIAlertAction(title: "建立", style: .default) { [weak self, weak a] _ in
+        let a = UIAlertController(title: L("新增群組"), message: nil, preferredStyle: .alert)
+        a.addTextField { tf in tf.placeholder = L("群組名稱（例如：電子學）") }
+        a.addAction(UIAlertAction(title: L("取消"), style: .cancel))
+        a.addAction(UIAlertAction(title: L("建立"), style: .default) { [weak self, weak a] _ in
             self?.store.createGroup(name: a?.textFields?.first?.text ?? "", with: tab)
             self?.rebuildTabs()
         })
@@ -376,10 +390,10 @@ final class TabsViewController: UIViewController {
     }
 
     private func promptRename(_ g: TabGroup) {
-        let a = UIAlertController(title: "重新命名群組", message: nil, preferredStyle: .alert)
+        let a = UIAlertController(title: L("重新命名群組"), message: nil, preferredStyle: .alert)
         a.addTextField { tf in tf.text = g.name }
-        a.addAction(UIAlertAction(title: "取消", style: .cancel))
-        a.addAction(UIAlertAction(title: "確定", style: .default) { [weak self, weak a] _ in
+        a.addAction(UIAlertAction(title: L("取消"), style: .cancel))
+        a.addAction(UIAlertAction(title: L("確定"), style: .default) { [weak self, weak a] _ in
             self?.store.renameGroup(g.id, to: a?.textFields?.first?.text ?? "")
             self?.rebuildTabs()
         })

@@ -13,11 +13,19 @@ enum TestWindow {
     }
 }
 
+extension UIViewController {
+    /// 跳出來的電路名稱編輯器（放在 navigation controller 裡）
+    var presentedNameEditor: CircuitNameEditorViewController? {
+        (presentedViewController as? UINavigationController)?.topViewController as? CircuitNameEditorViewController
+    }
+}
+
 /// 測試用的觸碰（只用到種類、大小、位置）
 final class FakeTouch: UITouch {
     private let kind: UITouch.TouchType
     private let radius: CGFloat
-    private let point: CGPoint
+    var point: CGPoint
+    var fakePhase: UITouch.Phase = .began
 
     init(type: UITouch.TouchType, radius: CGFloat = 10, location: CGPoint = .zero) {
         kind = type
@@ -28,8 +36,20 @@ final class FakeTouch: UITouch {
 
     override var type: UITouch.TouchType { kind }
     override var majorRadius: CGFloat { radius }
+    override var phase: UITouch.Phase { fakePhase }
     override func location(in view: UIView?) -> CGPoint { point }
     override var view: UIView? { nil }
+}
+
+/// 測試用的觸碰事件：螢幕上還按著的觸碰
+final class FakeEvent: UIEvent {
+    private let touches: Set<UITouch>
+    init(_ touches: Set<UITouch>) {
+        self.touches = touches
+        super.init()
+    }
+    override var allTouches: Set<UITouch>? { touches }
+    override func coalescedTouches(for touch: UITouch) -> [UITouch]? { nil }
 }
 
 /// 測試用的拖曳：位置、已移動的距離可以設定（真的拖曳要移動一小段才開始，開始時位置已經離開按下的點）

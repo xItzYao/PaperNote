@@ -73,8 +73,8 @@ struct TranslatePanel: View {
     let onClose: () -> Void
 
     static let languages: [(id: String, name: String)] = [
-        ("zh-Hant", "繁體中文"), ("en", "英文"), ("ja", "日文"), ("zh-Hans", "簡體中文"),
-        ("ko", "韓文"), ("fr", "法文"), ("de", "德文"), ("es", "西班牙文"),
+        ("zh-Hant", L("繁體中文")), ("en", L("英文")), ("ja", L("日文")), ("zh-Hans", L("簡體中文")),
+        ("ko", L("韓文")), ("fr", L("法文")), ("de", L("德文")), ("es", L("西班牙文")),
     ]
 
     @AppStorage("translate.target") private var targetID = "zh-Hant"
@@ -83,6 +83,8 @@ struct TranslatePanel: View {
     @State private var result: String?
     @State private var errorText: String?
     @State private var configKey = ""
+    /// 正在確認能不能翻的那一組（換了語言就不用舊的結果）
+    @State private var checkingKey = ""
     /// 萬一翻譯卡住，20 秒後還是可以關閉
     @State private var allowCloseAnyway = false
 
@@ -147,7 +149,7 @@ struct TranslatePanel: View {
                     GroupBox {
                         Text(text).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
                     } label: {
-                        Text("原文").font(.caption).foregroundStyle(.secondary)
+                        Text(L("原文")).font(.caption).foregroundStyle(.secondary)
                     }
 
                     GroupBox {
@@ -157,29 +159,29 @@ struct TranslatePanel: View {
                             } else if let errorText {
                                 Text(errorText).foregroundStyle(.red)
                             } else {
-                                HStack { ProgressView(); Text("翻譯中…").foregroundStyle(.secondary) }
+                                HStack { ProgressView(); Text(L("翻譯中…")).foregroundStyle(.secondary) }
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     } label: {
-                        Text("譯文").font(.caption).foregroundStyle(.secondary)
+                        Text(L("譯文")).font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 .padding()
             }
-            .navigationTitle("翻譯")
+            .navigationTitle(L("翻譯"))
             .navigationBarTitleDisplayMode(.inline)
             .interactiveDismissDisabled(true)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("關閉") { onClose() }
+                    Button(L("關閉")) { onClose() }
                         .disabled(busy && !allowCloseAnyway)
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     if let result {
-                        Button { UIPasteboard.general.string = result } label: { Label("拷貝譯文", systemImage: "doc.on.doc") }
+                        Button { UIPasteboard.general.string = result } label: { Label(L("拷貝譯文"), systemImage: "doc.on.doc") }
                         if let onInsert {
-                            Button { onInsert(result) } label: { Label("插入文字框", systemImage: "character.textbox") }
+                            Button { onInsert(result) } label: { Label(L("插入文字框"), systemImage: "character.textbox") }
                         }
                     }
                 }
@@ -190,7 +192,7 @@ struct TranslatePanel: View {
                 let response = try await session.translate(text)
                 result = response.targetText
             } catch {
-                errorText = "無法翻譯：\(error.localizedDescription)\n可以到「設定 → App → 翻譯」下載語言，或換一個原文語言再試。"
+                errorText = L("無法翻譯：\(error.localizedDescription)\n可以到「設定 → App → 翻譯」下載語言，或換一個原文語言再試。")
             }
         }
         .onAppear {
@@ -201,16 +203,55 @@ struct TranslatePanel: View {
         .onChange(of: sourceID) { _, _ in start() }
     }
 
+    /// 這組語言能不能直接翻
+    enum Readiness: Equatable {
+        /// 已經下載到這台 iPad
+        case ready
+        /// 支援但還沒下載
+        case needsDownload
+        case unsupported
+    }
+
+    static func readiness(_ status: LanguageAvailability.Status) -> Readiness {
+        switch status {
+        case .installed: return .ready
+        case .supported: return .needsDownload
+        case .unsupported: return .unsupported
+        @unknown default: return .unsupported
+        }
+    }
+
+    /// 先確認這組語言已經下載才翻。沒下載的話系統會在翻譯視窗上面再跳出「下載語言」，
+    /// iPadOS 27.0.1 跳那個系統視窗時 App 會閃退（UIKit 的 _UISceneHostingController _setSheetConfiguration:）。
+    /// 偵測原文語言常常猜錯（很短的英文被當成法文、德文），就會碰到沒下載的語言：改成在視窗裡說明，讓使用者換原文語言
     private func start() {
         result = nil
         errorText = nil
-        let key = "\(sourceID)>\(effectiveTarget)"
+        let source = sourceID, target = effectiveTarget
+        let key = "\(source)>\(target)"
+        checkingKey = key
+        Task { @MainActor in
+            let status = await LanguageAvailability().status(from: Locale.Language(identifier: source),
+                                                             to: Locale.Language(identifier: target))
+            guard checkingKey == key else { return }
+            switch Self.readiness(status) {
+            case .ready:
+                translate(key: key, source: source, target: target)
+            case .needsDownload:
+                errorText = L("「\(name(source)) → \(name(target))」還沒下載到這台 iPad。原文語言可能猜錯了，可以在上面換一個；或到「設定 → App → 翻譯 → 已下載的語言」下載。")
+            case .unsupported:
+                errorText = L("不支援從\(name(source))翻成\(name(target))，可以在上面換一個語言。")
+            }
+        }
+    }
+
+    private func translate(key: String, source: String, target: String) {
         if config != nil && key == configKey {
             config?.invalidate()
         } else {
             configKey = key
-            config = TranslationSession.Configuration(source: Locale.Language(identifier: sourceID),
-                                                      target: Locale.Language(identifier: effectiveTarget))
+            config = TranslationSession.Configuration(source: Locale.Language(identifier: source),
+                                                      target: Locale.Language(identifier: target))
         }
     }
 }

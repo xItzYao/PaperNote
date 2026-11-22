@@ -320,7 +320,7 @@ final class PinView: UIView, UIGestureRecognizerDelegate {
 
     private func showScopeHint() {
         let label = UILabel()
-        label.text = pin.notebookID == nil ? "  所有分頁都會顯示  " : "  只在這本筆記本顯示  "
+        label.text = pin.notebookID == nil ? L("  所有分頁都會顯示  ") : L("  只在這本筆記本顯示  ")
         label.font = .systemFont(ofSize: 12, weight: .semibold)
         label.textColor = .white
         label.backgroundColor = UIColor.black.withAlphaComponent(0.7)

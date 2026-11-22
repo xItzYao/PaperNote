@@ -100,7 +100,7 @@ final class DriveClient: DriveAPI {
             return r
         }
         guard let id = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["id"] as? String else {
-            throw BackupError.http(0, "建立資料夾失敗")
+            throw BackupError.http(0, L("建立資料夾失敗"))
         }
         return id
     }
@@ -131,7 +131,7 @@ final class DriveClient: DriveAPI {
             return r
         }
         guard let location = resp.value(forHTTPHeaderField: "Location"), let sessionURL = URL(string: location) else {
-            throw BackupError.http(resp.statusCode, "沒有取得上傳位址")
+            throw BackupError.http(resp.statusCode, L("沒有取得上傳位址"))
         }
         let token = try await accessToken()
         var put = request(sessionURL, "PUT", token)
@@ -155,13 +155,13 @@ final class DriveClient: DriveAPI {
     /// 資料夾要走 trashFolder，不會誤丟整個資料夾
     func trashFile(_ file: DriveFile) async throws {
         guard let mime = file.mimeType, mime != Self.folderMime else {
-            throw BackupError.http(0, "不是檔案")
+            throw BackupError.http(0, L("不是檔案"))
         }
         try await moveToTrash(file.id)
     }
 
     func trashFolder(_ folder: DriveFile) async throws {
-        guard folder.isFolder else { throw BackupError.http(0, "不是資料夾") }
+        guard folder.isFolder else { throw BackupError.http(0, L("不是資料夾")) }
         try await moveToTrash(folder.id)
     }
 

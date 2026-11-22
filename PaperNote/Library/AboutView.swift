@@ -2,7 +2,9 @@ import SwiftUI
 
 /// 關於我
 struct AboutView: View {
-    static let blurb = "大學生的一個用愛發電小project，希望大家用的開心！\n想支持的話也可以贊助這個app的運作:P"
+    static let blurb = L("大學生的一個用愛發電小project，希望大家用的開心！")
+    /// App Store 審查指南 5.1.1(i)：App 裡也要有隱私權政策的連結（和 App Store Connect 填的是同一個網址）
+    static let privacyPolicyURL = URL(string: "https://papernote.yaoyaoyao.in/privacy/")!
     @Environment(\.dismiss) private var dismiss
 
     private var version: String {
@@ -31,13 +33,14 @@ struct AboutView: View {
                     .padding(.vertical, 12)
                 }
                 Section {
-                    LabeledContent("版本", value: version)
+                    LabeledContent(L("版本"), value: version)
+                    Link(L("隱私權政策"), destination: Self.privacyPolicyURL)
                 }
             }
-            .navigationTitle("關於我")
+            .navigationTitle(L("關於我"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button(L("完成")) { dismiss() } }
             }
         }
     }

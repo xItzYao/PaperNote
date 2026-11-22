@@ -1,34 +1,92 @@
 import UIKit
 
-/// 電路元件庫（像 Visio 的圖庫）：選電路工具時浮在頁面左邊。
-/// 點一下元件就連續擺放；或直接把元件往右拖到頁面上放開。可以收合成一個小把手。
+/// 電路元件庫（像 Visio 的圖庫）：選電路工具時浮在頁面下面（橫的兩列），「⋯」可以改放左邊（直的兩欄）。
+/// 點一下元件就擺放（「⋯」的「連續放置元件」決定放完要不要繼續放）；或直接把元件往頁面拖（下面的往上、左邊的往右）放開。可以收合成一個小把手。
 final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
     /// 點了某個元件（「選取」「接線」在第二列工具列）
     var onSelectMode: ((CircuitMode) -> Void)?
     /// 元件拖到頁面上放開（點是在 superview 的座標）
     var onDrop: ((CircuitPart, CGPoint) -> Void)?
+    /// 自訂電路：拖到頁面上、加入、改名（長按）、刪除（長按）
+    var onDropCustom: ((UUID, CGPoint) -> Void)?
+    var onAddCustom: (() -> Void)?
+    /// 畫自訂元件（id：改元件庫裡已經有的）
+    var onDrawSymbol: ((UUID?) -> Void)?
+    var onRenameCustom: ((UUID) -> Void)?
+    var onDeleteCustom: ((UUID) -> Void)?
+    /// 長按自訂元件選「新增分類…」：取名字，建好就把這個元件移過去
+    var onNewCategory: ((UUID) -> Void)?
+    /// 長按自己加的分類標題選「刪除…」（裡面的元件回到自訂電路圖那一區）
+    var onDeleteCategory: ((String) -> Void)?
     var currentMode: CircuitMode = .select { didSet { refreshHighlight() } }
 
-    private static let sections: [(String, [CircuitPart])] = [
-        ("被動元件", [.resistor, .capacitor, .inductor]),
-        ("電源", [.voltageSource, .currentSource, .ground, .vdd]),
-        ("電晶體", [.nmos, .pmos]),
-        ("邏輯閘", [.andGate, .orGate, .notGate, .bufferGate, .nandGate, .norGate, .xorGate, .xnorGate]),
-        ("其他", [.dFlipFlop, .dLatch, .mux, .decoder, .encoder, .alu]),
+    /// 分類參考 CircuiTikZ。key 不隨語言改變（自訂元件記住放在哪個分類用）
+    static let sections: [(key: String, name: String, parts: [CircuitPart])] = [
+        ("passive", L("被動元件"), [.resistor, .capacitor, .inductor, .potentiometer, .variableResistor, .polarCapacitor, .variableCapacitor, .transformer, .fuse]),
+        ("supply", L("接地、電源"), [.ground, .vdd, .vss, .signalGround, .chassisGround]),
+        ("sources", L("訊號源"), [.voltageSource, .currentSource, .battery, .sineSource, .squareSource, .controlledVoltageSource, .controlledCurrentSource]),
+        ("diodes", L("二極體"), [.diode, .schottky, .zener, .tunnelDiode, .led, .photodiode, .varicap]),
+        ("transistors", L("電晶體"), [.nmos, .pmos, .nmos4, .pmos4, .npn, .pnp, .njfet, .pjfet, .nigbt, .pigbt]),
+        ("amplifiers", L("放大器"), [.opAmp, .fdOpAmp, .ota]),
+        ("switches", L("開關、儀表"), [.switchOpen, .switchClosed, .pushButton, .spdt, .ammeter, .voltmeter, .ohmmeter, .lamp]),
+        ("logic", L("邏輯閘"), [.andGate, .orGate, .notGate, .bufferGate, .nandGate, .norGate, .xorGate, .xnorGate]),
+        ("digital", L("數位方塊"), [.dFlipFlop, .dLatch, .mux, .decoder, .encoder, .alu, .adc, .dac]),
+        ("other", L("其他"), [.mixer, .antenna]),
     ]
+
+    /// 內建分類，加上自己加的分類（沒有內建元件）
+    static var allSections: [(key: String, name: String, parts: [CircuitPart])] {
+        sections + CustomCircuitStore.shared.categories.map { ($0.key, $0.name, [CircuitPart]()) }
+    }
+
+    /// 放在這個分類的自訂元件（nil＝自訂電路圖那一區：沒選分類、或分類已經不存在的）
+    static func customCircuits(in key: String?, from all: [CustomCircuit]) -> [CustomCircuit] {
+        let keys = Set(allSections.map(\.key))
+        return all.filter { c in
+            guard let key else { return !keys.contains(c.section ?? "") }
+            return c.section == key
+        }
+    }
+    static let customSectionName = L("自訂電路圖")
     /// 收起來的分類（記在本機）
-    private static let collapsedKey = "circuitLibrary.collapsedSections"
+    static let collapsedKey = "circuitLibrary.collapsedSections"
     private static let expandedWidth: CGFloat = 148
     private static let collapsedWidth: CGFloat = 40
+    /// 放下面時的高度：分類標題＋兩列元件
+    private static let bottomHeight: CGFloat = 146
+    private static let bottomTileWidth: CGFloat = 66
+    private static let bottomMargin: CGFloat = 10
+
+    /// 放下面時蓋住頁面多高：頁面要能多捲這麼多，最下面才不會被擋住
+    var bottomOverlap: CGFloat {
+        onLeft || collapsed ? 0 : Self.bottomHeight + Self.bottomMargin + (superview?.safeAreaInsets.bottom ?? 0)
+    }
+    var onLayoutChange: (() -> Void)?
+    private(set) var onLeft = false
+    /// 目前看得到的元件按鈕
+    var visibleTiles: [UIButton] {
+        let tiles = modeButtons.map { $0.1 }
+        return tiles.filter { $0.isDescendant(of: onLeft ? scroll : bottomScroll) }
+    }
 
     private let scroll = UIScrollView()
     private let stack = UIStackView()
+    private let bottomScroll = UIScrollView()
+    private let bottomStack = UIStackView()
+    private let header = UIStackView()
+    private let titleLabel = UILabel()
     private let collapseButton = UIButton(configuration: .plain())
-    private var widthConstraint: NSLayoutConstraint!
-    private var collapsedHeight: NSLayoutConstraint!
+    private var topInHost: NSLayoutYAxisAnchor?
+    private var placement: [NSLayoutConstraint] = []
     private var collapsed = false
     private var modeButtons: [(CircuitMode, UIButton)] = []
     private var ghost: UIImageView?
+    /// 自訂電路圖那一區（放左邊、放下面各一份），內容會變
+    private(set) var customBody = UIStackView()
+    private let customColumns = UIStackView()
+    /// 各分類的元件（放左邊、放下面各一份；和 sections 同順序）：自訂元件可以放進來，內容會變
+    private(set) var sectionBodies: [UIStackView] = []
+    private var sectionColumns: [UIStackView] = []
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -39,19 +97,13 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
         layer.shadowRadius = 8
         layer.shadowOffset = CGSize(width: 0, height: 2)
         translatesAutoresizingMaskIntoConstraints = false
-        widthConstraint = widthAnchor.constraint(equalToConstant: Self.expandedWidth)
-        widthConstraint.isActive = true
-        collapsedHeight = heightAnchor.constraint(equalToConstant: 42)
 
         // 標題列：元件庫＋收合
-        let title = UILabel()
-        title.text = "元件庫"
-        title.font = .systemFont(ofSize: 13, weight: .semibold)
-        title.textColor = .secondaryLabel
-        collapseButton.configuration?.image = UIImage(systemName: "sidebar.left")
-        collapseButton.accessibilityLabel = "收合元件庫"
+        titleLabel.text = L("元件庫")
+        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleLabel.textColor = .secondaryLabel
         collapseButton.addAction(UIAction { [weak self] _ in self?.toggleCollapsed() }, for: .touchUpInside)
-        let header = UIStackView(arrangedSubviews: [title, UIView(), collapseButton])
+        for v in [titleLabel, UIView(), collapseButton] { header.addArrangedSubview(v) }
         header.alignment = .center
         header.translatesAutoresizingMaskIntoConstraints = false
         addSubview(header)
@@ -64,48 +116,205 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
         stack.translatesAutoresizingMaskIntoConstraints = false
         scroll.addSubview(stack)
 
+        bottomScroll.translatesAutoresizingMaskIntoConstraints = false
+        bottomScroll.showsHorizontalScrollIndicator = false
+        addSubview(bottomScroll)
+        bottomStack.axis = .horizontal
+        bottomStack.spacing = 12
+        bottomStack.alignment = .top
+        bottomStack.translatesAutoresizingMaskIntoConstraints = false
+        bottomScroll.addSubview(bottomStack)
+
         NSLayoutConstraint.activate([
-            header.topAnchor.constraint(equalTo: topAnchor, constant: 4),
-            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
-            header.heightAnchor.constraint(equalToConstant: 34),
-            scroll.topAnchor.constraint(equalTo: header.bottomAnchor),
-            scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
+            bottomStack.topAnchor.constraint(equalTo: bottomScroll.contentLayoutGuide.topAnchor, constant: 6),
+            bottomStack.bottomAnchor.constraint(equalTo: bottomScroll.contentLayoutGuide.bottomAnchor, constant: -6),
+            bottomStack.leadingAnchor.constraint(equalTo: bottomScroll.contentLayoutGuide.leadingAnchor, constant: 10),
+            bottomStack.trailingAnchor.constraint(equalTo: bottomScroll.contentLayoutGuide.trailingAnchor, constant: -10),
             stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
             stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
             stack.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: 6),
             stack.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -6),
         ])
-        // 內容不高時，面板就縮到內容高度
-        // 優先權要低於內容的抗壓縮：高度不夠時讓元件庫捲動，而不是把分類標題擠扁
-        let fit = heightAnchor.constraint(equalTo: stack.heightAnchor, constant: 44)
-        fit.priority = .defaultLow
-        fit.isActive = true
-
-        // 各分類：標題列可以點開、收起，元件兩欄
-        let collapsedNames = Set(UserDefaults.standard.stringArray(forKey: Self.collapsedKey) ?? [])
-        for (name, parts) in Self.sections {
-            let body = UIStackView()
-            body.axis = .vertical
-            body.spacing = 4
-            var i = 0
-            while i < parts.count {
-                let pair = parts[i..<min(i + 2, parts.count)].map(partButton)
-                body.addArrangedSubview(row(pair.count == 2 ? pair : pair + [UIView()]))
-                i += 2
-            }
-            body.isHidden = collapsedNames.contains(name)
-            // 動畫中途內容不要畫到下面的分類上
-            body.clipsToBounds = true
-            stack.addArrangedSubview(sectionHeader(name, body: body))
-            stack.addArrangedSubview(body)
-        }
+        buildSections()
+        NotificationCenter.default.addObserver(self, selector: #selector(customCircuitsChanged), name: .customCircuitsChanged, object: nil)
+        refreshChrome()
         refreshHighlight()
     }
 
+    /// 目前畫出來的分類（自己加了分類要重新排）
+    private var builtSectionKeys: [String] = []
+
+    /// 各分類：標題列可以點開、收起，元件兩欄；自訂電路圖排在最後
+    private func buildSections() {
+        for v in stack.arrangedSubviews + bottomStack.arrangedSubviews { v.removeFromSuperview() }
+        sectionBodies = []
+        sectionColumns = []
+        let all = Self.allSections
+        builtSectionKeys = all.map(\.key)
+        let collapsedNames = Set(UserDefaults.standard.stringArray(forKey: Self.collapsedKey) ?? [])
+        for s in all {
+            let body = UIStackView()
+            body.axis = .vertical
+            body.spacing = 4
+            body.isHidden = collapsedNames.contains(s.name)
+            // 動畫中途內容不要畫到下面的分類上
+            body.clipsToBounds = true
+            let header = sectionHeader(s.name, body: body)
+            header.menu = categoryMenu(key: s.key, name: s.name)
+            stack.addArrangedSubview(header)
+            stack.addArrangedSubview(body)
+            let columns = UIStackView()
+            bottomStack.addArrangedSubview(bottomSection(s.name, columns: columns, menu: categoryMenu(key: s.key, name: s.name)))
+            sectionBodies.append(body)
+            sectionColumns.append(columns)
+        }
+        // 自訂電路圖：排在最後
+        customBody.axis = .vertical
+        customBody.spacing = 4
+        customBody.clipsToBounds = true
+        customBody.isHidden = collapsedNames.contains(Self.customSectionName)
+        stack.addArrangedSubview(sectionHeader(Self.customSectionName, body: customBody))
+        stack.addArrangedSubview(customBody)
+        bottomStack.addArrangedSubview(bottomSection(Self.customSectionName, columns: customColumns))
+        fillSections()
+    }
+
     required init?(coder: NSCoder) { fatalError() }
+
+    // MARK: 位置
+
+    /// 加進 host 之後呼叫；top 是放左邊時對齊的上緣
+    func install(in host: UIView, top: NSLayoutYAxisAnchor, onLeft: Bool) {
+        host.addSubview(self)
+        topInHost = top
+        setOnLeft(onLeft)
+    }
+
+    func setOnLeft(_ left: Bool) {
+        onLeft = left
+        refreshChrome()
+        applyLayout()
+    }
+
+    private func applyLayout() {
+        guard let safe = superview?.safeAreaLayoutGuide, let top = topInHost else { return }
+        NSLayoutConstraint.deactivate(placement)
+        var c = [header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
+                 header.heightAnchor.constraint(equalToConstant: 34)]
+        if onLeft {
+            c += [leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: 10),
+                  topAnchor.constraint(equalTo: top, constant: 10),
+                  bottomAnchor.constraint(lessThanOrEqualTo: safe.bottomAnchor, constant: -10),
+                  widthAnchor.constraint(equalToConstant: collapsed ? Self.collapsedWidth : Self.expandedWidth),
+                  header.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+                  header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+                  scroll.topAnchor.constraint(equalTo: header.bottomAnchor),
+                  scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
+                  scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
+                  scroll.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6)]
+            if collapsed {
+                c.append(heightAnchor.constraint(equalToConstant: 42))
+            } else {
+                // 內容不高時，面板就縮到內容高度
+                // 優先權要低於內容的抗壓縮：高度不夠時讓元件庫捲動，而不是把分類標題擠扁
+                let fit = heightAnchor.constraint(equalTo: stack.heightAnchor, constant: 44)
+                fit.priority = .defaultLow
+                c.append(fit)
+            }
+        } else {
+            c += [bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -Self.bottomMargin),
+                  trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -10),
+                  header.centerYAnchor.constraint(equalTo: centerYAnchor),
+                  header.widthAnchor.constraint(equalToConstant: 36)]
+            if collapsed {
+                c += [widthAnchor.constraint(equalToConstant: Self.collapsedWidth), heightAnchor.constraint(equalToConstant: 42)]
+            } else {
+                c += [leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: 10),
+                      heightAnchor.constraint(equalToConstant: Self.bottomHeight),
+                      bottomScroll.topAnchor.constraint(equalTo: topAnchor),
+                      bottomScroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+                      bottomScroll.leadingAnchor.constraint(equalTo: leadingAnchor),
+                      bottomScroll.trailingAnchor.constraint(equalTo: header.leadingAnchor)]
+            }
+        }
+        placement = c
+        NSLayoutConstraint.activate(c)
+        onLayoutChange?()
+    }
+
+    private func refreshChrome() {
+        scroll.isHidden = collapsed || !onLeft
+        bottomScroll.isHidden = collapsed || onLeft
+        titleLabel.isHidden = collapsed || !onLeft
+        let symbol = onLeft ? (collapsed ? "sidebar.right" : "sidebar.left") : (collapsed ? "chevron.up" : "chevron.down")
+        collapseButton.configuration?.image = UIImage(systemName: symbol)
+        collapseButton.accessibilityLabel = collapsed ? L("展開元件庫") : L("收合元件庫")
+    }
+
+    /// 放左邊時：兩個一排
+    private func fillRows(_ body: UIStackView, _ tiles: [UIView]) {
+        body.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        var i = 0
+        while i < tiles.count {
+            let pair = Array(tiles[i..<min(i + 2, tiles.count)])
+            body.addArrangedSubview(row(pair.count == 2 ? pair : pair + [UIView()]))
+            i += 2
+        }
+    }
+
+    /// 放下面時的一個分類：底下元件由上往下排滿兩列再換下一行
+    private func fillBottomColumns(_ columns: UIStackView, _ tiles: [UIView]) {
+        columns.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        columns.spacing = 4
+        var i = 0
+        while i < tiles.count {
+            let column = UIStackView(arrangedSubviews: Array(tiles[i..<min(i + 2, tiles.count)]))
+            column.axis = .vertical
+            column.spacing = 4
+            column.widthAnchor.constraint(equalToConstant: Self.bottomTileWidth).isActive = true
+            columns.addArrangedSubview(column)
+            i += 2
+        }
+    }
+
+    /// 長按分類標題的選單：只有自己加的分類有（內建分類不能刪）
+    func categoryMenu(key: String, name: String) -> UIMenu? {
+        guard CustomCircuitStore.shared.categories.contains(where: { $0.key == key }) else { return nil }
+        return UIMenu(children: [
+            UIAction(title: L("刪除「\(name)」"), image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
+                self?.onDeleteCategory?(key)
+            },
+        ])
+    }
+
+    /// 放下面時的分類標題；menu：長按跳出的選單（自己加的分類）
+    private func bottomSection(_ name: String, columns: UIStackView, menu: UIMenu? = nil) -> UIView {
+        let title: UIView
+        if let menu {
+            var c = UIButton.Configuration.plain()
+            var t = AttributedString(name)
+            t.font = .systemFont(ofSize: 11, weight: .semibold)
+            c.attributedTitle = t
+            c.baseForegroundColor = .tertiaryLabel
+            c.contentInsets = .zero
+            let b = UIButton(configuration: c)
+            b.menu = menu
+            title = b
+        } else {
+            let label = UILabel()
+            label.text = name
+            label.font = .systemFont(ofSize: 11, weight: .semibold)
+            label.textColor = .tertiaryLabel
+            title = label
+        }
+        title.heightAnchor.constraint(equalToConstant: 14).isActive = true
+        columns.alignment = .top
+        let section = UIStackView(arrangedSubviews: [title, columns])
+        section.axis = .vertical
+        section.spacing = 2
+        section.alignment = .leading
+        return section
+    }
 
     // MARK: 按鈕
 
@@ -185,12 +394,92 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
     private func partButton(_ part: CircuitPart) -> UIButton {
         let b = tile(image: CircuitRenderer.icon(part, size: 28), title: part.title)
         b.addAction(UIAction { [weak self] _ in self?.onSelectMode?(.place(part)) }, for: .touchUpInside)
-        // 往右拖：把元件拖到頁面上
+        // 往頁面拖：把元件拖到頁面上
         let drag = PartDragGesture(target: self, action: #selector(dragPart(_:)))
         drag.part = part
         drag.delegate = self
         b.addGestureRecognizer(drag)
         modeButtons.append((.place(part), b))
+        return b
+    }
+
+    // MARK: 自訂電路圖
+
+    @objc private func customCircuitsChanged() {
+        reloadCustomCircuits()
+    }
+
+    /// 放左邊、放下面的按鈕各做一份。自訂元件排在它所在分類的最後
+    func reloadCustomCircuits() {
+        // 分類變了（新增、刪除）：整個重排
+        if Self.allSections.map(\.key) != builtSectionKeys {
+            buildSections()
+        } else {
+            fillSections()
+        }
+    }
+
+    private func fillSections() {
+        modeButtons.removeAll()
+        let circuits = CustomCircuitStore.shared.circuits
+        for (i, s) in Self.allSections.enumerated() where sectionBodies.indices.contains(i) {
+            let customs = Self.customCircuits(in: s.key, from: circuits)
+            fillRows(sectionBodies[i], s.parts.map(partButton) + customs.map(customButton))
+            fillBottomColumns(sectionColumns[i], s.parts.map(partButton) + customs.map(customButton))
+        }
+        let mine = Self.customCircuits(in: nil, from: circuits)
+        fillRows(customBody, mine.map(customButton) + [drawSymbolButton(), addCustomButton()])
+        fillBottomColumns(customColumns, mine.map(customButton) + [drawSymbolButton(), addCustomButton()])
+        refreshHighlight()
+    }
+
+    /// 自訂元件可以放的地方：自訂電路圖那一區、內建分類、自己加的分類
+    static var sectionChoices: [(key: String?, name: String)] {
+        [(nil, customSectionName)] + allSections.map { ($0.key, $0.name) }
+    }
+
+    /// 長按選單的「移到分類」：自訂電路圖那一區或任何一個元件分類，最後是「新增分類…」
+    private func moveMenu(_ c: CustomCircuit) -> UIMenu {
+        let current = Self.allSections.contains { $0.key == c.section } ? c.section : nil
+        let moves: [UIMenuElement] = Self.sectionChoices.map { t in
+            UIAction(title: t.name, state: t.key == current ? .on : .off) { _ in
+                CustomCircuitStore.shared.move(c.id, toSection: t.key)
+            }
+        }
+        let add = UIAction(title: L("新增分類…"), image: UIImage(systemName: "folder.badge.plus")) { [weak self] _ in self?.onNewCategory?(c.id) }
+        return UIMenu(title: L("移到分類"), image: UIImage(systemName: "folder"), children: moves + [add])
+    }
+
+    private func drawSymbolButton() -> UIButton {
+        let b = tile(image: UIImage(systemName: "pencil.and.outline"), title: L("畫元件"))
+        b.accessibilityLabel = L("畫自訂元件")
+        b.addAction(UIAction { [weak self] _ in self?.onDrawSymbol?(nil) }, for: .touchUpInside)
+        return b
+    }
+
+    private func addCustomButton() -> UIButton {
+        let b = tile(image: UIImage(systemName: "plus"), title: L("加入"))
+        b.accessibilityLabel = L("加入自訂電路圖")
+        b.addAction(UIAction { [weak self] _ in self?.onAddCustom?() }, for: .touchUpInside)
+        return b
+    }
+
+    /// 點一下連續擺放、往頁面拖放一個、長按改名或刪除
+    private func customButton(_ c: CustomCircuit) -> UIButton {
+        let b = tile(image: CircuitRenderer.icon(c.data, size: 28), title: c.name)
+        b.configuration?.titleLineBreakMode = .byTruncatingTail
+        b.addAction(UIAction { [weak self] _ in self?.onSelectMode?(.placeCustom(c.id)) }, for: .touchUpInside)
+        let drag = PartDragGesture(target: self, action: #selector(dragPart(_:)))
+        drag.custom = c.id
+        drag.delegate = self
+        b.addGestureRecognizer(drag)
+        let edit = c.symbol == nil ? [] : [UIAction(title: L("編輯符號"), image: UIImage(systemName: "pencil.and.outline")) { [weak self] _ in self?.onDrawSymbol?(c.id) }]
+        b.menu = UIMenu(children: edit + [
+            UIAction(title: L("改名"), image: UIImage(systemName: "pencil")) { [weak self] _ in self?.onRenameCustom?(c.id) },
+            moveMenu(c),
+            UIAction(title: L("刪除"), image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in self?.onDeleteCustom?(c.id) },
+        ])
+        modeButtons.append((.placeCustom(c.id), b))
         return b
     }
 
@@ -206,30 +495,28 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
 
     private func toggleCollapsed() {
         collapsed.toggle()
-        scroll.isHidden = collapsed
-        collapseButton.configuration?.image = UIImage(systemName: collapsed ? "sidebar.right" : "sidebar.left")
-        collapseButton.accessibilityLabel = collapsed ? "展開元件庫" : "收合元件庫"
-        (collapseButton.superview as? UIStackView)?.arrangedSubviews.first?.isHidden = collapsed
-        widthConstraint.constant = collapsed ? Self.collapsedWidth : Self.expandedWidth
-        collapsedHeight.isActive = collapsed
+        refreshChrome()
+        applyLayout()
         UIView.animate(withDuration: 0.2) { self.superview?.layoutIfNeeded() }
     }
 
     // MARK: 拖到頁面上
 
-    /// 往右拖才算拖元件；上下滑是捲動元件庫
+    /// 往頁面拖才算拖元件（放左邊：往右；放下面：往上）；其他方向是捲動元件庫
     override func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
         guard let pan = g as? PartDragGesture else { return super.gestureRecognizerShouldBegin(g) }
         let v = pan.velocity(in: self)
-        return v.x > abs(v.y)
+        return onLeft ? v.x > abs(v.y) : -v.y > abs(v.x)
     }
 
     @objc private func dragPart(_ g: PartDragGesture) {
-        guard let host = superview, let part = g.part else { return }
+        guard let host = superview else { return }
         let p = g.location(in: host)
         switch g.state {
         case .began:
-            let iv = UIImageView(image: CircuitRenderer.icon(part, size: 44))
+            let image = g.part.map { CircuitRenderer.icon($0, size: 44) }
+                ?? g.custom.flatMap { CustomCircuitStore.shared.circuit($0) }.map { CircuitRenderer.icon($0.data, size: 44) }
+            let iv = UIImageView(image: image)
             iv.tintColor = .systemBlue
             iv.alpha = 0.85
             iv.frame.size = CGSize(width: 44, height: 44)
@@ -242,7 +529,10 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
             ghost?.removeFromSuperview()
             ghost = nil
             // 放在元件庫上就不算
-            if !frame.contains(p) { onDrop?(part, p) }
+            if !frame.contains(p) {
+                if let part = g.part { onDrop?(part, p) }
+                if let id = g.custom { onDropCustom?(id, p) }
+            }
         default:
             ghost?.removeFromSuperview()
             ghost = nil
@@ -253,4 +543,5 @@ final class CircuitLibraryView: UIView, UIGestureRecognizerDelegate {
 /// 帶著元件種類的拖曳手勢
 final class PartDragGesture: UIPanGestureRecognizer {
     var part: CircuitPart?
+    var custom: UUID?
 }

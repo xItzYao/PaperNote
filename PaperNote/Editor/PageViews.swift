@@ -42,6 +42,8 @@ final class PageBackgroundView: UIView {
 final class DrawnElementView: UIView {
     var element: PageElement { didSet { setNeedsDisplay() } }
     weak var session: NotebookSession?
+    /// 電路圖：橡皮擦擦到、筆尖還沒離開的元件和導線
+    var circuitErasing: Set<UUID> = [] { didSet { setNeedsDisplay() } }
 
     init(element: PageElement, session: NotebookSession) {
         self.element = element
@@ -56,7 +58,11 @@ final class DrawnElementView: UIView {
     required init?(coder: NSCoder) { fatalError() }
 
     override func draw(_ rect: CGRect) {
-        ElementRenderer.draw(element, in: bounds, session: session)
+        if case let .circuit(c) = element.content {
+            CircuitRenderer.draw(c, in: bounds, erasing: circuitErasing)
+        } else {
+            ElementRenderer.draw(element, in: bounds, session: session)
+        }
     }
 
     /// 要用的解析度（螢幕倍率 × 縮放）。系統把 view 放回視窗時（例如切分頁再切回來）會把 contentScaleFactor
@@ -85,7 +91,7 @@ final class PageContainerView: UIView {
     let pageID: UUID
     let background = PageBackgroundView()
     let elementsLayer = UIView()
-    /// 自製筆刷的筆跡（畫在物件上面、PencilKit 筆跡底下）
+    /// 自製筆刷的筆跡。不在這個 view 裡：編輯器把它放在 PencilKit 筆跡上面（inkContainer），螢光筆才不會蓋住字
     let inkView = PageInkView()
     private var elementViews: [UUID: UIView] = [:]
     private var lastPage: Page?
@@ -102,7 +108,6 @@ final class PageContainerView: UIView {
         addSubview(background)
         addSubview(elementsLayer)
         elementsLayer.clipsToBounds = false
-        addSubview(inkView)
         // 筆跡不會畫到頁面外
         inkView.clipsToBounds = true
     }
@@ -120,7 +125,6 @@ final class PageContainerView: UIView {
             layer.shadowPath = UIBezierPath(rect: CGRect(origin: .zero, size: size)).cgPath
         }
         elementsLayer.frame = CGRect(x: page.insets.left, y: page.insets.top, width: base.width, height: base.height)
-        if inkView.frame.size != size { inkView.frame = CGRect(origin: .zero, size: size) }
         inkView.set(strokes: page.ink, offset: CGPoint(x: page.insets.left, y: page.insets.top), renderScale: contentScale)
 
         if lastPage == nil || lastPage!.elements != page.elements {
@@ -162,6 +166,10 @@ final class PageContainerView: UIView {
 
     func elementView(_ id: UUID) -> UIView? { elementViews[id] }
 
+    func setCircuitErasing(_ id: UUID, _ erasing: Set<UUID>) {
+        (elementViews[id] as? DrawnElementView)?.circuitErasing = erasing
+    }
+
     /// 拖曳中即時更新，不重建整頁
     func liveUpdate(_ e: PageElement) {
         guard let v = elementViews[e.id] else { return }
@@ -182,6 +190,10 @@ final class OverlayView: UIView {
     /// 文字選取兩端的控制點
     let textHandleLayer = CAShapeLayer()
     let captureLayer = CAShapeLayer()
+    /// 截圖範圍的錨點
+    let captureHandleLayer = CAShapeLayer()
+    /// 橡皮擦的圓圈（局部擦除時，擦的範圍）
+    let eraserLayer = CAShapeLayer()
     let tablePlusCircles = CAShapeLayer()
     let tablePlusMarks = CAShapeLayer()
     /// 表格外側拖曳格線的圓點
@@ -199,6 +211,8 @@ final class OverlayView: UIView {
     let circuitHandleLayer = CAShapeLayer()
     let lassoSelLayer = CAShapeLayer()
     let lassoPreviewLayer = CALayer()
+    /// 只圈到筆跡時，選取框右下角的縮放把手
+    let lassoResizeHandle = CALayer()
     let cellSelLayer = CAShapeLayer()
     let moveHandleLayer = CAShapeLayer()
     let moveHandleMarks = CAShapeLayer()
@@ -208,8 +222,12 @@ final class OverlayView: UIView {
     /// 電路元件旁的旋轉、水平翻轉按鈕
     let circuitRotateHandle = CALayer()
     let circuitFlipHandle = CALayer()
+    let circuitCopyHandle = CALayer()
+    let circuitDeleteHandle = CALayer()
     /// 選取導線名稱時右下角的縮放控制點
     let circuitLabelResizeHandle = CALayer()
+    /// 文字框四邊中間的把手（上、下、左、右）
+    let edgeHandles: [BoxEdge: CALayer] = Dictionary(uniqueKeysWithValues: BoxEdge.allCases.map { ($0, CALayer()) })
     private static let handleSize: CGFloat = 30
     /// 導線名稱的縮放控制點小一點（名稱本身不大）
     static let labelResizeHandleScale: CGFloat = 0.8
@@ -335,9 +353,16 @@ final class OverlayView: UIView {
         layer.addSublayer(moveHandleMarks)
         for (l, symbol, color) in [(moveHandleImage, "arrow.up.and.down.and.arrow.left.and.right", UIColor.systemTeal),
                                    (resizeHandleImage, "arrow.up.left.and.arrow.down.right", UIColor.systemTeal),
+                                   (lassoResizeHandle, "arrow.up.left.and.arrow.down.right", UIColor.systemTeal),
                                    (circuitRotateHandle, "rotate.right", UIColor.systemBlue),
                                    (circuitFlipHandle, "arrow.left.and.right", UIColor.systemBlue),
-                                   (circuitLabelResizeHandle, "arrow.up.left.and.arrow.down.right", UIColor.systemBlue)] {
+                                   (circuitCopyHandle, "plus.square.on.square", UIColor.systemBlue),
+                                   (circuitDeleteHandle, "xmark", UIColor.systemRed),
+                                   (circuitLabelResizeHandle, "arrow.up.left.and.arrow.down.right", UIColor.systemBlue),
+                                   (edgeHandles[.top]!, "arrow.up.and.down", UIColor.systemTeal),
+                                   (edgeHandles[.bottom]!, "arrow.up.and.down", UIColor.systemTeal),
+                                   (edgeHandles[.left]!, "arrow.left.and.right", UIColor.systemTeal),
+                                   (edgeHandles[.right]!, "arrow.left.and.right", UIColor.systemTeal)] {
             l.contents = Self.handleImage(symbol, color: color)
             l.contentsGravity = .resizeAspect
             l.shadowColor = UIColor.black.cgColor
@@ -347,6 +372,8 @@ final class OverlayView: UIView {
             l.isHidden = true
             layer.addSublayer(l)
         }
+        // 套索的選取框之後才加：把手要在它上面
+        lassoResizeHandle.zPosition = 1
 
         selectionLayer.fillColor = UIColor.clear.cgColor
         selectionLayer.lineDashPattern = [6, 4]
@@ -360,6 +387,12 @@ final class OverlayView: UIView {
         captureLayer.strokeColor = UIColor.systemTeal.cgColor
         captureLayer.lineDashPattern = [8, 5]
         layer.addSublayer(captureLayer)
+        captureHandleLayer.fillColor = UIColor.white.cgColor
+        captureHandleLayer.strokeColor = UIColor.systemTeal.cgColor
+        layer.addSublayer(captureHandleLayer)
+        eraserLayer.fillColor = UIColor.systemGray.withAlphaComponent(0.12).cgColor
+        eraserLayer.strokeColor = UIColor.systemGray.cgColor
+        layer.addSublayer(eraserLayer)
 
         tablePlusCircles.fillColor = UIColor.white.cgColor
         tablePlusCircles.strokeColor = UIColor.systemBlue.cgColor
@@ -439,6 +472,8 @@ final class OverlayView: UIView {
         selectionLayer.lineDashPattern = [NSNumber(value: Double(6 * lineScale)), NSNumber(value: Double(4 * lineScale))]
         handleLayer.lineWidth = 2 * lineScale
         captureLayer.lineWidth = 2 * lineScale
+        captureHandleLayer.lineWidth = 2 * lineScale
+        eraserLayer.lineWidth = 1 * lineScale
         captureLayer.lineDashPattern = [NSNumber(value: Double(8 * lineScale)), NSNumber(value: Double(5 * lineScale))]
         tablePlusCircles.lineWidth = 1.5 * lineScale
         tablePlusMarks.lineWidth = 2 * lineScale
@@ -494,9 +529,13 @@ final class OverlayView: UIView {
 
     // MARK: 套索
 
-    func showLassoPath(_ pts: [CGPoint]?) {
+    /// crossing：電路圖逆時針圈（碰到就選）畫成綠色
+    func showLassoPath(_ pts: [CGPoint]?, crossing: Bool = false) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        let color: UIColor = crossing ? .systemGreen : .systemBlue
+        lassoPathLayer.strokeColor = color.cgColor
+        lassoPathLayer.fillColor = color.withAlphaComponent(crossing ? 0.08 : 0.05).cgColor
         if let pts, let first = pts.first {
             let path = UIBezierPath()
             path.move(to: first)
@@ -508,10 +547,20 @@ final class OverlayView: UIView {
         CATransaction.commit()
     }
 
-    func showLassoSelection(_ rect: CGRect?) {
+    /// outline：使用者圈的形狀（有的話選取框照它畫，不縮成外框）
+    func showLassoSelection(_ rect: CGRect?, handle: CGPoint? = nil, outline: [CGPoint]? = nil) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        lassoSelLayer.path = rect.map { UIBezierPath(roundedRect: $0.insetBy(dx: -6 * lineScale, dy: -6 * lineScale), cornerRadius: 6 * lineScale).cgPath }
+        if rect != nil, let o = outline, o.count > 2 {
+            lassoSelLayer.path = LassoSelection.path(o).cgPath
+        } else {
+            lassoSelLayer.path = rect.map { UIBezierPath(roundedRect: $0.insetBy(dx: -6 * lineScale, dy: -6 * lineScale), cornerRadius: 6 * lineScale).cgPath }
+        }
+        if let h = handle {
+            let s = Self.handleSize * lineScale
+            lassoResizeHandle.frame = CGRect(x: h.x - s / 2, y: h.y - s / 2, width: s, height: s)
+        }
+        lassoResizeHandle.isHidden = rect == nil || handle == nil
         CATransaction.commit()
     }
 
@@ -652,12 +701,13 @@ final class OverlayView: UIView {
         CATransaction.commit()
     }
 
-    /// 電路元件旁的旋轉、翻轉按鈕（文件座標的中心點；nil 隱藏）
-    func showCircuitPartHandles(rotate: CGPoint?, flip: CGPoint?, labelResize: CGPoint? = nil) {
+    /// 電路元件旁的旋轉、翻轉、複製、刪除按鈕（文件座標的中心點；nil 隱藏）
+    func showCircuitPartHandles(rotate: CGPoint?, flip: CGPoint?, copy: CGPoint?, delete: CGPoint?, labelResize: CGPoint? = nil) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         let s = Self.handleSize * lineScale
         let items: [(CALayer, CGPoint?, CGFloat)] = [(circuitRotateHandle, rotate, 1), (circuitFlipHandle, flip, 1),
+                                                     (circuitCopyHandle, copy, 1), (circuitDeleteHandle, delete, 1),
                                                      (circuitLabelResizeHandle, labelResize, Self.labelResizeHandleScale)]
         for (l, p, k) in items {
             if let p {
@@ -734,7 +784,8 @@ final class OverlayView: UIView {
         CATransaction.commit()
     }
 
-    func showSelection(_ rect: CGRect?, locked: Bool, handle: CGPoint?) {
+    /// edges：四邊中間的把手（文字框才有）
+    func showSelection(_ rect: CGRect?, locked: Bool, handle: CGPoint?, edges: [(BoxEdge, CGPoint)] = []) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         if let r = rect {
@@ -750,6 +801,15 @@ final class OverlayView: UIView {
             resizeHandleImage.isHidden = false
         } else {
             resizeHandleImage.isHidden = true
+        }
+        let s = Self.handleSize * lineScale * 0.85
+        for (side, l) in edgeHandles {
+            if let p = edges.first(where: { $0.0 == side })?.1 {
+                l.frame = CGRect(x: p.x - s / 2, y: p.y - s / 2, width: s, height: s)
+                l.isHidden = false
+            } else {
+                l.isHidden = true
+            }
         }
         CATransaction.commit()
     }
@@ -773,10 +833,22 @@ final class OverlayView: UIView {
         CATransaction.commit()
     }
 
-    func showCapture(_ path: UIBezierPath?) {
+    /// 橡皮擦的圓圈：p＝圓心（文件座標），nil 收起來
+    func showEraser(at p: CGPoint?, radius r: CGFloat) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        eraserLayer.path = p.map { UIBezierPath(ovalIn: CGRect(x: $0.x - r, y: $0.y - r, width: 2 * r, height: 2 * r)).cgPath }
+        CATransaction.commit()
+    }
+
+    func showCapture(_ path: UIBezierPath?, handles: [CGPoint] = []) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         captureLayer.path = path?.cgPath
+        let r = 7 * lineScale
+        let h = UIBezierPath()
+        for p in handles { h.append(UIBezierPath(ovalIn: CGRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r))) }
+        captureHandleLayer.path = handles.isEmpty ? nil : h.cgPath
         CATransaction.commit()
     }
 }

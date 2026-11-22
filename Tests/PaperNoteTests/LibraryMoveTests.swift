@@ -49,6 +49,28 @@ final class LibraryMoveTests: XCTestCase {
                        "沒有子資料夾：不顯示 ＞")
     }
 
+    /// 回報的需求：點一下資料夾是選它（有子資料夾就展開），不是馬上匯入；再點子資料夾就選子資料夾；
+    /// 右上角的按鈕才確定。點已經選著的資料夾：收合
+    func testTappingAFolderSelectsAndOpensIt() {
+        let top = UUID(), child = UUID()
+        var s = FolderPickerState()
+        XCTAssertNil(s.selected, "一開始選的是最上層")
+        s.tap(top, hasChildren: true)
+        XCTAssertEqual(s.selected, top, "點一下：選它")
+        XCTAssertEqual(s.expanded, [top], "也展開它的子資料夾")
+        s.tap(child, hasChildren: false)
+        XCTAssertEqual(s.selected, child, "再點子資料夾：選子資料夾")
+        XCTAssertEqual(s.expanded, [top], "上層還開著")
+        s.tap(top, hasChildren: true)
+        XCTAssertEqual(s.selected, top)
+        XCTAssertEqual(s.expanded, [top], "重新選上層：不會收起來")
+        s.tap(top, hasChildren: true)
+        XCTAssertEqual(s.selected, top, "點選著的：還是選它")
+        XCTAssertEqual(s.expanded, [], "收合")
+        s.tap(nil, hasChildren: false)
+        XCTAssertNil(s.selected, "可以選回最上層")
+    }
+
     /// 回報的需求：拖進資料夾＝移進去；裡面已經有同名的就加上 (1)
     func testMovingIntoAFolderWithTheSameNameAddsANumber() throws {
         let dest = folder("LibraryMoveTests 目的地 \(UUID().uuidString.prefix(6))", in: nil)

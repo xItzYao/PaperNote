@@ -37,7 +37,7 @@ enum InkRenderer {
             if i % 64 == 0, shouldStop() { return false }
             if let clip, !InkGeometry.bounds(of: s).intersects(clip) { continue }
             guard let first = s.points.first else { continue }
-            guard s.points.count > 1, s.points.allSatisfy({ $0.w == first.w }) else {
+            guard s.style?.look == nil, s.points.count > 1, s.points.allSatisfy({ $0.w == first.w }) else {
                 flush()
                 color = nil
                 draw(s, in: ctx)
@@ -58,8 +58,67 @@ enum InkRenderer {
         return true
     }
 
+    /// 有質感的筆：整筆的底色透明度一致（段和段重疊的地方不會變深），再疊外暈或顆粒。points 是座標和線寬
+    static func drawLook(_ points: [(CGPoint, CGFloat)], color: CGColor, look: InkLook, in ctx: CGContext) {
+        guard let first = points.first else { return }
+        ctx.saveGState()
+        defer { ctx.restoreGState() }
+        var box = CGRect.null
+        var total: CGFloat = 0
+        for (p, w) in points {
+            box = box.union(CGRect(x: p.x, y: p.y, width: 0, height: 0).insetBy(dx: -w * look.spread, dy: -w * look.spread))
+            total += w
+        }
+        ctx.clip(to: box)
+        ctx.setStrokeColor(color)
+        ctx.setFillColor(color)
+        ctx.setLineCap(.round)
+        ctx.setLineJoin(.round)
+        func body(_ scale: CGFloat) {
+            if points.count == 1 {
+                let r = first.1 * scale / 2
+                ctx.fillEllipse(in: CGRect(x: first.0.x - r, y: first.0.y - r, width: r * 2, height: r * 2))
+                return
+            }
+            for (a, b) in zip(points, points.dropFirst()) {
+                ctx.setLineWidth((a.1 + b.1) / 2 * scale)
+                ctx.move(to: a.0)
+                ctx.addLine(to: b.0)
+                ctx.strokePath()
+            }
+        }
+        func layer(alpha: CGFloat, scale: CGFloat) {
+            ctx.setAlpha(alpha)
+            ctx.beginTransparencyLayer(auxiliaryInfo: nil)
+            body(scale)
+            ctx.endTransparencyLayer()
+        }
+        if look.halo > 0 { layer(alpha: look.halo, scale: InkLook.haloSpread) }
+        layer(alpha: look.alpha, scale: 1)
+        guard look.grain > 0, points.count > 1 else { return }
+        // 顆粒：同樣的路徑、斷斷續續的短線，粗的細的各一層，間隔不一樣才不會看起來像虛線
+        let w = total / CGFloat(points.count)
+        let path = CGMutablePath()
+        path.addLines(between: points.map(\.0))
+        ctx.setAlpha(look.grain)
+        ctx.setLineCap(.butt)
+        ctx.setLineWidth(w * 0.55)
+        ctx.setLineDash(phase: 0, lengths: [w * 0.35, w * 0.5 * look.gapRatio, w * 0.2, w * 0.9 * look.gapRatio])
+        ctx.addPath(path)
+        ctx.strokePath()
+        ctx.setLineWidth(w * 0.9)
+        ctx.setAlpha(look.grain * 0.5)
+        ctx.setLineDash(phase: w * 0.6, lengths: [w * 0.18, w * 1.1 * look.gapRatio, w * 0.3, w * 0.7 * look.gapRatio])
+        ctx.addPath(path)
+        ctx.strokePath()
+    }
+
     static func draw(_ s: InkStroke, in ctx: CGContext) {
         let color = UIColor(hex: s.colorHex).cgColor
+        if let look = s.style?.look {
+            drawLook(s.points.map { ($0.point, $0.width) }, color: color, look: look, in: ctx)
+            return
+        }
         ctx.setStrokeColor(color)
         ctx.setFillColor(color)
         guard let first = s.points.first else { return }
@@ -96,7 +155,7 @@ enum InkGeometry {
             minY = min(minY, p.y); maxY = max(maxY, p.y)
             maxW = max(maxW, p.w)
         }
-        let pad = CGFloat(maxW) / 2 + 1
+        let pad = CGFloat(maxW) * (s.style?.look?.spread ?? 1) / 2 + 1
         return CGRect(x: CGFloat(minX), y: CGFloat(minY), width: CGFloat(maxX - minX), height: CGFloat(maxY - minY))
             .insetBy(dx: -pad, dy: -pad)
     }
@@ -104,6 +163,14 @@ enum InkGeometry {
     static func offset(_ s: InkStroke, by d: CGPoint) -> InkStroke {
         var out = s
         out.points = s.points.map { InkPoint(CGPoint(x: $0.point.x + d.x, y: $0.point.y + d.y), width: $0.width) }
+        return out
+    }
+
+    /// 移動、等比例縮放（線也跟著變粗變細）
+    static func applying(_ s: InkStroke, _ t: CGAffineTransform) -> InkStroke {
+        let k = abs(t.a * t.d - t.b * t.c).squareRoot()
+        var out = s
+        out.points = s.points.map { InkPoint($0.point.applying(t), width: $0.width * k) }
         return out
     }
 
@@ -126,19 +193,24 @@ enum InkGeometry {
         return false
     }
 
-    /// 橡皮擦擦過 p：整筆擦除時拿掉碰到的筆跡；局部擦除時剛好沿著圓圈的邊把線切斷，圓圈外的部分留著。沒有變化回傳 nil
+    /// 橡皮擦擦過 p：整筆擦除時拿掉碰到的筆跡（虛線是整條）；局部擦除時剛好沿著圓圈的邊把線切斷，圓圈外的部分留著。沒有變化回傳 nil
     static func erase(_ strokes: [InkStroke], at p: CGPoint, radius: CGFloat, partial: Bool) -> [InkStroke]? {
         var changed = false
         var out: [InkStroke] = []
+        var dashes = Set<UUID>()
         for s in strokes {
             if partial, let pieces = cut(s, at: p, radius: radius) {
                 changed = true
                 out += pieces
             } else if !partial, hits(s, at: p, radius: radius) {
                 changed = true
+                if let g = s.dashGroup { dashes.insert(g) }
             } else {
                 out.append(s)
             }
+        }
+        if !dashes.isEmpty {
+            out.removeAll { s in s.dashGroup.map { dashes.contains($0) } ?? false }
         }
         return changed ? out : nil
     }
@@ -154,7 +226,9 @@ enum InkGeometry {
         var pieces: [InkStroke] = []
         var run: [InkPoint] = inside(first) ? [] : [first]
         func flush() {
-            if run.count >= 2 { pieces.append(InkStroke(colorHex: s.colorHex, points: run)) }
+            if run.count >= 2 {
+                pieces.append(InkStroke(colorHex: s.colorHex, points: run, dashGroup: s.dashGroup, style: s.style, stickerSeed: s.stickerSeed))
+            }
             run = []
         }
         for (a, b) in zip(s.points, s.points.dropFirst()) {
@@ -189,6 +263,7 @@ enum InkGeometry {
     static func dashed(_ s: InkStroke, dash: CGFloat, gap: CGFloat) -> [InkStroke] {
         guard s.points.count > 1, dash > 0, gap > 0 else { return [s] }
         var pieces: [InkStroke] = []
+        let group = UUID()
         var run: [InkPoint] = [s.points[0]]
         var drawing = true
         // 目前這一段（實線或空白）還剩多長
@@ -196,7 +271,7 @@ enum InkGeometry {
         func emit() {
             // 空白剛好在一點結束時，留下的是長度 0 的一段：不算
             let length = zip(run, run.dropFirst()).reduce(0) { $0 + hypot($1.1.point.x - $1.0.point.x, $1.1.point.y - $1.0.point.y) }
-            if length > 0.01 { pieces.append(InkStroke(colorHex: s.colorHex, points: run)) }
+            if length > 0.01 { pieces.append(InkStroke(colorHex: s.colorHex, points: run, dashGroup: group, style: s.style)) }
             run = []
         }
         for (a, b) in zip(s.points, s.points.dropFirst()) {
@@ -324,6 +399,7 @@ final class LiveInkView: UIView {
     /// 螢幕座標的點與線寬
     private(set) var points: [(CGPoint, CGFloat)] = []
     private var color: UIColor = .black
+    private var look: InkLook?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -341,8 +417,9 @@ final class LiveInkView: UIView {
         return r.isNull ? r : r.insetBy(dx: -2, dy: -2)
     }
 
-    func begin(_ p: CGPoint, width: CGFloat, color: UIColor) {
+    func begin(_ p: CGPoint, width: CGFloat, color: UIColor, look: InkLook? = nil) {
         self.color = color
+        self.look = look
         points = [(p, width)]
         setNeedsDisplay(rect(points))
     }
@@ -376,6 +453,10 @@ final class LiveInkView: UIView {
     override func draw(_ rect: CGRect) {
         guard let ctx = UIGraphicsGetCurrentContext(), let first = points.first else { return }
         if let clip { ctx.clip(to: clip) }
+        if let look {
+            InkRenderer.drawLook(points, color: color.cgColor, look: look, in: ctx)
+            return
+        }
         ctx.setLineCap(.round)
         ctx.setLineJoin(.round)
         color.setStroke()
@@ -443,11 +524,28 @@ final class PageInkView: UIView {
         update()
     }
 
-    /// 套索移動中先藏起來的筆跡
+    /// 套索移動中先藏起來的筆跡。預覽圖在同一個畫面更新裡換上、拿掉：不能等背景畫好
     func setHidden(_ ids: Set<UUID>) {
         guard ids != hiddenIDs else { return }
         hiddenIDs = ids
-        update()
+        update(atOnce: true)
+    }
+
+    private var holding = false
+    private var changedWhileHolding = false
+
+    /// 一個動作要改好幾次（放回來、一筆一筆換位置、換頁）：中間的樣子都不畫，showChanges 時一次換成最後的樣子
+    func holdUpdates() {
+        holding = true
+        changedWhileHolding = false
+    }
+
+    /// 馬上換成最後的樣子（改再多筆也不交給背景：交給背景就要晚幾格畫面）
+    func showChanges() {
+        holding = false
+        guard changedWhileHolding else { return }
+        changedWhileHolding = false
+        update(atOnce: true)
     }
 
     private var scaleWork: DispatchWorkItem?
@@ -485,17 +583,28 @@ final class PageInkView: UIView {
 
     private var wantsBitmap: Bool { bounds.width * bounds.height * renderScale * renderScale <= Self.maxBitmapPixels }
 
-    private func update() {
+    /// atOnce：改再多筆也在這一次畫面更新裡畫好
+    private func update(atOnce: Bool = false) {
+        if holding {
+            changedWhileHolding = true
+            return
+        }
         guard bounds.width > 0, bounds.height > 0 else { return }
-        guard wantsBitmap else { showVector(); return }
+        guard wantsBitmap else { showVector(atOnce: atOnce); return }
         let visible = visibleStrokes
         // 現有的圖（解析度舊了也一樣）先跟著改，畫面不用等；改動太多就整張在背景重畫
         if let ctx = bitmap, bitmapOffset == offset, bitmapSize == bounds.size,
-           Self.applyChanges(from: bitmapContent, to: visible, in: ctx) {
+           Self.applyChanges(from: bitmapContent, to: visible, in: ctx, limit: atOnce ? .max : Self.maxPatchStrokes) {
             bitmapContent = visible
             layer.contents = ctx.makeImage()
             if bitmapScale == renderScale {
                 removeVector()
+                // 現在這張就是最新的：背景還在畫的是舊內容，畫好也不能換上
+                if isBuilding {
+                    _ = nextGeneration()
+                    isBuilding = false
+                    building = nil
+                }
                 return
             }
         }
@@ -581,10 +690,16 @@ final class PageInkView: UIView {
         }
     }
 
-    /// 換上畫好的圖；畫的期間有改過的筆跡接著補上
+    /// 換上畫好的圖；畫的期間有改過的筆跡先補上才換。補不上（改太多）就不換、照現在的重畫：
+    /// 先換上再重畫的話，畫面會先回到舊的樣子（例如剛移走的字跳回原位）
     private func adopt(_ ctx: CGContext, content: [InkStroke], scale: CGFloat, offset: CGPoint, size: CGSize) {
+        let visible = visibleStrokes
+        if content != visible, !Self.applyChanges(from: content, to: visible, in: ctx, limit: Self.maxPatchStrokes) {
+            update()
+            return
+        }
         bitmap = ctx
-        bitmapContent = content
+        bitmapContent = visible
         bitmapScale = scale
         bitmapOffset = offset
         bitmapSize = size
@@ -610,9 +725,9 @@ final class PageInkView: UIView {
 
     /// 只重畫改到的地方：只是多寫了幾筆就直接畫上去；其他改動（擦掉、改顏色、移動）清掉那一塊再重畫。
     /// 改動太多回傳 false、不畫
-    private static func applyChanges(from old: [InkStroke], to new: [InkStroke], in ctx: CGContext) -> Bool {
+    private static func applyChanges(from old: [InkStroke], to new: [InkStroke], in ctx: CGContext, limit: Int) -> Bool {
         if new.count >= old.count, new.prefix(old.count).elementsEqual(old) {
-            guard new.count - old.count <= maxPatchStrokes else { return false }
+            guard new.count - old.count <= limit else { return false }
             InkRenderer.drawBatched(Array(new.dropFirst(old.count)), in: ctx)
             return true
         }
@@ -635,7 +750,7 @@ final class PageInkView: UIView {
             dirty = dirty.union(InkGeometry.bounds(of: s))
             changed += 1
         }
-        guard changed <= maxPatchStrokes else { return false }
+        guard changed <= limit else { return false }
         guard !dirty.isNull else { return true }
         // 多留 1pt 給反鋸齒的邊
         dirty = dirty.insetBy(dx: -1, dy: -1)
@@ -654,7 +769,7 @@ final class PageInkView: UIView {
 
     private var vectorShown: Bool { !(layer.sublayers ?? []).isEmpty }
 
-    private func showVector() {
+    private func showVector(atOnce: Bool) {
         if bitmap != nil || building != nil {
             // 從點陣圖換成向量：背景還沒畫好的圖不要了
             _ = nextGeneration()
@@ -665,9 +780,13 @@ final class PageInkView: UIView {
             bitmapSize = .zero
             // 舊的圖先留著顯示，向量好了才拿掉
         }
-        // 向量還在背景算：算好會自己補上最新的筆跡
-        if isBuilding { return }
-        rebuildVector()
+        if isBuilding {
+            // 向量還在背景算：算好會自己補上最新的筆跡
+            guard atOnce else { return }
+            _ = nextGeneration()
+            isBuilding = false
+        }
+        rebuildVector(atOnce: atOnce)
     }
 
     private func removeVector() {
@@ -684,6 +803,8 @@ final class PageInkView: UIView {
         /// 粗細會變的筆（毛筆）：這一層只畫線寬是 width 的那幾段
         var variable: Bool
         var strokes: [InkStroke]
+        /// 有質感的筆：放大時只有透明度，沒有顆粒
+        var opacity: CGFloat = 1
     }
 
     private var chunks: [Chunk] = []
@@ -697,11 +818,12 @@ final class PageInkView: UIView {
     private static func makeChunks(_ strokes: [InkStroke]) -> [Chunk] {
         var out: [Chunk] = []
         func add(_ s: InkStroke, width: CGFloat, variable: Bool) {
+            let opacity = s.style?.look?.flatOpacity ?? 1
             if let last = out.last, last.color == s.colorHex, last.width == width, last.variable == variable,
-               last.strokes.count < strokesPerLayer {
+               last.opacity == opacity, last.strokes.count < strokesPerLayer {
                 out[out.count - 1].strokes.append(s)
             } else {
-                out.append(Chunk(color: s.colorHex, width: width, variable: variable, strokes: [s]))
+                out.append(Chunk(color: s.colorHex, width: width, variable: variable, strokes: [s], opacity: opacity))
             }
         }
         for s in strokes {
@@ -742,9 +864,9 @@ final class PageInkView: UIView {
 
     /// 前後疊放順序不變；只重畫內容有變的那幾層（寫一筆通常只動到最後一層）。
     /// 第一次建（剛換成向量、或剛進來的頁面）在背景算路徑
-    private func rebuildVector() {
+    private func rebuildVector(atOnce: Bool = false) {
         let visible = visibleStrokes
-        if chunks.isEmpty && !visible.isEmpty {
+        if !atOnce && chunks.isEmpty && !visible.isEmpty {
             let gen = generation
             let offset = self.offset
             isBuilding = true
@@ -754,9 +876,11 @@ final class PageInkView: UIView {
                 DispatchQueue.main.async { [weak self] in
                     guard let self, self.generation == gen else { return }
                     self.isBuilding = false
+                    // 算的期間改過的筆跡一起補上：算好的舊樣子不能自己先送上畫面
+                    CATransaction.begin()
                     self.applyVector(new, paths: paths, offset: offset)
-                    // 算的期間改過的筆跡接著補上
-                    if self.visibleStrokes != visible { self.rebuildVector() }
+                    if self.visibleStrokes != visible { self.rebuildVector(atOnce: true) }
+                    CATransaction.commit()
                 }
             }
             return
@@ -792,6 +916,7 @@ final class PageInkView: UIView {
             l.path = p
             l.lineWidth = c.width
             l.strokeColor = UIColor(hex: c.color).cgColor
+            l.opacity = Float(c.opacity)
         }
         for l in layers.dropFirst(new.count) { l.removeFromSuperlayer() }
         CATransaction.commit()
@@ -807,7 +932,7 @@ struct InkDraft {
     var points: [InkPoint]
     var colorHex: String
     var baseWidth: CGFloat
-    var pressure: Bool
+    var style: InkStyle
     /// 虛線的筆：放開後依它的虛線設定切成一段一段（nil＝實線）
     var dashPreset: BrushPreset?
     /// 還會補上準確值的取樣點：編號 → points 的索引
@@ -817,8 +942,8 @@ struct InkDraft {
 }
 
 extension NotebookViewController {
-    /// 「筆」工具目前用自製筆刷
-    var customInkActive: Bool { tool == .pen && settings.customInk }
+    /// 「筆」工具目前用自製筆刷（只有原子筆，見 InkStyle.usesCustomInk）
+    var customInkActive: Bool { tool == .pen && settings.customInk && BrushStore.shared.current.style.usesCustomInk }
 
     func setupInkCapture() {
         inkRecognizer.coordinateView = pagesContainer
@@ -838,27 +963,21 @@ extension NotebookViewController {
         ])
     }
 
-    /// 筆壓對應的線寬：只有毛筆／沾水筆隨筆壓變化，其他筆型照設定的粗細畫（線尾不會變細）
-    private func inkWidth(_ draft: InkDraft, force: CGFloat) -> CGFloat {
-        draft.pressure ? draft.baseWidth * (0.7 + 0.6 * force) : draft.baseWidth
-    }
-
     private func screen(_ p: CGPoint) -> CGPoint { pagesContainer.convert(p, to: liveInkView) }
 
     func inkBegan(_ s: InkCaptureRecognizer.Sample) {
-        dismissToolPopover()
         if let p = paletteOverlay, p.mode == .launcher { dismissPalette() }
         let preset = BrushStore.shared.current
         var d = InkDraft(points: [], colorHex: preset.colorHex, baseWidth: max(preset.width, 0.1),
-                         pressure: preset.style == .fountainPen, dashPreset: preset.isDashed ? preset : nil)
-        let w = inkWidth(d, force: s.force)
+                         style: preset.style, dashPreset: preset.isDashed ? preset : nil)
+        let w = d.baseWidth
         d.points = [InkPoint(s.point, width: w)]
         if let u = s.updateIndex { d.pendingUpdates[u] = 0 }
         inkDraft = d
         // 寫的時候也只畫在起點那一頁裡面（放開後整筆存在那一頁，超出頁面的部分不顯示）
         let pi = pageIndex(containing: s.point) ?? nearestPageIndex(to: s.point)
         liveInkView.clip = pageFrames.indices.contains(pi) ? pagesContainer.convert(pageFrames[pi], to: liveInkView) : nil
-        liveInkView.begin(screen(s.point), width: w * canvas.zoomScale, color: preset.color)
+        liveInkView.begin(screen(s.point), width: w * canvas.zoomScale, color: preset.color, look: preset.style.look)
         restartInkHold(at: screen(s.point))
         DebugLog.add("custom ink begin drawGR=\(canvas.drawingGestureRecognizer.isEnabled)")
     }
@@ -892,7 +1011,7 @@ extension NotebookViewController {
         guard let first = s.points.first else { return }
         let w = shapeWidth(d) * canvas.zoomScale
         liveInkView.clear()
-        liveInkView.begin(screen(first), width: w, color: UIColor(hex: d.colorHex))
+        liveInkView.begin(screen(first), width: w, color: UIColor(hex: d.colorHex), look: d.style.look)
         liveInkView.add(s.points.dropFirst().map { (screen($0), w) })
     }
 
@@ -917,7 +1036,7 @@ extension NotebookViewController {
         for s in new {
             // 跟上一點完全重疊的不記（不是圓滑，只是去掉重複點）
             if let last = d.points.last, s.updateIndex == nil, hypot(last.point.x - s.point.x, last.point.y - s.point.y) < 0.05 { continue }
-            let w = inkWidth(d, force: s.force)
+            let w = d.baseWidth
             if let u = s.updateIndex { d.pendingUpdates[u] = d.points.count }
             d.points.append(InkPoint(s.point, width: w))
             added.append((screen(s.point), w * z))
@@ -931,7 +1050,7 @@ extension NotebookViewController {
     /// Pencil 補上了準確的位置／筆壓：換掉之前的估計值
     func inkUpdated(_ s: InkCaptureRecognizer.Sample) {
         guard var d = inkDraft, d.shape == nil, let u = s.updateIndex, let i = d.pendingUpdates[u], d.points.indices.contains(i) else { return }
-        let w = inkWidth(d, force: s.force)
+        let w = d.baseWidth
         d.points[i] = InkPoint(s.point, width: w)
         inkDraft = d
         liveInkView.replace(i, with: (screen(s.point), w * canvas.zoomScale))
@@ -952,7 +1071,7 @@ extension NotebookViewController {
         let pi = pageIndex(containing: first.point) ?? nearestPageIndex(to: first.point)
         guard pages.indices.contains(pi) else { liveInkView.clear(); return }
         let o = contentOrigin(pi)
-        let stroke = InkGeometry.offset(InkStroke(colorHex: d.colorHex, points: d.points), by: CGPoint(x: -o.x, y: -o.y))
+        let stroke = InkGeometry.offset(InkStroke(colorHex: d.colorHex, points: d.points, style: d.style.look == nil ? nil : d.style), by: CGPoint(x: -o.x, y: -o.y))
         // 虛線：照這一筆中間的粗細切成一段一段（寫的時候還是實線，和 PencilKit 的筆一樣）
         let pieces = d.dashPreset.map { preset -> [InkStroke] in
             let p = preset.dashPattern(lineWidth: shapeWidth(d))

@@ -62,6 +62,7 @@ extension NotebookViewController {
             overlay.showCellSelection(nil)
         }
         tableCellLabel?.text = cellLabel(tableCellSel)
+        for update in tableColorBoxes { update() }
     }
 
     func columnName(_ c: Int) -> String {
@@ -92,7 +93,8 @@ extension NotebookViewController {
     /// 重複、合併、分割、手繪格線、刪除列、刪除欄｜平均分配、鎖定（點了選欄寬或列高）｜底色、字色、⊖ 字級 ⊕｜格線、⊖ 線寬 ⊕｜刪除表格。
     /// 插入列欄：點標頭（兩側的 ＋，再點一下標頭打開選單）；打字：點兩下格子；固定位置：左上角的鎖頭
     func buildTableRibbon() -> [UIView] {
-        guard let s = selectedTable() else { return [] }
+        tableColorBoxes = []
+        guard selectedTable() != nil else { return [] }
         var views: [UIView] = []
 
         let cell = UILabel()
@@ -104,26 +106,25 @@ extension NotebookViewController {
         views.append(cell)
 
         let actions = tableRibbonActions()
-        let a = tableSelectionAnchor()
         var row: [UIView] = actions.edit.map(ribbonButton)
         row.append(toolbarSeparator())
-        row.append(ribbonMenuButton("平均分配", symbol: "arrow.left.and.right.square") { [weak self] in self?.tableDistributeItems() ?? [] })
-        row.append(ribbonMenuButton("鎖定", symbol: "lock.rectangle") { [weak self] in self?.tableLockItems() ?? [] })
+        row.append(ribbonMenuButton(L("平均分配"), symbol: "arrow.left.and.right.square") { [weak self] in self?.tableDistributeItems() ?? [] })
+        row.append(ribbonMenuButton(L("鎖定"), symbol: "lock.rectangle") { [weak self] in self?.tableLockItems() ?? [] })
         row.append(toolbarSeparator())
-        row.append(ribbonColorButton("底色", hex: s.table.fill(a.row, a.col), clear: "無底色") { [weak self] hex in
+        row.append(ribbonColorButton(L("底色"), clear: L("無底色"), current: { $0.fill($1.row, $1.col) }) { [weak self] hex in
             self?.tableAction { t, r in t.setFill(r, hex: hex) }
         })
-        row.append(ribbonColorButton("字色", hex: s.table.textColor(a.row, a.col) ?? TableData.defaultTextColor, clear: nil) { [weak self] hex in
+        row.append(ribbonColorButton(L("字色"), clear: nil, current: { $0.textColor($1.row, $1.col) ?? TableData.defaultTextColor }) { [weak self] hex in
             self?.tableAction { t, r in t.setTextColor(r, hex: hex) }
         })
-        row.append(ribbonStepper("字級", value: \.fontSize, minus: { $0.fontSize = max($0.fontSize - 2, 8) },
+        row.append(ribbonStepper(L("字級"), value: \.fontSize, minus: { $0.fontSize = max($0.fontSize - 2, 8) },
                                  plus: { $0.fontSize = min($0.fontSize + 2, 48) }))
         row.append(toolbarSeparator())
-        row.append(ribbonColorButton("格線", hex: s.table.lineColorHex, clear: nil) { [weak self] hex in
+        row.append(ribbonColorButton(L("格線"), clear: nil, current: { table, _ in table.lineColorHex }) { [weak self] hex in
             guard let self, let s = self.selectedTable(), let hex else { return }
             self.modifyTable(s.ref) { $0.lineColorHex = hex }
         })
-        row.append(ribbonStepper("線寬", value: \.lineWidth, minus: { $0.lineWidth = max($0.lineWidth - 0.5, 0.5) },
+        row.append(ribbonStepper(L("線寬"), value: \.lineWidth, minus: { $0.lineWidth = max($0.lineWidth - 0.5, 0.5) },
                                  plus: { $0.lineWidth = min($0.lineWidth + 0.5, 5) }))
         row.append(toolbarSeparator())
         row.append(ribbonButton(actions.deleteTable))
@@ -162,18 +163,28 @@ extension NotebookViewController {
         return scroll
     }
 
-    /// 顏色框框＋名稱：點一下打開調色盤，選了就套用。clear：調色盤多一格「無」（回傳 nil）
-    func ribbonColorButton(_ title: String, hex: String?, clear: String?, _ pick: @escaping (String?) -> Void) -> UIButton {
+    /// 顏色框框＋名稱：點一下打開調色盤，選了就套用。clear：調色盤多一格「無」（回傳 nil）。
+    /// current：選取範圍左上那格現在的顏色。框框和調色盤都照它，不記建立工具列那一刻的顏色
+    func ribbonColorButton(_ title: String, clear: String?, current: @escaping (TableData, (row: Int, col: Int)) -> String?,
+                           _ pick: @escaping (String?) -> Void) -> UIButton {
+        let color = { [weak self] () -> String? in
+            guard let self, let s = self.selectedTable() else { return nil }
+            return current(s.table, self.tableSelectionAnchor())
+        }
+        var shown = color()
         weak var button: UIButton?
-        let a = UIAction(title: title, image: Self.colorBox(hex)) { [weak self] _ in
+        let a = UIAction(title: title, image: Self.colorBox(shown)) { [weak self] _ in
             guard let self, let b = button else { return }
-            self.presentColorPalette(title: title, selected: hex, clear: clear, from: b) { [weak b] out in
-                pick(out)
-                b?.configuration?.image = Self.colorBox(out)
-            }
+            self.presentColorPalette(title: title, selected: color(), clear: clear, from: b, pick)
         }
         let b = ribbonButton(a)
         button = b
+        tableColorBoxes.append { [weak b] in
+            let now = color()
+            guard let b, now != shown else { return }
+            shown = now
+            b.configuration?.image = Self.colorBox(now)
+        }
         return b
     }
 
@@ -219,7 +230,7 @@ extension NotebookViewController {
             }, for: .touchUpInside)
             return b
         }
-        let stack = UIStackView(arrangedSubviews: [button("minus.circle", "減少\(title)", minus), l, button("plus.circle", "增加\(title)", plus)])
+        let stack = UIStackView(arrangedSubviews: [button("minus.circle", L("減少\(title)"), minus), l, button("plus.circle", L("增加\(title)"), plus)])
         stack.axis = .horizontal
         stack.alignment = .center
         return stack
@@ -270,9 +281,6 @@ extension NotebookViewController {
         if let g = t.repeatGroup, !g.before, isOriginalBlock(g, sel) {
             if g.axis == .rows { p.y = t.rowY(g.span.upperBound) } else { p.x = t.colX(g.span.upperBound) }
         }
-        // 和表格右下角的縮放控制點錯開
-        let z = canvas.zoomScale
-        if abs(p.x - t.size.width) < 1, abs(p.y - t.size.height) < 1 { p.x -= 14 / z; p.y -= 14 / z }
         return CGPoint(x: s.docRect.minX + p.x, y: s.docRect.minY + p.y)
     }
 
@@ -315,7 +323,7 @@ extension NotebookViewController {
             r = CGRect(x: left, y: 0, width: w * CGFloat(plan.count + 1), height: t.size.height)
         }
         overlay.showFillPreview(r.offsetBy(dx: s.docRect.minX, dy: s.docRect.minY))
-        tableCellLabel?.text = "重複 \(plan.count) 組"
+        tableCellLabel?.text = L("重複 \(plan.count) 組")
     }
 
     func finishFillDrag(from a: CGPoint, to b: CGPoint) {
@@ -327,7 +335,7 @@ extension NotebookViewController {
         let before = s.table.repeatGroup?.count ?? 0
         modifyTable(s.ref) { $0.setRepeat(axis: plan.axis, start: plan.start, length: plan.length, before: false, count: plan.count) }
         if plan.count != before || plan.count > 0 {
-            showToast(plan.count > 0 ? "已重複 \(plan.count) 組（可以再拖藍點，或用「重複」改組數）" : "已移除重複的組")
+            showToast(plan.count > 0 ? L("已重複 \(plan.count) 組（可以再拖藍點，或用「重複」改組數）") : L("已移除重複的組"))
         }
         updateTableCellChrome()
     }
@@ -347,9 +355,9 @@ extension NotebookViewController {
         let label: (Int) -> String = { [weak self] d in
             guard let self else { return "" }
             if let g = editing, (g.axis == .rows) == (d < 2), g.before == (d % 2 == 0) {
-                return g.axis == .rows ? "第 \(g.start + 1)–\(g.start + g.length) 列" : "\(self.columnName(g.start))–\(self.columnName(g.start + g.length - 1)) 欄"
+                return g.axis == .rows ? L("第 \(g.start + 1)–\(g.start + g.length) 列") : L("\(self.columnName(g.start))–\(self.columnName(g.start + g.length - 1)) 欄")
             }
-            return d < 2 ? "第 \(sel.r0 + 1)–\(sel.r1 + 1) 列" : "\(self.columnName(sel.c0))–\(self.columnName(sel.c1)) 欄"
+            return d < 2 ? L("第 \(sel.r0 + 1)–\(sel.r1 + 1) 列") : L("\(self.columnName(sel.c0))–\(self.columnName(sel.c1)) 欄")
         }
         let panel = TableRepeatPanel(direction: direction, count: editing?.count ?? 1, editing: editing != nil, blockLabel: label,
                                      onApply: { [weak self] d, n in self?.applyTableRepeat(direction: d, count: n, editing: editing, selection: sel) })
@@ -369,7 +377,7 @@ extension NotebookViewController {
         }
         modifyTable(s.ref) { $0.setRepeat(axis: axis, start: start, length: length, before: before, count: count) }
         dismissToolPopover()
-        showToast(count > 0 ? "已重複 \(count) 組" : "已移除重複的組")
+        showToast(count > 0 ? L("已重複 \(count) 組") : L("已移除重複的組"))
         updateTableCellChrome()
     }
 
@@ -403,8 +411,11 @@ extension NotebookViewController {
             canvas.drawing = rest
             isApplyingDrawing = false
         }
-        setInkHidden(ink)
-        overlay.showLassoPreview(inkPreviewImage(pk, movingInk, rect: frame), frame: frame)
+        let preview = inkPreviewImage(pk, movingInk, rect: frame)
+        showInkChangesAtOnce {
+            setInkHidden(ink)
+            overlay.showLassoPreview(preview, frame: frame)
+        }
         inkCarry = InkCarry(original: drawing, strokeIndices: indices, ink: ink, previewFrame: frame)
     }
 
@@ -416,24 +427,28 @@ extension NotebookViewController {
 
     /// 放開：字放回去並平移 d；自製筆刷的筆跡放到表格所在的第 target 頁。不另外登記復原（和表格算同一步，由呼叫端登記）
     func finishInkCarry(_ c: InkCarry, by d: CGPoint, toPage target: Int) {
-        overlay.showLassoPreview(nil, frame: .zero)
-        setInkHidden([])
-        if !c.strokeIndices.isEmpty {
-            var drawing = c.original
-            let t = CGAffineTransform(translationX: d.x, y: d.y)
-            for i in c.strokeIndices { drawing.strokes[i].transform = drawing.strokes[i].transform.concatenating(t) }
-            setDrawing(drawing)
+        showInkChangesAtOnce {
+            overlay.showLassoPreview(nil, frame: .zero)
+            setInkHidden([])
+            if !c.strokeIndices.isEmpty {
+                var drawing = c.original
+                let t = CGAffineTransform(translationX: d.x, y: d.y)
+                for i in c.strokeIndices { drawing.strokes[i].transform = drawing.strokes[i].transform.concatenating(t) }
+                setDrawing(drawing)
+            }
+            moveInk(c.ink, by: d, toPage: target)
         }
-        moveInk(c.ink, by: d, toPage: target)
     }
 
     /// 沒有移動或拖曳取消：字放回原位
     func cancelInkCarry() {
         guard let c = inkCarry else { return }
         inkCarry = nil
-        overlay.showLassoPreview(nil, frame: .zero)
-        setInkHidden([])
-        if !c.strokeIndices.isEmpty { setDrawing(c.original) }
+        showInkChangesAtOnce {
+            overlay.showLassoPreview(nil, frame: .zero)
+            setInkHidden([])
+            if !c.strokeIndices.isEmpty { setDrawing(c.original) }
+        }
     }
 
     /// 自製筆刷的筆跡平移 d，全部放到第 target 頁（原本就在那一頁的原地換掉，順序不變）
@@ -470,7 +485,7 @@ extension NotebookViewController {
         let lb = CGPoint(x: b.x - r.minX, y: b.y - r.minY)
         let dx = lb.x - la.x, dy = lb.y - la.y
         guard hypot(dx, dy) > 12 else {
-            showToast("線太短了")
+            showToast(L("線太短了"))
             return
         }
         let before = t
@@ -485,7 +500,7 @@ extension NotebookViewController {
                 // 往右上畫（dx、dy 異號）＝右上到左下的斜線
                 let reverse = (dx * dy) < 0
                 if let existing = t.diagonal(cell.row, cell.col), existing.reverse == reverse {
-                    showToast("這格已經有斜線了（要移除請用表格工具列的斜線選單）")
+                    showToast(L("這格已經有斜線了（要移除請用表格工具列的斜線選單）"))
                     return
                 }
                 modifyTable(ref) { $0.setDiagonal(cell.row, cell.col, reverse: reverse) }
@@ -496,7 +511,7 @@ extension NotebookViewController {
         if abs(dx) >= abs(dy) {
             let y = (la.y + lb.y) / 2
             guard y > 0, y < size.height, let row = t.rowIndex(at: y) else {
-                showToast("橫線要畫在表格裡面")
+                showToast(L("橫線要畫在表格裡面"))
                 return
             }
             let x0 = max(0, min(la.x, lb.x)), x1 = min(size.width, max(la.x, lb.x))
@@ -505,7 +520,7 @@ extension NotebookViewController {
                 return overlap >= t.colWidths[c] * 0.5
             })
             guard !cols.isEmpty else {
-                showToast("橫線要至少橫跨一格的一半")
+                showToast(L("橫線要至少橫跨一格的一半"))
                 return
             }
             // 畫在原本被合併蓋住的格線上：把那條線接回去，不是再切一條新的
@@ -520,7 +535,7 @@ extension NotebookViewController {
         } else {
             let x = (la.x + lb.x) / 2
             guard x > 0, x < size.width, let col = t.colIndex(at: x) else {
-                showToast("直線要畫在表格裡面")
+                showToast(L("直線要畫在表格裡面"))
                 return
             }
             let y0 = max(0, min(la.y, lb.y)), y1 = min(size.height, max(la.y, lb.y))
@@ -529,7 +544,7 @@ extension NotebookViewController {
                 return overlap >= t.rowHeights[rr] * 0.5
             })
             guard !rows.isEmpty else {
-                showToast("直線要至少縱跨一格的一半")
+                showToast(L("直線要至少縱跨一格的一半"))
                 return
             }
             if let line = t.nearestColLine(to: x, within: 12) {
@@ -543,7 +558,7 @@ extension NotebookViewController {
         }
         // 沒有任何變化（例如太靠近既有格線）
         if case let (pi2, ei2)? = locate(ref), case let .table(after) = pages[pi2].elements[ei2].content, after == before {
-            showToast("這條線太靠近既有的格線，沒有切出新的格子")
+            showToast(L("這條線太靠近既有的格線，沒有切出新的格子"))
         }
     }
 
@@ -558,7 +573,7 @@ extension NotebookViewController {
 
 extension NotebookViewController {
     var ownGestureRecognizers: [UIGestureRecognizer] {
-        [toolPan, tapGesture, doubleTapGesture, longPressGesture, holdRecognizer, textLongPress, textHandlePan, eraserTracker, pencilPointTracker, palmBlocker, inkRecognizer].compactMap { $0 }
+        [toolPan, tapGesture, doubleTapGesture, longPressGesture, holdRecognizer, textLongPress, textHandlePan, eraserCapture, pencilPointTracker, palmBlocker, inkRecognizer, previewLongPress].compactMap { $0 }
     }
 
     func configurePencilKitGestures() {
@@ -574,7 +589,8 @@ extension NotebookViewController {
         for g in all where !mine.contains(ObjectIdentifier(g)) {
             if g === canvas.panGestureRecognizer || g === canvas.pinchGestureRecognizer { continue }
             if g === canvas.drawingGestureRecognizer {
-                g.isEnabled = drawingTool
+                // 橡皮擦是 App 自己擦：PencilKit 的書寫手勢只給筆、螢光筆
+                g.isEnabled = tool.isInking && !previewMode
                 continue
             }
             if !drawingTool {

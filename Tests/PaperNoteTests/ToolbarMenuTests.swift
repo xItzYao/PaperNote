@@ -2,7 +2,7 @@ import XCTest
 @testable import PaperNote
 
 /// 回報的需求：
-/// - 使用說明收進右上角「⋯」；工具列不放說明按鈕
+/// - 使用說明拿掉（11/18）；「⋯」分成 Apple Pencil 設定、書寫設定、電路圖設定、其他
 /// - 頁面選單拿掉和工具列重複的「全部頁面」「跳到頁碼」「擴展此頁空白」
 /// - 點頁碼直接輸入要跳到的頁碼
 final class ToolbarMenuTests: XCTestCase {
@@ -69,9 +69,12 @@ final class ToolbarMenuTests: XCTestCase {
         XCTAssertGreaterThan(editor.pageLabel.frame.midX, bar.bounds.midX, "頁碼在右邊")
     }
 
-    func testHelpLivesInTheMoreMenu() {
-        let t = titles(editor.makeSettingsMenuItems())
-        XCTAssertTrue(t.contains("使用說明…"), "「⋯」裡要有使用說明")
+    func testTheMoreMenuHasNoHelpAndIsGrouped() {
+        let items = editor.makeSettingsMenuItems()
+        let t = titles(items)
+        XCTAssertFalse(t.contains("使用說明…"), "使用說明拿掉了")
+        XCTAssertEqual(items.map(\.title), ["Apple Pencil 設定", "書寫設定", "電路圖設定", "其他"])
+        XCTAssertTrue(items.allSatisfy { ($0 as? UIMenu)?.options.contains(.displayInline) == true }, "分段顯示，不多一層")
         XCTAssertEqual(t.last, "關於我…", "關於我在「⋯」最下面")
         XCTAssertFalse(t.contains("匯出…"), "匯出不在「⋯」裡")
         XCTAssertFalse(allButtons(editor.topBar).contains { $0.accessibilityLabel == "說明" }, "工具列不再放說明按鈕")

@@ -15,8 +15,8 @@ struct TableHandles {
 // MARK: - 表格：選了整欄（整列）時兩側的＋、格線拖拉點、拖標頭的分界調整欄寬（列高）
 
 extension NotebookViewController {
-    /// 選了整欄：那幾欄左右兩側各一個 ＋；選了整列：上下兩側各一個。
-    /// 放在標頭外面，不會擋到 A、B、1、2；沒選整欄整列就不顯示
+    /// 選了格子：那幾欄左右兩側各一個 ＋（在欄標頭上面）、那幾列上下兩側各一個（在列標頭左邊）。
+    /// 放在標頭外面，不會擋到 A、B、1、2；沒選格子就不顯示
     func tableHandles(_ t: TableData, docRect r: CGRect, selection sel: CellRange?, locked: Bool = false) -> TableHandles {
         var h = TableHandles()
         guard t.rows > 0, t.cols > 0 else { return h }
@@ -30,12 +30,8 @@ extension NotebookViewController {
         }
         guard let sel else { return h }
         let off = (Self.tableHeaderGap + Self.tableHeaderSize + 16) / canvas.zoomScale
-        if sel.r0 == 0 && sel.r1 == t.rows - 1 {
-            h.plusCols = [sel.c0, sel.c1 + 1].map { IndexedPoint(index: $0, point: CGPoint(x: r.minX + t.colX($0), y: r.minY - off)) }
-        }
-        if sel.c0 == 0 && sel.c1 == t.cols - 1 {
-            h.plusRows = [sel.r0, sel.r1 + 1].map { IndexedPoint(index: $0, point: CGPoint(x: r.minX - off, y: r.minY + t.rowY($0))) }
-        }
+        h.plusCols = [sel.c0, sel.c1 + 1].map { IndexedPoint(index: $0, point: CGPoint(x: r.minX + t.colX($0), y: r.minY - off)) }
+        h.plusRows = [sel.r0, sel.r1 + 1].map { IndexedPoint(index: $0, point: CGPoint(x: r.minX - off, y: r.minY + t.rowY($0))) }
         return h
     }
 
@@ -52,11 +48,15 @@ extension NotebookViewController {
 
     /// 按在表格外側的格線圓點：拖曳調整那條線
     func tableGripTarget(at p: CGPoint) -> DragKind? {
+        guard let g = nearestTableGrip(to: p), g.distance < 18 / canvas.zoomScale else { return nil }
+        return g.kind
+    }
+
+    /// 離 p 最近的格線圓點
+    func nearestTableGrip(to p: CGPoint) -> (kind: DragKind, distance: CGFloat)? {
         guard let s = selectedTableHandles() else { return nil }
-        let tol = 18 / canvas.zoomScale
-        if let c = s.handles.colGrips.min(by: { $0.point.distance(to: p) < $1.point.distance(to: p) }), c.point.distance(to: p) < tol { return .colLine(c.index) }
-        if let r = s.handles.rowGrips.min(by: { $0.point.distance(to: p) < $1.point.distance(to: p) }), r.point.distance(to: p) < tol { return .rowLine(r.index) }
-        return nil
+        let grips = s.handles.colGrips.map { (DragKind.colLine($0.index), $0.point) } + s.handles.rowGrips.map { (DragKind.rowLine($0.index), $0.point) }
+        return grips.map { ($0.0, $0.1.distance(to: p)) }.min { $0.1 < $1.1 }.map { (kind: $0.0, distance: $0.1) }
     }
 
     /// 點到「＋」→ 插入一欄（列），並選起新的那一欄（列），可以接著再按
@@ -137,6 +137,18 @@ extension NotebookViewController {
         return best?.0
     }
 
+    /// 控制點拖到 p 時的擴展大小
+    private func resizedInsets(_ d: PageResizeDrag, to p: CGPoint) -> PageInsets {
+        let dx = p.x - d.start.x, dy = p.y - d.start.y
+        let limit: CGFloat = 8000
+        var n = d.original
+        if [0, 6, 7].contains(d.handle) { n.left = min(limit, max(0, (d.original.left - dx).rounded())) }
+        if [2, 3, 4].contains(d.handle) { n.right = min(limit, max(0, (d.original.right + dx).rounded())) }
+        if [0, 1, 2].contains(d.handle) { n.top = min(limit, max(0, (d.original.top - dy).rounded())) }
+        if [4, 5, 6].contains(d.handle) { n.bottom = min(limit, max(0, (d.original.bottom + dy).rounded())) }
+        return n
+    }
+
     func handlePageResizePan(_ g: UIPanGestureRecognizer, _ p: CGPoint) {
         switch g.state {
         case .began:
@@ -145,18 +157,13 @@ extension NotebookViewController {
             resizeDrag = PageResizeDrag(handle: h, start: p, original: ins, preview: ins)
         case .changed:
             guard var d = resizeDrag else { return }
-            let dx = p.x - d.start.x, dy = p.y - d.start.y
-            let limit: CGFloat = 8000
-            var n = d.original
-            if [0, 6, 7].contains(d.handle) { n.left = min(limit, max(0, (d.original.left - dx).rounded())) }
-            if [2, 3, 4].contains(d.handle) { n.right = min(limit, max(0, (d.original.right + dx).rounded())) }
-            if [0, 1, 2].contains(d.handle) { n.top = min(limit, max(0, (d.original.top - dy).rounded())) }
-            if [4, 5, 6].contains(d.handle) { n.bottom = min(limit, max(0, (d.original.bottom + dy).rounded())) }
-            d.preview = n
+            d.preview = resizedInsets(d, to: p)
             resizeDrag = d
             updatePageResizeChrome()
         case .ended:
-            guard let d = resizeDrag, let i = resizePageIndex else { return }
+            // 放開的位置也算（最後一次移動到放開之間可能還有一段）
+            guard var d = resizeDrag, let i = resizePageIndex else { return }
+            d.preview = resizedInsets(d, to: p)
             resizeDrag = nil
             if d.preview != d.original {
                 applyInsets(d.preview, pageIndex: i, toAll: false)
@@ -321,22 +328,43 @@ extension NotebookViewController {
 
 extension NotebookViewController: UIPencilInteractionDelegate {
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveTap tap: UIPencilInteraction.Tap) {
+        guard !pencilActionsGoElsewhere else { return }
         handlePencilDoubleTap(at: tap.hoverPose?.location)
     }
 
-    /// Apple Pencil Pro 擠壓 → 在筆尖位置叫出圓形筆盤
+    /// 蓋住筆記本的視窗（畫元件、全部頁面…）開著：Pencil 點兩下、按壓交給它，筆記本的工具不跟著切
+    var pencilActionsGoElsewhere: Bool {
+        guard let p = presentedViewController else { return false }
+        return p.modalPresentationStyle != .popover
+    }
+
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
-        guard squeeze.phase == .ended else { return }
+        guard squeeze.phase == .ended, !pencilActionsGoElsewhere else { return }
+        handlePencilSqueeze(at: squeeze.hoverPose?.location)
+    }
+
+    /// Apple Pencil Pro 按壓：預設在筆尖位置叫出圓形筆盤；「⋯」可以改成切到工具列的某個工具（再按一次切回來）
+    func handlePencilSqueeze(at hover: CGPoint?) {
         if paletteOverlay != nil {
             dismissPalette()
             return
         }
-        showPaletteLauncher(at: squeeze.hoverPose?.location, open: true)
+        guard let target = Self.toolbarTools.first(where: { EditorSettings.squeezeKey($0.0) == settings.squeezeAction })?.0 else {
+            showPaletteLauncher(at: hover, open: true)
+            return
+        }
+        guard !previewMode else { return }
+        if tool == target {
+            setTool(toolBeforeSqueeze == target ? .pen : toolBeforeSqueeze)
+        } else {
+            toolBeforeSqueeze = tool
+            setTool(target)
+        }
     }
 
     /// Apple Pencil 筆身點兩下：切換橡皮擦，同時在筆尖旁出現調色盤小圖示（點了才打開）
     func handlePencilDoubleTap(at hover: CGPoint? = nil) {
-        guard UIPencilInteraction.preferredTapAction != .ignore else { return }
+        guard UIPencilInteraction.preferredTapAction != .ignore, !previewMode else { return }
         // 編輯表格的格線：在畫線和擦線之間切換（不切到橡皮擦）
         if tool == .tableDraw, tableDrawTarget != nil {
             toggleTableEraseLines()
@@ -345,18 +373,12 @@ extension NotebookViewController: UIPencilInteractionDelegate {
         // 選到表格（表格工具列）：直接進入手繪格線，之後點兩下切換畫線／擦線，按「完成」結束
         if tool == .select, selectedTable() != nil {
             beginTableHandDraw()
-            showToast("手繪格線：筆身點兩下切換畫線／擦線，按「完成」結束")
+            showToast(L("手繪格線：筆身點兩下切換畫線／擦線，按「完成」結束"))
             return
         }
-        // 電路工具：在接線和原本的模式（選取或放置元件）之間切換
+        // 電路工具：在橡皮擦和原本的模式（選取、接線或放置元件）之間切換
         if tool == .circuit {
-            if circuitMode == .wire {
-                selectCircuitMode(circuitModeBeforeWire)
-            } else {
-                circuitModeBeforeWire = circuitMode
-                selectCircuitMode(.wire)
-                showToast("接線（筆身點兩下切回）")
-            }
+            selectCircuitMode(circuitMode == .erase ? circuitModeBeforeErase : .erase)
             return
         }
         if tool == .eraser {

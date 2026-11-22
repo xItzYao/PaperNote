@@ -20,25 +20,25 @@ struct ExpandPageView: View {
                         .frame(maxWidth: .infinity)
                 }
                 Section {
-                    edgeRow("上方", value: $insets.top, half: baseSize.height / 2)
-                    edgeRow("下方", value: $insets.bottom, half: baseSize.height / 2)
-                    edgeRow("左側", value: $insets.left, half: baseSize.width / 2)
-                    edgeRow("右側", value: $insets.right, half: baseSize.width / 2)
+                    edgeRow(L("上方"), value: $insets.top, half: baseSize.height / 2)
+                    edgeRow(L("下方"), value: $insets.bottom, half: baseSize.height / 2)
+                    edgeRow(L("左側"), value: $insets.left, half: baseSize.width / 2)
+                    edgeRow(L("右側"), value: $insets.right, half: baseSize.width / 2)
                 } header: {
-                    Text("擴展空白畫布（單位：點）")
+                    Text(L("擴展空白畫布（單位：點）"))
                 } footer: {
-                    Text("原本的頁面內容、筆跡與螢光標示都會留在原位，只是四周多出可以寫字的空白。")
+                    Text(L("原本的頁面內容、筆跡與螢光標示都會留在原位，只是四周多出可以寫字的空白。"))
                 }
                 Section {
-                    Toggle("套用到所有頁面", isOn: $applyToAll)
-                    Button("全部歸零", role: .destructive) { insets = PageInsets() }
+                    Toggle(L("套用到所有頁面"), isOn: $applyToAll)
+                    Button(L("全部歸零"), role: .destructive) { insets = PageInsets() }
                 }
             }
-            .navigationTitle("擴展第 \(pageNumber) 頁")
+            .navigationTitle(L("擴展第 \(pageNumber) 頁"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消", action: onCancel) }
-                ToolbarItem(placement: .confirmationAction) { Button("套用") { onApply(insets, applyToAll) } }
+                ToolbarItem(placement: .cancellationAction) { Button(L("取消"), action: onCancel) }
+                ToolbarItem(placement: .confirmationAction) { Button(L("套用")) { onApply(insets, applyToAll) } }
             }
         }
     }
@@ -52,9 +52,9 @@ struct ExpandPageView: View {
                 .foregroundStyle(.secondary)
             Stepper("", value: value, in: 0...4000, step: 50).labelsHidden()
             Spacer()
-            Button("+半頁") { value.wrappedValue = min(4000, value.wrappedValue + half.rounded()) }
+            Button(L("+半頁")) { value.wrappedValue = min(4000, value.wrappedValue + half.rounded()) }
                 .buttonStyle(.bordered)
-            Button("+一頁") { value.wrappedValue = min(4000, value.wrappedValue + (half * 2).rounded()) }
+            Button(L("+一頁")) { value.wrappedValue = min(4000, value.wrappedValue + (half * 2).rounded()) }
                 .buttonStyle(.bordered)
         }
     }
@@ -71,7 +71,7 @@ struct ExpandPageView: View {
                     .overlay(Rectangle().stroke(Color.blue.opacity(0.6), style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
                 Rectangle()
                     .fill(Color.gray.opacity(0.25))
-                    .overlay(Text("原頁面").font(.caption).foregroundStyle(.secondary))
+                    .overlay(Text(L("原頁面")).font(.caption).foregroundStyle(.secondary))
                     .frame(width: baseSize.width * s, height: baseSize.height * s)
                     .offset(x: insets.left * s, y: insets.top * s)
             }
@@ -100,8 +100,8 @@ struct NotebookFavoritesView: View {
         NavigationStack {
             Group {
                 if items.isEmpty {
-                    ContentUnavailableView("還沒有我的最愛頁面", systemImage: "star",
-                                           description: Text("按上方的星號，就能把目前這頁加入我的最愛並寫備註。"))
+                    ContentUnavailableView(L("還沒有我的最愛頁面"), systemImage: "star",
+                                           description: Text(L("按上方的星號，就能把目前這頁加入我的最愛並寫備註。")))
                 } else {
                     List {
                         ForEach($items) { $item in
@@ -112,10 +112,10 @@ struct NotebookFavoritesView: View {
                                 .buttonStyle(.plain)
                                 VStack(alignment: .leading, spacing: 6) {
                                     Button { onSelect(item.id) } label: {
-                                        Text("第 \(item.number) 頁").font(.headline)
+                                        Text(L("第 \(item.number) 頁")).font(.headline)
                                     }
                                     .buttonStyle(.plain)
-                                    TextField("寫備註…", text: $item.note, axis: .vertical)
+                                    TextField(L("寫備註…"), text: $item.note, axis: .vertical)
                                         .font(.subheadline)
                                         .lineLimit(1...4)
                                         .onSubmit { onEditNote(item.id, item.note) }
@@ -124,7 +124,7 @@ struct NotebookFavoritesView: View {
                             }
                             .padding(.vertical, 4)
                             .swipeActions {
-                                Button("移除", role: .destructive) {
+                                Button(L("移除"), role: .destructive) {
                                     onRemove(item.id)
                                     items.removeAll { $0.id == item.id }
                                 }
@@ -134,7 +134,7 @@ struct NotebookFavoritesView: View {
                     .listStyle(.plain)
                 }
             }
-            .navigationTitle("我的最愛頁面")
+            .navigationTitle(L("我的最愛頁面"))
             .navigationBarTitleDisplayMode(.inline)
         }
     }

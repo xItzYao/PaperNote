@@ -1,11 +1,25 @@
 import UIKit
 
 enum CircuitMode: Equatable {
-    case select, wire, place(CircuitPart)
+    case select, wire, place(CircuitPart), placeCustom(UUID), erase
 }
 
 enum CircuitSelection: Equatable {
     case component(UUID), wire(UUID)
+    /// 好幾個一起選（群組，或框選）
+    case items(Set<UUID>)
+
+    var itemID: UUID? {
+        switch self {
+        case let .component(id), let .wire(id): return id
+        case .items: return nil
+        }
+    }
+
+    func contains(_ id: UUID) -> Bool {
+        if case let .items(ids) = self { return ids.contains(id) }
+        return itemID == id
+    }
 }
 
 /// 選取模式下拖曳的對象
@@ -21,6 +35,8 @@ enum CircuitDragKind: Equatable {
     /// 元件名稱（拖到哪就放哪，記住和元件的相對位置）
     case componentName(UUID)
     case componentNameSize(UUID)
+    /// 群組或框選的一整組
+    case items(Set<UUID>)
 }
 
 /// 拖曳中的狀態
@@ -75,12 +91,13 @@ extension NotebookViewController {
     /// p 附近所有的電路圖（目前正在編輯的排第一，其餘由上往下）
     func circuitsAt(_ p: CGPoint, margin: CGFloat) -> [ElementRef] {
         var out: [ElementRef] = []
-        if let t = circuitTarget, let info = circuitInfo(t),
+        // 鎖住的電路圖不能編輯：點不到，也接不上
+        if let t = circuitTarget, let info = circuitInfo(t), !info.element.locked,
            docFrame(of: info.element, pageIndex: info.pi).insetBy(dx: -margin, dy: -margin).contains(p) {
             out.append(t)
         }
         guard let pi = pageIndex(containing: p) else { return out }
-        for e in pages[pi].elements.reversed() {
+        for e in pages[pi].elements.reversed() where !e.locked {
             guard case .circuit = e.content else { continue }
             let ref = ElementRef(pageID: pages[pi].id, elementID: e.id)
             if ref != circuitTarget, docFrame(of: e, pageIndex: pi).insetBy(dx: -margin, dy: -margin).contains(p) {
@@ -115,6 +132,14 @@ extension NotebookViewController {
             if case let (id, _)? = wireSegmentHit(circuitLocal(p, ref), in: info.data, tolerance: tol / info.data.scale) { return (ref, .wire(id)) }
         }
         return nil
+    }
+
+    /// 點到 hit 要選到什麼：群組裡的東西整組選；已經選了好幾個、又點在裡面就維持原本的選取
+    func circuitSelection(for hit: CircuitSelection, in ref: ElementRef, data: CircuitData) -> CircuitSelection {
+        guard let id = hit.itemID else { return hit }
+        if case let .items(ids)? = circuitSel, ref == circuitTarget, ids.contains(id) { return .items(ids) }
+        if let members = data.groupMembers(of: id) { return .items(members) }
+        return hit
     }
 
     /// 點到的導線與段編號（內容座標）
@@ -158,6 +183,7 @@ extension NotebookViewController {
         switch sel {
         case let .wire(id): b = data.wires.first { $0.id == id }?.labelBounds
         case let .component(id): b = data.components.first { $0.id == id }?.nameBounds
+        case .items: b = nil
         }
         guard let b else { return nil }
         return (ref, sel, b.applying(t).insetBy(dx: -3 / canvas.zoomScale, dy: -3 / canvas.zoomScale))
@@ -171,15 +197,31 @@ extension NotebookViewController {
     }
 
     /// 選取模式下，從這個位置拖曳會動到什麼
+    /// 手指按在選起來的電路元件、導線（含名稱、控制點）或旁邊的旋轉、翻轉、複製、刪除上
+    func circuitSelectionHit(at p: CGPoint) -> Bool {
+        if let h = circuitPartHandleCenters(), [h.rotate, h.flip, h.copy, h.delete].contains(where: { p.distance(to: $0) <= h.radius }) {
+            return true
+        }
+        guard let ref = circuitTarget, let sel = circuitSel, let (hitRef, kind) = circuitDragTarget(at: p), hitRef == ref else { return false }
+        switch kind {
+        case let .items(ids): return ids.allSatisfy(sel.contains)
+        case let .component(id), let .componentName(id), let .componentNameSize(id),
+             let .wireSegment(id, _), let .wireCorner(id, _), let .wireEnd(id, _), let .wireLabel(id), let .wireLabelSize(id):
+            return sel.contains(id)
+        }
+    }
+
     private func circuitDragTarget(at p: CGPoint) -> (ElementRef, CircuitDragKind)? {
         if let l = selectedLabelRect(), let h = labelResizePoint(), p.distance(to: h) <= 16 / canvas.zoomScale {
             switch l.selection {
             case let .wire(id): return (l.ref, .wireLabelSize(id))
             case let .component(id): return (l.ref, .componentNameSize(id))
+            case .items: break
             }
         }
         if let h = wireHandleHit(at: p) { return h }
         guard let hit = circuitHit(at: p), let info = circuitInfo(hit.ref) else { return nil }
+        if case let .items(ids) = circuitSelection(for: hit.selection, in: hit.ref, data: info.data) { return (hit.ref, .items(ids)) }
         let tol = max(6, 12 / canvas.zoomScale)
         let onName = nameHit(circuitLocal(p, hit.ref), in: info.data, tolerance: tol / 2 / info.data.scale) == hit.selection
         switch hit.selection {
@@ -189,6 +231,8 @@ extension NotebookViewController {
             if onName { return (hit.ref, .wireLabel(id)) }
             guard case let (id, i)? = wireSegmentHit(circuitLocal(p, hit.ref), in: info.data, tolerance: tol / info.data.scale) else { return nil }
             return (hit.ref, .wireSegment(id, i))
+        case .items:
+            return nil
         }
     }
 
@@ -208,8 +252,10 @@ extension NotebookViewController {
         d.snapToGrid()
         // 一直線分兩筆畫的導線接成一條（選取中的那條保留 id，選取才不會不見）
         var keep: UUID?
+        var frozen = Set<UUID>()
         if case let .wire(id)? = circuitSel { keep = id }
-        d.joinStraightRuns(keeping: keep)
+        if case let .items(ids)? = circuitSel { frozen = ids }
+        d.joinStraightRuns(keeping: keep, frozen: frozen)
         let b = d.contentBounds
         guard !b.isNull else { return e }
         let g = CircuitData.grid, m = CircuitData.margin
@@ -288,11 +334,41 @@ extension NotebookViewController {
         return ElementRef(pageID: pages[pi].id, elementID: merged.id)
     }
 
+    // MARK: 自動編號
+
+    /// 開了自動編號：沒有名稱（或是 R1 這種自動編號樣子的名稱）的元件，照這一頁已經用掉的號碼接著編
+    func autoNumbered(_ comps: [CircuitComponent], pageIndex pi: Int) -> [CircuitComponent] {
+        guard settings.circuitAutoNumber, pages.indices.contains(pi) else { return comps }
+        var used: [String] = []
+        for e in pages[pi].elements {
+            if case let .circuit(d) = e.content { used += d.components.compactMap(\.name) }
+        }
+        var out = comps
+        CircuitData.autoNumber(&out, used: used)
+        return out
+    }
+
+    func autoNumbered(_ comps: [CircuitComponent], in ref: ElementRef) -> [CircuitComponent] {
+        guard let pi = circuitInfo(ref)?.pi else { return comps }
+        return autoNumbered(comps, pageIndex: pi)
+    }
+
+    func autoNumbered(_ comps: [CircuitComponent], at p: CGPoint) -> [CircuitComponent] {
+        autoNumbered(comps, pageIndex: pageIndex(containing: p) ?? nearestPageIndex(to: p))
+    }
+
+    /// 工具列的「自動編號」開關
+    func setCircuitAutoNumber(_ on: Bool) {
+        settings.circuitAutoNumber = on
+        rebuildSubBar()
+    }
+
     // MARK: 放置元件
 
     func placeComponent(_ part: CircuitPart, at p: CGPoint) {
         var comp = CircuitComponent(part: part, position: .zero)
         comp.inputs = circuitGateInputs[part] ?? part.defaultSize
+        comp.flipV = part.defaultFlipV
         // 沿用這種元件上次的方向與翻轉
         if let style = circuitPartStyle[part] {
             comp.rotation = style.rotation
@@ -301,43 +377,127 @@ extension NotebookViewController {
         }
         if let ref = circuitAt(p, margin: 60), var d = circuitInfo(ref)?.data {
             comp.position = CircuitData.snap(circuitLocal(p, ref))
+            comp = autoNumbered([comp], in: ref)[0]
             d.components.append(comp)
+            // 接腳放在導線上：接上（共點），不是跨線
+            d.connectPins(CircuitGeometry.pins(comp))
             circuitTarget = ref
             updateCircuit(ref, data: d)
         } else {
             var d = CircuitData.newCircuit
             comp.position = CGPoint(x: 60, y: 60)
+            comp = autoNumbered([comp], at: p)[0]
             d.components = [comp]
             circuitTarget = createCircuit(at: p, data: d)
         }
-        // 停在放置模式，可以連續點著放；剛放的這個先選起來，方便旋轉、翻轉
+        // 剛放的這個先選起來，方便旋轉、翻轉
         circuitSel = .component(comp.id)
+        rebuildSubBar()
+        updateCircuitChrome()
+    }
+
+    /// 從自訂電路放一份到 p（中心對齊格點），放好是一個群組，並選起來
+    func placeCustomCircuit(_ id: UUID, at p: CGPoint) {
+        guard let custom = CustomCircuitStore.shared.circuit(id) else { return }
+        // 自己畫的元件是一個元件；存起來的電路是一個群組
+        var stamp = custom.data.withFreshIDs(groupAll: custom.symbol == nil)
+        let sel: CircuitSelection = custom.symbol != nil && !stamp.components.isEmpty ? .component(stamp.components[0].id) : .items(stamp.itemIDs)
+        if let ref = circuitAt(p, margin: 60), var d = circuitInfo(ref)?.data {
+            stamp.offset(by: CircuitData.snap(circuitLocal(p, ref)))
+            stamp.components = autoNumbered(stamp.components, in: ref)
+            d.components += stamp.components
+            d.wires += stamp.wires
+            // 接腳放在原本的導線上：接上（一起放上來的線照原樣）
+            d.connectPins(stamp.pins(of: Set(stamp.components.map(\.id))), ignoring: Set(stamp.wires.map(\.id)))
+            circuitTarget = ref
+            circuitSel = sel
+            updateCircuit(ref, data: d)
+        } else {
+            var d = CircuitData.newCircuit
+            stamp.offset(by: CGPoint(x: 60, y: 60))
+            stamp.components = autoNumbered(stamp.components, at: p)
+            d.components = stamp.components
+            d.wires = stamp.wires
+            circuitSel = sel
+            circuitTarget = createCircuit(at: p, data: d)
+        }
         rebuildSubBar()
         updateCircuitChrome()
     }
 
     // MARK: 點選
 
+    /// 沒勾「連續放置元件」：放好就回到選取（剛放的還是選著）
+    private func finishPlacingIfNeeded() {
+        guard !settings.circuitContinuousPlace else { return }
+        circuitMode = .select
+        rebuildSubBar()
+        updateCircuitChrome()
+    }
+
+    /// 放置模式點到已經有的元件：選它，不在上面再疊一個；已經選起來的再點一下是改名
+    private func tapExistingComponent(at p: CGPoint) -> Bool {
+        guard let hit = circuitHit(at: p), case let .component(id) = hit.selection, let data = circuitInfo(hit.ref)?.data else { return false }
+        if hit.ref == circuitTarget, circuitSel?.contains(id) == true {
+            promptComponentName(hit.ref, component: id)
+            return true
+        }
+        let sel = circuitSelection(for: hit.selection, in: hit.ref, data: data)
+        circuitTarget = hit.ref
+        circuitSel = sel
+        rebuildSubBar()
+        updateCircuitChrome()
+        return true
+    }
+
     func handleCircuitTap(at p: CGPoint) {
+        if let lock = lockIconHit(at: p) {
+            toggleLock(lock)
+            return
+        }
         if handleCircuitPartHandleTap(p) { return }
         switch circuitMode {
         case let .place(part):
-            // 點到已經有的元件就選它，不在上面再疊一個
-            if let hit = circuitHit(at: p), case .component = hit.selection {
-                circuitTarget = hit.ref
-                circuitSel = hit.selection
-                rebuildSubBar()
-                updateCircuitChrome()
-            } else {
+            if !tapExistingComponent(at: p) {
                 placeComponent(part, at: p)
+                finishPlacingIfNeeded()
             }
-        case .wire:
-            break
-        case .select:
-            let old = circuitSel, oldTarget = circuitTarget
-            if let hit = circuitHit(at: p) {
+        case let .placeCustom(id):
+            if !tapExistingComponent(at: p) {
+                placeCustomCircuit(id, at: p)
+                finishPlacingIfNeeded()
+            }
+        case .erase:
+            // 點一下：筆尖已經離開了，直接刪（群組是整組）
+            if let hit = circuitHit(at: p), let data = circuitInfo(hit.ref)?.data {
+                let sel = circuitSelection(for: hit.selection, in: hit.ref, data: data)
                 circuitTarget = hit.ref
-                circuitSel = hit.selection
+                circuitSel = sel
+                deleteCircuitSelection()
+                returnFromCircuitEraserIfNeeded()
+            }
+        case .select, .wire:
+            let old = circuitSel, oldTarget = circuitTarget
+            if let hit = circuitHit(at: p), let data = circuitInfo(hit.ref)?.data, let id = hit.selection.itemID {
+                // 再點一下選取中的東西：元件改名；導線跳出命名、刪除（在一整組裡面的只能命名）
+                if hit.ref == oldTarget, old?.contains(id) == true {
+                    switch hit.selection {
+                    case .component:
+                        promptComponentName(hit.ref, component: id)
+                    case .wire:
+                        if case .items? = old {
+                            promptWireLabel(hit.ref, wire: id, near: circuitLocal(p, hit.ref))
+                        } else {
+                            presentWireMenu(hit.ref, wire: id, at: p)
+                        }
+                    case .items:
+                        break
+                    }
+                    return
+                }
+                let sel = circuitSelection(for: hit.selection, in: hit.ref, data: data)
+                circuitTarget = hit.ref
+                circuitSel = sel
             } else {
                 circuitSel = nil
             }
@@ -348,11 +508,13 @@ extension NotebookViewController {
     }
 
     func circuitPanShouldBegin(at p: CGPoint) -> Bool {
-        // 點在小圓鈕上：當成點擊
-        if let h = circuitPartHandleCenters(), [h.rotate, h.flip].contains(where: { p.distance(to: $0) <= h.radius }) { return false }
+        // 點在小圓鈕、鎖頭上：當成點擊
+        if let h = circuitPartHandleCenters(), [h.rotate, h.flip, h.copy, h.delete].contains(where: { p.distance(to: $0) <= h.radius }) { return false }
+        if lockIconHit(at: p) != nil { return false }
         switch circuitMode {
-        case .wire: return true
-        case .select, .place:
+        // 選取模式從空白處開始是框選
+        case .wire, .erase, .select: return true
+        case .place, .placeCustom:
             return circuitDragTarget(at: p) != nil
         }
     }
@@ -360,33 +522,193 @@ extension NotebookViewController {
     // MARK: 拖曳：移動元件／接線
 
     func handleCircuitPan(_ g: UIPanGestureRecognizer, _ p: CGPoint) {
+        // 擦到一半切換模式（筆身點兩下）：這一筆還是要收尾，擦到的才不會一直灰著
+        if g.state != .began, circuitEraseLast != nil {
+            handleErasePan(g, p)
+            return
+        }
+        if g.state != .began, circuitMarquee != nil {
+            handleMarqueePan(g, p)
+            return
+        }
+        if g.state != .began, circuitDrag != nil {
+            handleSelectDrag(g, p)
+            return
+        }
         if g.state == .began {
             // 起點用筆尖剛碰到的位置，接線才會從碰到的那條線開始
             let start = panTouchDownPoint(g)
+            // 手指只會按在選起來的東西上（見 shouldReceive）：一律是拖動
+            if !toolPanByDrawingTouch, g === toolPan {
+                handleSelectDrag(g, start)
+                return
+            }
             switch circuitMode {
             case .wire:
                 wireDraft = WireDraft(ref: circuitAt(start, margin: 80), ink: [start])
                 handleWirePan(g, p)
-            case .select, .place: handleSelectDrag(g, start)
+            case .select:
+                if circuitDragTarget(at: start) != nil {
+                    handleSelectDrag(g, start)
+                } else {
+                    handleMarqueePan(g, start)
+                }
+            case .place, .placeCustom: handleSelectDrag(g, start)
+            case .erase:
+                circuitEraseLast = start
+                handleErasePan(g, p)
             }
             return
         }
-        switch circuitMode {
-        case .wire: handleWirePan(g, p)
-        case .select, .place: handleSelectDrag(g, p)
+        if circuitMode == .wire { handleWirePan(g, p) }
+    }
+
+    // MARK: 框選
+
+    private func handleMarqueePan(_ g: UIPanGestureRecognizer, _ p: CGPoint) {
+        switch g.state {
+        case .began:
+            circuitMarquee = [p]
+            if circuitSel != nil {
+                circuitSel = nil
+                rebuildSubBar()
+                updateCircuitChrome()
+            }
+        case .changed:
+            circuitMarquee?.append(p)
+            // 碰到就選（交集）是綠色，完整圈到才選（窗選）是藍色
+            overlay.showLassoPath(circuitMarquee, crossing: circuitMarquee.map(circuitLassoIsCrossing) ?? false)
+        case .ended:
+            circuitMarquee?.append(p)
+            finishCircuitMarquee()
+        default:
+            circuitMarquee = nil
+            overlay.showLassoPath(nil)
         }
+    }
+
+    /// 這一圈是交集選取（碰到就選）還是窗選（完整圈到才選）：看「⋯」的「電路圖選取模式」和圈的方向
+    func circuitLassoIsCrossing(_ pts: [CGPoint]) -> Bool {
+        let clockwise = CircuitData.lassoIsClockwise(pts)
+        switch settings.circuitLassoMode {
+        case "reversed": return clockwise
+        case "window": return false
+        case "crossing": return true
+        default: return !clockwise
+        }
+    }
+
+    /// 像 AutoCAD：順時針圈，整個在圈裡的元件和導線才選；逆時針圈，碰到就選（「⋯」可以反過來、或只用其中一種）。碰到群組的一員就是整組。圈到好幾張電路圖時選東西最多的那張
+    private func finishCircuitMarquee() {
+        let pts = circuitMarquee ?? []
+        circuitMarquee = nil
+        overlay.showLassoPath(nil)
+        guard pts.count > 4 else { return }
+        let path = UIBezierPath()
+        path.move(to: pts[0])
+        for q in pts.dropFirst() { path.addLine(to: q) }
+        path.close()
+        let b = path.bounds
+        let crossing = circuitLassoIsCrossing(pts)
+        var best: (ref: ElementRef, ids: Set<UUID>)?
+        for ref in circuitsAt(CGPoint(x: b.midX, y: b.midY), margin: max(b.width, b.height)) {
+            guard let data = circuitInfo(ref)?.data, let t = circuitTransform(ref) else { continue }
+            var ids = Set<UUID>()
+            if crossing {
+                ids = data.touched(byLasso: pts.map { $0.applying(t.inverted()) })
+            } else {
+                for c in data.components where LassoGeometry.encloses(CircuitGeometry.bounds(c).applying(t), path: path) { ids.insert(c.id) }
+                for w in data.wires where w.points.allSatisfy({ path.contains($0.applying(t)) }) { ids.insert(w.id) }
+            }
+            for id in ids { ids.formUnion(data.groupMembers(of: id) ?? []) }
+            if ids.count > (best?.ids.count ?? 0) { best = (ref, ids) }
+        }
+        guard let best, let data = circuitInfo(best.ref)?.data else { return }
+        circuitTarget = best.ref
+        if best.ids.count == 1, let id = best.ids.first {
+            circuitSel = data.components.contains { $0.id == id } ? .component(id) : .wire(id)
+        } else {
+            circuitSel = .items(best.ids)
+        }
+        rebuildSubBar()
+        updateCircuitChrome()
+    }
+
+    // MARK: 橡皮擦
+
+    private func handleErasePan(_ g: UIPanGestureRecognizer, _ p: CGPoint) {
+        switch g.state {
+        case .began, .changed:
+            markForErasing(to: p)
+        case .ended:
+            markForErasing(to: p)
+            commitCircuitErase()
+            returnFromCircuitEraserIfNeeded()
+        default:
+            clearCircuitErasing()
+        }
+    }
+
+    /// 從上一個位置到 p 一路找：筆動得快時兩個位置隔很遠，只看端點會漏掉中間的導線
+    private func markForErasing(to p: CGPoint) {
+        let from = circuitEraseLast ?? p
+        circuitEraseLast = p
+        let n = max(1, Int((from.distance(to: p) / (4 / canvas.zoomScale)).rounded(.up)))
+        var changed = Set<ElementRef>()
+        for i in 0...n {
+            let k = CGFloat(i) / CGFloat(n)
+            guard let hit = circuitHit(at: CGPoint(x: from.x + (p.x - from.x) * k, y: from.y + (p.y - from.y) * k)) else { continue }
+            guard let id = hit.selection.itemID else { continue }
+            // 群組一起擦
+            let ids = circuitInfo(hit.ref)?.data.groupMembers(of: id) ?? [id]
+            if !circuitErasing[hit.ref, default: []].isSuperset(of: ids) {
+                circuitErasing[hit.ref, default: []].formUnion(ids)
+                changed.insert(hit.ref)
+            }
+        }
+        for ref in changed {
+            pageViews[ref.pageID]?.setCircuitErasing(ref.elementID, circuitErasing[ref] ?? [])
+        }
+    }
+
+    /// 設定「電路圖橡皮擦擦完切回」：擦完一筆（或點一下刪掉）就回到原本的模式
+    private func returnFromCircuitEraserIfNeeded() {
+        guard settings.circuitEraserAutoReturn, circuitMode == .erase else { return }
+        selectCircuitMode(circuitModeBeforeErase)
+    }
+
+    /// 筆尖離開：真的刪掉（一次復原）
+    private func commitCircuitErase() {
+        let marks = circuitErasing
+        clearCircuitErasing()
+        guard !marks.isEmpty else { return }
+        for (ref, ids) in marks {
+            guard var data = circuitInfo(ref)?.data else { continue }
+            data.components.removeAll { ids.contains($0.id) }
+            data.wires.removeAll { ids.contains($0.id) }
+            updateCircuit(ref, data: data)
+        }
+        rebuildSubBar()
+    }
+
+    func clearCircuitErasing() {
+        let refs = circuitErasing.keys
+        circuitErasing = [:]
+        circuitEraseLast = nil
+        for ref in refs { pageViews[ref.pageID]?.setCircuitErasing(ref.elementID, []) }
     }
 
     private func handleSelectDrag(_ g: UIPanGestureRecognizer, _ p: CGPoint) {
         switch g.state {
         case .began:
-            guard case let (ref, kind)? = circuitDragTarget(at: p), let info = circuitInfo(ref),
-                  let origin = circuitOrigin(ref) else { return }
+            guard case let (ref, kind)? = circuitDragTarget(at: p),
+                  let info = circuitInfo(ref), let origin = circuitOrigin(ref) else { return }
             circuitTarget = ref
             let sel: CircuitSelection
             switch kind {
             case let .component(id), let .componentName(id), let .componentNameSize(id): sel = .component(id)
             case let .wireSegment(id, _), let .wireCorner(id, _), let .wireEnd(id, _), let .wireLabel(id), let .wireLabelSize(id): sel = .wire(id)
+            case let .items(ids): sel = .items(ids)
             }
             if circuitSel != sel {
                 circuitSel = sel
@@ -433,9 +755,15 @@ extension NotebookViewController {
             // 導線跟著接腳走
             guard let ci = data.components.firstIndex(where: { $0.id == id }) else { return nil }
             let oldPins = CircuitGeometry.pins(data.components[ci])
+            let through = oldPins.map(data.wiresThrough)
             let orig = data.components[ci].position
             data.components[ci].position = CircuitData.snap(CGPoint(x: orig.x + delta.x, y: orig.y + delta.y))
-            data.reattach(from: oldPins, to: CircuitGeometry.pins(data.components[ci]))
+            let newPins = CircuitGeometry.pins(data.components[ci])
+            data.reattach(from: oldPins, to: newPins)
+            // 和別的元件接腳直接碰在一起的：拉出一條線，不會脫開
+            data.stretchTouchingPins(from: oldPins, to: newPins, moving: [id])
+            // 接腳放到導線上：接上（共點）
+            data.connectPins(newPins, before: through)
         case let .wireSegment(id, i):
             guard let wi = data.wires.firstIndex(where: { $0.id == id }), i + 1 < data.wires[wi].points.count else { return nil }
             let pts = data.wires[wi].points
@@ -465,6 +793,10 @@ extension NotebookViewController {
         case let .componentNameSize(id):
             guard let ci = data.components.firstIndex(where: { $0.id == id }), let b = data.components[ci].nameBounds else { return nil }
             data.components[ci].nameSize = CircuitText.resized(data.components[ci].nameFont, bounds: b, drag: delta)
+        case let .items(ids):
+            let through = data.pins(of: ids).map(data.wiresThrough)
+            data.moveItems(ids, by: gridDelta)
+            data.connectPins(data.pins(of: ids), before: through)
         }
         data.wires.removeAll { $0.points.count < 2 }
         var e = d.original
@@ -610,8 +942,10 @@ extension NotebookViewController {
         circuitPartStyle[new.part] = (new.rotation, new.flipH, new.flipV)
         if new.part.hasVariableInputs { circuitGateInputs[new.part] = new.inputs }
         let oldPins = CircuitGeometry.pins(old), newPins = CircuitGeometry.pins(new)
+        var through = oldPins.map(data.wiresThrough)
         if oldPins.count == newPins.count {
             data.reattach(from: oldPins, to: newPins)
+            data.stretchTouchingPins(from: oldPins, to: newPins, moving: [id])
         } else {
             // 輸入數量改變：同名的接腳（I0、Y…）對應起來，接在上面的導線跟著走
             let oldNames = CircuitGeometry.pinNames(old), newNames = CircuitGeometry.pinNames(new)
@@ -623,21 +957,187 @@ extension NotebookViewController {
                 }
             }
             data.reattach(from: from, to: to)
+            data.stretchTouchingPins(from: from, to: to, moving: [id])
+            through = newNames.map { name in oldNames.firstIndex(of: name).map { through[$0] } ?? [] }
         }
+        // 旋轉、翻轉後接腳落在導線上：接上（共點）
+        data.connectPins(newPins, before: through)
         updateCircuit(ref, data: data)
     }
 
-    /// 長按元件、導線（或它們的名稱）：選起來，跳出刪除選項。選取、接線、放置元件時都可以
-    func presentCircuitMenu(at p: CGPoint) {
-        guard let hit = circuitHit(at: p) else { return }
-        circuitTarget = hit.ref
-        circuitSel = hit.selection
-        rebuildSubBar()
-        updateCircuitChrome()
-        let delete = UIAction(title: "刪除", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
+    /// 導線旁邊沒有按鈕：命名、刪除放在選單裡
+    private func presentWireMenu(_ ref: ElementRef, wire id: UUID, at p: CGPoint) {
+        let local = circuitLocal(p, ref)
+        let name = UIAction(title: L("導線名稱"), image: UIImage(systemName: "character.textbox")) { [weak self] _ in
+            self?.promptWireLabel(ref, wire: id, near: local)
+        }
+        let delete = UIAction(title: L("刪除"), image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
             self?.deleteCircuitSelection()
         }
-        presentMenu(UIMenu(children: [delete]), atDocPoint: p)
+        presentMenu(UIMenu(children: [name, delete]), atDocPoint: p)
+    }
+
+    // MARK: 群組
+
+    func groupCircuitSelection() {
+        guard let ref = circuitTarget, case let .items(ids)? = circuitSel, var data = circuitInfo(ref)?.data else { return }
+        data.setGroup(ids, to: UUID())
+        updateCircuit(ref, data: data)
+        rebuildSubBar()
+    }
+
+    func ungroupCircuitSelection() {
+        guard let ref = circuitTarget, case let .items(ids)? = circuitSel, var data = circuitInfo(ref)?.data else { return }
+        data.setGroup(ids, to: nil)
+        updateCircuit(ref, data: data)
+        rebuildSubBar()
+    }
+
+    /// 整組旋轉、翻轉
+    func transformCircuitSelection(_ t: CircuitItemTransform) {
+        guard let ref = circuitTarget, case let .items(ids)? = circuitSel, var data = circuitInfo(ref)?.data else { return }
+        data.transformItems(ids, t)
+        updateCircuit(ref, data: data)
+    }
+
+    // MARK: 自訂電路
+
+    /// 把選取的東西存進元件庫的「自訂電路圖」
+    func addSelectionToCustomCircuits() {
+        guard let ref = circuitTarget, let sel = circuitSel, let data = circuitInfo(ref)?.data else {
+            showToast(L("先用 Pencil 圈起要存的電路（或選一個元件）"))
+            return
+        }
+        let ids: Set<UUID>
+        if case let .items(all) = sel { ids = all } else if let id = sel.itemID { ids = [id] } else { return }
+        let a = UIAlertController(title: L("加入自訂電路圖"), message: L("例如 OTA、電流鏡"), preferredStyle: .alert)
+        a.addTextField { tf in
+            tf.placeholder = "OTA"
+            tf.clearButtonMode = .whileEditing
+        }
+        a.addAction(UIAlertAction(title: L("取消"), style: .cancel))
+        a.addAction(UIAlertAction(title: L("加入"), style: .default) { [weak self, weak a] _ in
+            self?.saveCustomCircuit(name: a?.textFields?.first?.text ?? "", data: data.extracted(ids))
+        })
+        present(a, animated: true)
+    }
+
+    /// 沒打名稱就編號
+    func saveCustomCircuit(name: String, data: CircuitData) {
+        let store = CustomCircuitStore.shared
+        let t = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let c = store.add(name: t.isEmpty ? L("自訂電路 \(store.circuits.count + 1)") : t, data: data)
+        showToast(L("已加入「\(c.name)」"))
+    }
+
+    /// 畫新的自訂元件，或改元件庫裡已經有的（頁面上已經放好的不受影響）
+    func presentSymbolEditor(editing id: UUID? = nil) {
+        let existing = id.flatMap { CustomCircuitStore.shared.circuit($0) }
+        // 新的元件：畫完按「下一步」選要放在哪個分類
+        var section: String?
+        let editor = CircuitSymbolEditorViewController(name: existing?.name ?? "", symbol: existing?.symbol) { [weak self] name, symbol in
+            self?.saveCustomSymbol(id: id, name: name, symbol: symbol, section: section)
+        }
+        if id == nil {
+            editor.asksForSection = true
+            editor.onChooseSection = { section = $0 }
+            editor.onNewSection = { CustomCircuitStore.shared.addCategory($0) }
+        }
+        let nav = UINavigationController(rootViewController: editor)
+        nav.modalPresentationStyle = .formSheet
+        nav.preferredContentSize = CGSize(width: 720, height: 820)
+        present(nav, animated: true)
+    }
+
+    /// 沒打名稱就編號
+    func saveCustomSymbol(id: UUID?, name: String, symbol: CircuitSymbol, section: String? = nil) {
+        let store = CustomCircuitStore.shared
+        let t = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let data = CustomCircuit.symbolData(symbol)
+        if let id {
+            store.update(id, name: t.isEmpty ? store.circuit(id)?.name ?? L("自訂元件") : t, data: data)
+        } else {
+            let c = store.add(name: t.isEmpty ? L("自訂元件 \(store.circuits.count + 1)") : t, data: data)
+            if let section { store.move(c.id, toSection: section) }
+            showToast(L("已加入「\(c.name)」"))
+        }
+    }
+
+    /// 長按自己加的分類選「刪除」：分類拿掉，裡面的元件回到「自訂電路圖」那一區（元件不會不見）
+    func deleteCircuitCategory(_ key: String) {
+        let store = CustomCircuitStore.shared
+        guard let category = store.categories.first(where: { $0.key == key }) else { return }
+        let moved = store.circuits.filter { $0.section == key }.count
+        store.removeCategory(key)
+        showToast(moved > 0 ? L("已刪除「\(category.name)」，裡面的 \(moved) 個元件移到「\(CircuitLibraryView.customSectionName)」")
+                            : L("已刪除「\(category.name)」"))
+    }
+
+    /// 長按自訂元件選「新增分類…」：取名字，建好就把它移過去
+    func promptNewCircuitCategory(moving id: UUID) {
+        let a = UIAlertController(title: L("新增分類…"), message: nil, preferredStyle: .alert)
+        a.addTextField { tf in
+            tf.placeholder = L("分類名稱")
+            tf.clearButtonMode = .whileEditing
+        }
+        a.addAction(UIAlertAction(title: L("取消"), style: .cancel))
+        a.addAction(UIAlertAction(title: L("加入"), style: .default) { [weak a] _ in
+            let name = (a?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { return }
+            let store = CustomCircuitStore.shared
+            store.move(id, toSection: store.addCategory(name))
+        })
+        present(a, animated: true)
+    }
+
+    func promptRenameCustomCircuit(_ id: UUID) {
+        guard let c = CustomCircuitStore.shared.circuit(id) else { return }
+        let a = UIAlertController(title: L("自訂電路名稱"), message: nil, preferredStyle: .alert)
+        a.addTextField { tf in
+            tf.text = c.name
+            tf.clearButtonMode = .whileEditing
+        }
+        a.addAction(UIAlertAction(title: L("取消"), style: .cancel))
+        a.addAction(UIAlertAction(title: L("完成"), style: .default) { [weak a] _ in
+            let t = (a?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty { CustomCircuitStore.shared.rename(id, to: t) }
+        })
+        present(a, animated: true)
+    }
+
+    /// 頁面上已經放好的不受影響
+    func deleteCustomCircuit(_ id: UUID) {
+        CustomCircuitStore.shared.remove(id)
+        if circuitMode == .placeCustom(id) { selectCircuitMode(.select) }
+    }
+
+    /// 複製選取的元件（或一整組），放在它正下方（接在格點上、不會疊在一起），並選起新的
+    func copySelectedComponent() {
+        if let ref = circuitTarget, case let .items(ids)? = circuitSel, var data = circuitInfo(ref)?.data {
+            var copy = data.subset(ids).withFreshIDs()
+            let g = CircuitData.grid
+            copy.offset(by: CGPoint(x: 0, y: ((copy.contentBounds.height + g) / g).rounded(.up) * g))
+            copy.components = autoNumbered(copy.components, in: ref)
+            data.components += copy.components
+            data.wires += copy.wires
+            circuitSel = .items(copy.itemIDs)
+            updateCircuit(ref, data: data)
+            rebuildSubBar()
+            return
+        }
+        guard let ref = circuitTarget, case let .component(id)? = circuitSel, var data = circuitInfo(ref)?.data,
+              let c = data.components.first(where: { $0.id == id }) else { return }
+        var copy = c
+        copy.id = UUID()
+        // 之後放的同種元件也照這個方向、鏡像
+        circuitPartStyle[c.part] = (c.rotation, c.flipH, c.flipV)
+        let g = CircuitData.grid
+        copy.position.y += ((CircuitGeometry.bounds(c).height + g) / g).rounded(.up) * g
+        copy = autoNumbered([copy], in: ref)[0]
+        data.components.append(copy)
+        circuitSel = .component(copy.id)
+        updateCircuit(ref, data: data)
+        rebuildSubBar()
     }
 
     func deleteCircuitSelection() {
@@ -645,6 +1145,9 @@ extension NotebookViewController {
         switch circuitSel {
         case let .component(id)?: data.components.removeAll { $0.id == id }
         case let .wire(id)?: data.wires.removeAll { $0.id == id }
+        case let .items(ids)?:
+            data.components.removeAll { ids.contains($0.id) }
+            data.wires.removeAll { ids.contains($0.id) }
         case nil: return
         }
         circuitSel = nil
@@ -654,72 +1157,45 @@ extension NotebookViewController {
 
     // MARK: 名稱
 
-    /// 點兩下導線、元件（或它們的名稱）：輸入名稱
-    func handleCircuitDoubleTap(at p: CGPoint) {
-        guard circuitMode == .select, let hit = circuitHit(at: p) else { return }
-        circuitTarget = hit.ref
-        if circuitSel != hit.selection {
-            circuitSel = hit.selection
-            rebuildSubBar()
-        }
-        updateCircuitChrome()
-        switch hit.selection {
-        case let .wire(id): promptWireLabel(hit.ref, wire: id, near: circuitLocal(p, hit.ref))
-        case let .component(id): promptComponentName(hit.ref, component: id)
-        }
-    }
-
-    /// 輸入元件名稱（例如 R1、U2）
+    /// 輸入元件名稱（例如 R1、U2）：選取中的元件再點一下（見 handleCircuitTap）、或工具列的「元件名稱」
     func promptComponentName(_ ref: ElementRef, component id: UUID) {
         guard let c = circuitInfo(ref)?.data.components.first(where: { $0.id == id }) else { return }
-        let a = UIAlertController(title: "元件名稱", message: "例如 R1、U2；留空就拿掉名稱", preferredStyle: .alert)
-        a.addTextField { tf in
-            tf.text = c.name
-            tf.placeholder = "R1"
-            tf.clearButtonMode = .whileEditing
-            tf.autocapitalizationType = .none
-            tf.autocorrectionType = .no
+        presentComponentEditor(name: c.name, value: c.value, prefix: c.valuePrefix) { [weak self] name, value, prefix in
+            self?.setComponentLabel(ref, component: id, name: name, value: value, prefix: prefix)
         }
-        a.addAction(UIAlertAction(title: "取消", style: .cancel))
-        a.addAction(UIAlertAction(title: "完成", style: .default) { [weak self, weak a] _ in
-            self?.setComponentName(ref, component: id, to: a?.textFields?.first?.text ?? "")
-        })
-        present(a, animated: true)
     }
 
-    /// 改元件名稱（空字串＝拿掉）；新名稱放在元件上方
+    /// 改元件名稱（空字串＝拿掉），數值不變
     func setComponentName(_ ref: ElementRef, component id: UUID, to text: String) {
+        guard let c = circuitInfo(ref)?.data.components.first(where: { $0.id == id }) else { return }
+        setComponentLabel(ref, component: id, name: text, value: c.value ?? "", prefix: c.valuePrefix ?? "")
+    }
+
+    /// 改元件名稱和數值（空字串＝拿掉；prefix 是單位前綴，"" ＝沒有）；新的名稱、數值放在元件上方
+    func setComponentLabel(_ ref: ElementRef, component id: UUID, name text: String, value: String, prefix: String) {
         guard var data = circuitInfo(ref)?.data, let ci = data.components.firstIndex(where: { $0.id == id }) else { return }
         let old = data.components[ci]
         let name = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if name.isEmpty {
-            data.components[ci].name = nil
+        let number = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        data.components[ci].name = name.isEmpty ? nil : name
+        data.components[ci].value = number.isEmpty ? nil : number
+        data.components[ci].valuePrefix = number.isEmpty || prefix.isEmpty ? nil : prefix
+        if name.isEmpty && number.isEmpty {
             data.components[ci].nameOffset = nil
             data.components[ci].nameSize = nil
-        } else {
-            data.components[ci].name = name
-            if old.nameOffset == nil { data.components[ci].nameOffset = CircuitComponent.defaultNameOffset(old) }
+        } else if old.nameOffset == nil {
+            data.components[ci].nameOffset = CircuitComponent.defaultNameOffset(old)
         }
         guard data.components[ci] != old else { return }
         circuitTarget = ref
         updateCircuit(ref, data: data)
     }
 
-    private func promptWireLabel(_ ref: ElementRef, wire id: UUID, near local: CGPoint) {
+    func promptWireLabel(_ ref: ElementRef, wire id: UUID, near local: CGPoint) {
         guard let w = circuitInfo(ref)?.data.wires.first(where: { $0.id == id }) else { return }
-        let a = UIAlertController(title: "導線名稱", message: "例如 Vin、CLK；留空就拿掉名稱", preferredStyle: .alert)
-        a.addTextField { tf in
-            tf.text = w.label
-            tf.placeholder = "Vout"
-            tf.clearButtonMode = .whileEditing
-            tf.autocapitalizationType = .none
-            tf.autocorrectionType = .no
+        presentCircuitNameEditor(title: L("導線名稱"), text: w.label, placeholder: "Vout", hint: L("留空就拿掉名稱")) { [weak self] text in
+            self?.setWireLabel(ref, wire: id, to: text, near: local)
         }
-        a.addAction(UIAlertAction(title: "取消", style: .cancel))
-        a.addAction(UIAlertAction(title: "完成", style: .default) { [weak self, weak a] _ in
-            self?.setWireLabel(ref, wire: id, to: a?.textFields?.first?.text ?? "", near: local)
-        })
-        present(a, animated: true)
     }
 
     /// 改導線名稱（空字串＝拿掉）；新名稱放在 near（內容座標）最近的那段旁邊
@@ -746,11 +1222,11 @@ extension NotebookViewController {
     /// 電路圖存成 SVG 分享（存到檔案、AirDrop、傳給別的 App）
     func exportCircuitSVG(_ ref: ElementRef, from source: UIView? = nil) {
         guard let info = circuitInfo(ref) else { return }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("電路圖.svg")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(L("電路圖.svg"))
         do {
             try CircuitRenderer.svg(info.data).write(to: url, atomically: true, encoding: .utf8)
         } catch {
-            showMessage("匯出失敗", error.localizedDescription)
+            showMessage(L("匯出失敗"), error.localizedDescription)
             return
         }
         let vc = UIActivityViewController(activityItems: [url], applicationActivities: nil)
@@ -764,6 +1240,48 @@ extension NotebookViewController {
         present(vc, animated: true)
     }
 
+    /// 網表（給 AI 看接線最清楚）：存成文字檔分享
+    func exportCircuitNetlist(_ ref: ElementRef, from source: UIView? = nil) {
+        guard let info = circuitInfo(ref) else { return }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(L("電路圖網表.txt"))
+        do {
+            try info.data.netlist().write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            showMessage(L("匯出失敗"), error.localizedDescription)
+            return
+        }
+        let vc = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        if let source {
+            vc.popoverPresentationController?.sourceView = source
+            vc.popoverPresentationController?.sourceRect = source.bounds
+        } else {
+            vc.popoverPresentationController?.sourceView = view
+            vc.popoverPresentationController?.sourceRect = docRectInView(docFrame(of: info.element, pageIndex: info.pi))
+        }
+        present(vc, animated: true)
+    }
+
+    /// 網表拷貝到剪貼簿：直接貼給 AI
+    func copyCircuitNetlist(_ ref: ElementRef) {
+        guard let info = circuitInfo(ref) else { return }
+        UIPasteboard.general.string = info.data.netlist()
+    }
+
+    /// 匯出的選單：SVG、網表
+    func circuitExportMenu(_ ref: ElementRef, from source: @escaping () -> UIView?) -> [UIMenuElement] {
+        [
+            UIAction(title: L("匯出 SVG"), image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
+                self?.exportCircuitSVG(ref, from: source())
+            },
+            UIAction(title: L("匯出網表（netlist）"), image: UIImage(systemName: "list.bullet.rectangle")) { [weak self] _ in
+                self?.exportCircuitNetlist(ref, from: source())
+            },
+            UIAction(title: L("拷貝網表給 AI"), image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
+                self?.copyCircuitNetlist(ref)
+            },
+        ]
+    }
+
     var selectedCircuitComponent: CircuitComponent? {
         guard let ref = circuitTarget, case let .component(id)? = circuitSel else { return nil }
         return circuitInfo(ref)?.data.components.first { $0.id == id }
@@ -772,8 +1290,9 @@ extension NotebookViewController {
     // MARK: 選取外框、接線預覽
 
     func updateCircuitChrome() {
+        updateLockChrome()
         let h = circuitPartHandleCenters()
-        overlay.showCircuitPartHandles(rotate: h?.rotate, flip: h?.flip, labelResize: labelResizePoint())
+        overlay.showCircuitPartHandles(rotate: h?.rotate, flip: h?.flip, copy: h?.copy, delete: h?.delete, labelResize: labelResizePoint())
         guard tool == .circuit, let ref = circuitTarget, let info = circuitInfo(ref) else {
             overlay.showCircuit(frame: nil, selection: nil)
             return
@@ -813,6 +1332,18 @@ extension NotebookViewController {
             }
             // 有名稱：名稱外面一圈藍框，拖曳時看得出有選到
             if let r = selectedLabelRect()?.rect { sel = UIBezierPath(roundedRect: r, cornerRadius: 3 / canvas.zoomScale) }
+        case let .items(ids)?:
+            // 一整組：外面一個框，裡面的導線亮起來
+            let sub = info.data.subset(ids)
+            let b = sub.contentBounds
+            if !b.isNull { sel = UIBezierPath(rect: b.applying(t).insetBy(dx: -4, dy: -4)) }
+            let path = UIBezierPath()
+            for w in sub.wires where w.points.count >= 2 {
+                let pts = w.points.map { $0.applying(t) }
+                path.move(to: pts[0])
+                for q in pts.dropFirst() { path.addLine(to: q) }
+            }
+            if !path.isEmpty { wirePath = path }
         case nil:
             break
         }
@@ -823,33 +1354,80 @@ extension NotebookViewController {
 
     func buildCircuitRibbon() -> [UIView] {
         circuitLibrary.currentMode = circuitMode
-        // 選取、接線（從元件庫點的元件也是一種模式：兩個都不亮）
-        var views: [UIView] = [circuitModeButton("cursorarrow", "選取", .select), circuitModeButton("line.diagonal", "接線", .wire)]
+        // 選取、接線、橡皮擦（從元件庫點的元件也是一種模式：都不亮）
+        var views: [UIView] = [circuitModeButton("cursorarrow", L("選取"), .select), circuitModeButton("line.diagonal", L("接線"), .wire),
+                               circuitModeButton("eraser", L("橡皮擦"), .erase)]
+        // 自動編號（每一頁各自編）：開著的時候亮起來
+        let numbering = makeButton(symbol: "number", title: L("自動編號"), action: nil)
+        numbering.accessibilityLabel = L("自動編號")
+        numbering.accessibilityValue = settings.circuitAutoNumber ? "1" : "0"
+        if settings.circuitAutoNumber {
+            numbering.configuration?.baseForegroundColor = .systemBlue
+            numbering.configuration?.background.backgroundColor = UIColor.systemBlue.withAlphaComponent(0.15)
+            numbering.configuration?.background.cornerRadius = 8
+        }
+        numbering.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            self.setCircuitAutoNumber(!self.settings.circuitAutoNumber)
+        }, for: .touchUpInside)
+        views.append(numbering)
+        if circuitMode == .erase {
+            // 橡皮擦：擦完一筆要不要切回原本的模式
+            let label = hintLabel(L("擦完切回"))
+            label.textColor = .label
+            let toggle = UISwitch()
+            toggle.isOn = settings.circuitEraserAutoReturn
+            toggle.accessibilityLabel = L("電路圖橡皮擦擦完切回")
+            toggle.addAction(UIAction { [weak self, weak toggle] _ in
+                self?.settings.circuitEraserAutoReturn = toggle?.isOn ?? false
+            }, for: .valueChanged)
+            views.append(label)
+            views.append(toggle)
+        }
         func action(_ symbol: String, _ label: String, _ handler: @escaping () -> Void) -> UIButton {
             let b = makeButton(symbol: symbol, title: nil, action: nil)
             b.accessibilityLabel = label
             b.addAction(UIAction { _ in handler() }, for: .touchUpInside)
             return b
         }
+        if case let .items(ids)? = circuitSel, let ref = circuitTarget, let data = circuitInfo(ref)?.data {
+            views.append(toolbarSeparator())
+            views.append(action("rotate.right", L("旋轉 90°")) { [weak self] in self?.transformCircuitSelection(.rotate) })
+            views.append(action("arrow.left.and.right.righttriangle.left.righttriangle.right", L("水平翻轉")) { [weak self] in
+                self?.transformCircuitSelection(.flipH)
+            })
+            views.append(action("arrow.up.and.down.righttriangle.up.righttriangle.down", L("垂直翻轉")) { [weak self] in
+                self?.transformCircuitSelection(.flipV)
+            })
+            views.append(toolbarSeparator())
+            let grouped = data.isOneGroup(ids)
+            let group = makeButton(symbol: grouped ? "rectangle.3.group" : "rectangle.3.group.fill", title: grouped ? L("解散群組") : L("群組"), action: nil)
+            group.accessibilityLabel = grouped ? L("解散群組") : L("群組")
+            group.addAction(UIAction { [weak self] _ in
+                if grouped { self?.ungroupCircuitSelection() } else { self?.groupCircuitSelection() }
+            }, for: .touchUpInside)
+            views.append(group)
+            views.append(customCircuitButton())
+        }
         if let c = selectedCircuitComponent {
             views.append(toolbarSeparator())
-            views.append(action("rotate.right", "旋轉 90°") { [weak self] in
+            views.append(action("rotate.right", L("旋轉 90°")) { [weak self] in
                 self?.modifySelectedComponent { $0.rotation = ($0.rotation + 90) % 360 }
             })
-            views.append(action("arrow.left.and.right.righttriangle.left.righttriangle.right", "水平翻轉") { [weak self] in
+            views.append(action("arrow.left.and.right.righttriangle.left.righttriangle.right", L("水平翻轉")) { [weak self] in
                 self?.modifySelectedComponent { $0.flipH.toggle() }
             })
-            views.append(action("arrow.up.and.down.righttriangle.up.righttriangle.down", "垂直翻轉") { [weak self] in
+            views.append(action("arrow.up.and.down.righttriangle.up.righttriangle.down", L("垂直翻轉")) { [weak self] in
                 self?.modifySelectedComponent { $0.flipV.toggle() }
             })
             if let ref = circuitTarget {
-                views.append(action("character.textbox", "元件名稱") { [weak self] in
+                views.append(action("character.textbox", L("元件名稱")) { [weak self] in
                     self?.promptComponentName(ref, component: c.id)
                 })
             }
             if c.part.hasVariableInputs {
                 let range = c.part.sizeRange
-                views.append(action("minus.circle", "減少") { [weak self] in
+                views.append(action("minus.circle", L("減少")) { [weak self] in
                     self?.modifySelectedComponent { $0.inputs = max(range.lowerBound, $0.inputs - 1) }
                     if let n = self?.selectedCircuitComponent?.inputs { self?.circuitGateInputs[c.part] = n }
                     self?.rebuildSubBar()
@@ -858,24 +1436,34 @@ extension NotebookViewController {
                 label.text = c.part.sizeLabel(c.inputs)
                 label.font = .monospacedDigitSystemFont(ofSize: 14, weight: .medium)
                 views.append(label)
-                views.append(action("plus.circle", "增加") { [weak self] in
+                views.append(action("plus.circle", L("增加")) { [weak self] in
                     self?.modifySelectedComponent { $0.inputs = min(range.upperBound, $0.inputs + 1) }
                     if let n = self?.selectedCircuitComponent?.inputs { self?.circuitGateInputs[c.part] = n }
                     self?.rebuildSubBar()
                 })
             }
+            views.append(customCircuitButton())
         }
         if let ref = circuitTarget, circuitInfo(ref) != nil {
             views.append(toolbarSeparator())
-            let b = makeButton(symbol: "square.and.arrow.up", title: "匯出 SVG", action: nil)
-            b.accessibilityLabel = "匯出 SVG"
-            b.addAction(UIAction { [weak self, weak b] _ in self?.exportCircuitSVG(ref, from: b) }, for: .touchUpInside)
+            // 匯出：SVG、網表（給 AI）
+            let b = makeButton(symbol: "square.and.arrow.up", title: L("匯出"), action: nil)
+            b.accessibilityLabel = L("匯出電路圖")
+            b.menu = UIMenu(children: circuitExportMenu(ref) { [weak b] in b })
+            b.showsMenuAsPrimaryAction = true
             views.append(b)
         }
         return views
     }
 
-    /// 第二列的「選取」「接線」：目前的模式亮起來
+    private func customCircuitButton() -> UIButton {
+        let b = makeButton(symbol: "square.and.arrow.down.on.square", title: L("自訂電路"), action: nil)
+        b.accessibilityLabel = L("加入自訂電路圖")
+        b.addAction(UIAction { [weak self] _ in self?.addSelectionToCustomCircuits() }, for: .touchUpInside)
+        return b
+    }
+
+    /// 第二列的「選取」「接線」「橡皮擦」：目前的模式亮起來
     private func circuitModeButton(_ symbol: String, _ title: String, _ mode: CircuitMode) -> UIButton {
         let b = makeButton(symbol: symbol, title: title, action: nil)
         b.accessibilityLabel = title
@@ -890,11 +1478,19 @@ extension NotebookViewController {
 
     // MARK: 元件庫
 
+    func setCircuitLibraryOnLeft(_ left: Bool) {
+        settings.circuitLibraryOnLeft = left
+        circuitLibrary.setOnLeft(left)
+    }
+
+    /// 切換模式不跳提示（按鈕會亮起來）
     func selectCircuitMode(_ mode: CircuitMode) {
+        // 記住橡皮擦之前的模式：筆身再點兩下、或擦完自動切回時回到這裡
+        if mode == .erase, circuitMode != .erase { circuitModeBeforeErase = circuitMode }
         circuitMode = mode
-        if case let .place(part) = mode {
-            circuitSel = nil
-            showToast("連續點頁面放置\(part.title)，按「選取」結束")
+        switch mode {
+        case .place, .placeCustom, .erase: circuitSel = nil
+        case .select, .wire: break
         }
         rebuildSubBar()
         updateCircuitChrome()
@@ -907,33 +1503,60 @@ extension NotebookViewController {
         placeComponent(part, at: pagesContainer.convert(p, from: view))
     }
 
-    // MARK: 元件旁的旋轉、翻轉小圓鈕
+    func dropCustomCircuit(_ id: UUID, at p: CGPoint) {
+        guard canvas.frame.contains(p), !circuitLibrary.frame.contains(p) else { return }
+        circuitMode = .select
+        placeCustomCircuit(id, at: pagesContainer.convert(p, from: view))
+    }
 
-    /// 選取元件時旋轉、水平翻轉按鈕的位置（文件座標）
-    func circuitPartHandleCenters() -> (rotate: CGPoint, flip: CGPoint, radius: CGFloat)? {
-        guard tool == .circuit, let ref = circuitTarget, let info = circuitInfo(ref),
-              case let .component(id)? = circuitSel, let c = info.data.components.first(where: { $0.id == id }) else { return nil }
+    // MARK: 元件旁的旋轉、翻轉、複製、刪除小圓鈕
+
+    /// 選取元件時旁邊按鈕的位置（文件座標）
+    func circuitPartHandleCenters() -> (rotate: CGPoint, flip: CGPoint, copy: CGPoint, delete: CGPoint, radius: CGFloat)? {
+        guard tool == .circuit, let ref = circuitTarget, let info = circuitInfo(ref) else { return nil }
+        var box: CGRect?
+        switch circuitSel {
+        case let .component(id)?:
+            box = info.data.components.first { $0.id == id }.map { CircuitGeometry.bounds($0) }
+        case let .items(ids)?:
+            let r = info.data.subset(ids).contentBounds
+            box = r.isNull ? nil : r
+        default:
+            break
+        }
+        guard let box else { return nil }
         let t = circuitTransform(ref) ?? .identity
         let s = 30 / canvas.zoomScale
-        let b = CircuitGeometry.bounds(c).applying(t)
+        let b = box.applying(t)
         var right = b.maxX
         // 名稱在按鈕那一排旁邊：按鈕移到名稱（和右下角的縮放箭頭）右邊，不會疊在一起
-        if let r = selectedLabelRect()?.rect, r.maxY + s > b.minY, r.minY < b.minY + s * 2.2 {
+        if let r = selectedLabelRect()?.rect, r.maxY + s > b.minY, r.minY < b.minY + s * 4.6 {
             right = max(right, r.maxX + s * 0.6)
         }
         let x = right + s * 0.9
-        return (CGPoint(x: x, y: b.minY + s * 0.3), CGPoint(x: x, y: b.minY + s * 1.5), s * 0.7)
+        func button(_ i: CGFloat) -> CGPoint { CGPoint(x: x, y: b.minY + s * (0.3 + 1.2 * i)) }
+        return (button(0), button(1), button(2), button(3), s * 0.7)
     }
 
-    /// 點到旋轉、翻轉按鈕就處理，回傳 true
+    /// 點到旁邊的按鈕就處理，回傳 true
     private func handleCircuitPartHandleTap(_ p: CGPoint) -> Bool {
         guard let h = circuitPartHandleCenters() else { return false }
+        var isItems = false
+        if case .items? = circuitSel { isItems = true }
         if p.distance(to: h.rotate) <= h.radius {
-            modifySelectedComponent { $0.rotation = ($0.rotation + 90) % 360 }
+            if isItems { transformCircuitSelection(.rotate) } else { modifySelectedComponent { $0.rotation = ($0.rotation + 90) % 360 } }
             return true
         }
         if p.distance(to: h.flip) <= h.radius {
-            modifySelectedComponent { $0.flipH.toggle() }
+            if isItems { transformCircuitSelection(.flipH) } else { modifySelectedComponent { $0.flipH.toggle() } }
+            return true
+        }
+        if p.distance(to: h.copy) <= h.radius {
+            copySelectedComponent()
+            return true
+        }
+        if p.distance(to: h.delete) <= h.radius {
+            deleteCircuitSelection()
             return true
         }
         return false

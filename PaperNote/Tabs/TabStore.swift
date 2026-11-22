@@ -20,6 +20,11 @@ struct TabState: Codable {
     var active: UUID?
 }
 
+extension Notification.Name {
+    /// 有筆記本要打開（object 是筆記本 id）：分頁畫面已經開著時，要切過去
+    static let notebookTabOpened = Notification.Name("notebookTabOpened")
+}
+
 final class TabStore {
     static let shared = TabStore()
 
@@ -65,6 +70,7 @@ final class TabStore {
         state.active = id
         expandGroupContaining(id)
         persist()
+        NotificationCenter.default.post(name: .notebookTabOpened, object: id)
     }
 
     func activate(_ id: UUID) {
@@ -96,7 +102,7 @@ final class TabStore {
 
     @discardableResult
     func createGroup(name: String, with tab: UUID) -> TabGroup {
-        let g = TabGroup(name: name.isEmpty ? "群組 \(state.groups.count + 1)" : name,
+        let g = TabGroup(name: name.isEmpty ? L("群組 \(state.groups.count + 1)") : name,
                          colorHex: Self.groupColors[state.groups.count % Self.groupColors.count])
         state.groups.append(g)
         move(tab, to: g.id)

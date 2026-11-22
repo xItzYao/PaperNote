@@ -27,7 +27,7 @@ final class NotebookSession {
         try data.write(to: documentURL(in: dir), options: .atomic)
     }
 
-    var title: String { LibraryStore.shared.notebook(id)?.title ?? "筆記本" }
+    var title: String { LibraryStore.shared.notebook(id)?.title ?? L("筆記本") }
     var pages: [Page] { document.pages }
 
     init(id: UUID) throws {
@@ -118,7 +118,12 @@ final class NotebookSession {
     }
 
     private func drawingURL(_ pageID: UUID) -> URL {
-        drawingsURL.appendingPathComponent("\(pageID.uuidString).drawing")
+        Self.drawingURL(pageID, in: directory)
+    }
+
+    /// 筆記本資料夾 dir 裡這一頁的 PencilKit 筆跡檔
+    static func drawingURL(_ pageID: UUID, in dir: URL) -> URL {
+        dir.appendingPathComponent("drawings", isDirectory: true).appendingPathComponent("\(pageID.uuidString).drawing")
     }
 
     // MARK: PDF

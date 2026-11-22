@@ -19,10 +19,10 @@ enum PaperStyle: String, Codable, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .blank: return "空白"
-        case .ruled: return "橫線"
-        case .grid: return "方格"
-        case .dotted: return "點格"
+        case .blank: return L("空白")
+        case .ruled: return L("橫線")
+        case .grid: return L("方格")
+        case .dotted: return L("點格")
         }
     }
 }
@@ -62,6 +62,8 @@ struct TextBoxData: Codable, Equatable {
     var fontSize: CGFloat = 18
     var colorHex: String = "#1A1A1AFF"
     var backgroundHex: String? = nil
+    /// 字體的 PostScript 名稱（見 TextFonts）；nil＝系統字體
+    var fontName: String? = nil
 }
 
 struct ImageData: Codable, Equatable {
@@ -86,11 +88,17 @@ struct PageElement: Codable, Equatable, Identifiable {
     var isTable: Bool { if case .table = content { return true }; return false }
     var isImage: Bool { if case .image = content { return true }; return false }
     var isCircuit: Bool { if case .circuit = content { return true }; return false }
+    var isTextBox: Bool { if case .text = content { return true }; return false }
 
     /// 電路圖的外框原點對齊頁面格點，不同電路圖的元件才會落在同一組格點上
     mutating func snapCircuitToGrid() {
         guard isCircuit else { return }
         frame.origin = CircuitData.snap(frame.origin)
+    }
+
+    /// 複製出來的電路圖：元件、導線、群組換新的 id（之後和原本的併在一起才不會混）
+    mutating func refreshCircuitIDs() {
+        if case let .circuit(d) = content { content = .circuit(d.withFreshIDs()) }
     }
 }
 
@@ -115,6 +123,12 @@ struct InkStroke: Codable, Equatable, Identifiable {
     var id = UUID()
     var colorHex: String
     var points: [InkPoint]
+    /// 虛線切出來的每一段都是同一個值：整筆擦除時一起拿掉；nil＝不是虛線
+    var dashGroup: UUID?
+    /// 有質感的筆（鉛筆、蠟筆、水彩）；nil＝不透明的實線
+    var style: InkStyle?
+    /// 筆跡貼紙貼上來的：同一張貼紙的筆跡是同一個值（和 PencilKit 那幾筆的亂數種子一樣），點一下整張選起來
+    var stickerSeed: UInt32? = nil
 }
 
 struct Page: Codable, Equatable, Identifiable {
@@ -163,6 +177,10 @@ struct NotebookDocument: Codable {
     var pages: [Page]
     /// 最近刪除的頁面（舊版存檔沒有這個欄位）
     var trash: [TrashedPage]? = nil
+    /// 自己加的大綱（「將該頁加入大綱」；舊版存檔沒有這個欄位）
+    var outline: [OutlineBookmark]? = nil
+    /// 貼上的筆跡貼紙：每一張的 PencilKit 筆跡共用一個亂數種子（存得下來、不會變），記在這裡才知道哪些是同一張
+    var stickerSeeds: [UInt32]? = nil
 }
 
 enum Trash {
@@ -223,7 +241,7 @@ struct NotebookMeta: Codable, Equatable, Identifiable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
-        title = try c.decodeIfPresent(String.self, forKey: .title) ?? "未命名"
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? L("未命名")
         folderId = try c.decodeIfPresent(UUID.self, forKey: .folderId)
         created = try c.decodeIfPresent(Date.self, forKey: .created) ?? Date()
         modified = try c.decodeIfPresent(Date.self, forKey: .modified) ?? Date()

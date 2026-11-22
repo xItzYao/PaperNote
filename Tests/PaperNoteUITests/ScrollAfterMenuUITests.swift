@@ -7,7 +7,7 @@ final class ScrollAfterMenuUITests: XCTestCase {
     override func setUp() {
         continueAfterFailure = false
         app = XCUIApplication()
-        app.launchArguments = ["-uiTestNotebook"]
+        app.launchArguments = ["-appLanguage", "zh-Hant", "-uiTestNotebook"]
         app.launch()
     }
 
