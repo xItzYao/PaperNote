@@ -204,6 +204,9 @@ final class ToolbarRequestsTests: XCTestCase {
         editor.updateZoomLayout()
         XCTAssertEqual(editor.inkContainer.frame, editor.pagesContainer.frame, "放大後也對齊")
         XCTAssertEqual(viewsOverInk, [], "放大後也在最上面")
+        // 先放大：捲動的位置要在頁面裡面（拉過頁尾時「新增頁面」的提示本來就在最上面）
+        editor.canvas.zoomScale = editor.fitZoom * 2
+        editor.updateZoomLayout()
         editor.canvas.setContentOffset(CGPoint(x: 20, y: 300), animated: false)
         XCTAssertEqual(viewsOverInk, [], "捲動後也在最上面")
         let late = UIView()
