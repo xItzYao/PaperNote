@@ -343,6 +343,9 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var lastEraserPoint: CGPoint?
     /// 這次擦除（筆碰到螢幕到離開）擦完的筆跡：下一下直接用，不從 PencilKit 讀回來（讀回來的遮罩是新的一份，對不上記著哪些點擦掉了）
     var eraseWorking: [PKStroke]?
+    /// 橡皮擦走過、還沒擦的點（見 eraseEvery）
+    var eraserPending: [CGPoint] = []
+    var eraserErasedAt: CFTimeInterval = 0
     /// 這一次擦除的上一步（第一次擦到東西時登記，之後併進去）
     var eraseStep: Int?
     /// 套索改顏色時的自訂顏色選擇器

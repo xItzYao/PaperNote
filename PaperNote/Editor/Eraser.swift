@@ -329,12 +329,12 @@ enum StrokeEraser {
                         let b = CGVector(dx: pts[j + 1].x - pts[j].x, dy: pts[j + 1].y - pts[j].y)
                         let cos = (a.dx * b.dx + a.dy * b.dy) / (hypot(a.dx, a.dy) * hypot(b.dx, b.dy))
                         if cos < 0.94 {  // 轉超過 20°
-                            lines.addLines(between: piece)
+                            lines.addLines(between: simplified(piece))
                             piece = [pts[j]]
                         }
                     }
                 }
-                if piece.count > 1 { lines.addLines(between: piece) }
+                if piece.count > 1 { lines.addLines(between: simplified(piece)) }
             }
             counts.outlines += 1
             return lines.copy(strokingWithWidth: 2 * r, lineCap: .round, lineJoin: .bevel, miterLimit: 1)
@@ -400,6 +400,32 @@ enum StrokeEraser {
         return m
     }
 
+    /// 中心線簡化成差不到 0.25pt 的折線（遮罩比畫出來的寬 1pt，看不出差別）：直的、緩緩彎的地方不用每 2pt 一個點，
+    /// PencilKit 收遮罩的時間跟元素數量成正比
+    static func simplified(_ pts: [CGPoint], tolerance: CGFloat = 0.25) -> [CGPoint] {
+        guard pts.count > 2 else { return pts }
+        var keep = [Bool](repeating: false, count: pts.count)
+        keep[0] = true
+        keep[pts.count - 1] = true
+        var stack = [(0, pts.count - 1)]
+        while let (a, b) = stack.popLast() {
+            guard b > a + 1 else { continue }
+            let p = pts[a], q = pts[b]
+            let dx = q.x - p.x, dy = q.y - p.y, len = hypot(dx, dy)
+            var far = a + 1, farDist: CGFloat = -1
+            for i in (a + 1)..<b {
+                let d = len < 1e-6 ? hypot(pts[i].x - p.x, pts[i].y - p.y) : abs(dx * (p.y - pts[i].y) - dy * (p.x - pts[i].x)) / len
+                if d > farDist { farDist = d; far = i }
+            }
+            if farDist > tolerance {
+                keep[far] = true
+                stack.append((a, far))
+                stack.append((far, b))
+            }
+        }
+        return pts.indices.filter { keep[$0] }.map { pts[$0] }
+    }
+
     /// 除錯紀錄用：一筆 PencilKit 筆跡的外框、遮罩、點的透明度
     static func summary(_ s: PKStroke) -> String {
         let ops = s.path.map(\.opacity)
@@ -433,22 +459,46 @@ extension NotebookViewController {
         canvas.addGestureRecognizer(eraserCapture)
     }
 
+    /// 橡皮擦每走這麼多才真的擦一次（中間經過的點一起算，一個都不漏）：擦一次的時間大多花在交給 PencilKit 新的筆跡，
+    /// 和這一下走多遠無關。iPad 每一格畫面送一次位置，慢慢擦的時候一下只走 1～2pt，每一下都擦的話，同樣的長度要多擦好幾倍
+    static let eraseEvery: CGFloat = 6
+    /// 走得很慢的時候，最久隔這麼久也擦一次（不然擦掉的地方跟不上筆）
+    static let eraseAtLeastEvery: CFTimeInterval = 1.0 / 30
+
     func eraserBegan(at p: CGPoint) {
         inkEraseUndoRegistered = []
         eraseStep = nil
         eraseWorking = nil
         lastEraserPoint = p
+        eraserPending = []
         erase(along: [p])
+        eraserErasedAt = CACurrentMediaTime()
     }
 
-    /// 擦過這幾個點：從上一個點連過來，中間經過的都算
+    /// 擦過這幾個點：從上一次擦到的點連過來，中間經過的都算
     func eraserMoved(_ points: [CGPoint]) {
         guard let last = lastEraserPoint, let end = points.last else { return }
-        erase(along: [last] + points)
+        eraserPending += points
+        let route = [last] + eraserPending
+        let travelled = zip(route, route.dropFirst()).reduce(CGFloat(0)) { $0 + hypot($1.1.x - $1.0.x, $1.1.y - $1.0.y) }
+        guard travelled >= Self.eraseEvery || CACurrentMediaTime() - eraserErasedAt >= Self.eraseAtLeastEvery else {
+            if tool == .eraser, settings.pixelEraser { overlay.showEraser(at: end, radius: eraserRadius) }
+            return
+        }
+        flushEraser()
+    }
+
+    /// 還沒擦的那一段擦掉
+    private func flushEraser() {
+        guard let last = lastEraserPoint, let end = eraserPending.last else { return }
+        erase(along: [last] + eraserPending)
         lastEraserPoint = end
+        eraserPending = []
+        eraserErasedAt = CACurrentMediaTime()
     }
 
     func eraserEnded() {
+        flushEraser()
         lastEraserPoint = nil
         eraseStep = nil
         eraseWorking = nil
