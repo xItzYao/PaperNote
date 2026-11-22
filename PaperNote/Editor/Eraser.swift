@@ -26,6 +26,18 @@ enum StrokeEraser {
         var derived = 0
         /// 花在算擦哪裡的時間（不含 PencilKit 重畫）
         var seconds: Double = 0
+        /// 其中：讀筆跡的遮罩、比對紀錄、把每一塊拼起來、建新的 PKStroke、讀回 PencilKit 存的遮罩
+        var readMask: Double = 0, compare: Double = 0, assemble: Double = 0, makeStroke: Double = 0, readBack: Double = 0
+        /// 新遮罩的元素（線段、曲線）總數
+        var elements = 0
+    }
+
+    /// 量一段花多久，加到 counts 的某一欄
+    @inline(__always)
+    private static func timed<T>(_ field: WritableKeyPath<Counts, Double>, _ body: () -> T) -> T {
+        let t = CACurrentMediaTime()
+        defer { counts[keyPath: field] += CACurrentMediaTime() - t }
+        return body()
     }
     static var counts = Counts()
 
@@ -168,7 +180,7 @@ enum StrokeEraser {
     }
 
     private static func alive(_ key: SampleKey, _ sm: Samples, mask: CGPath?) -> Alive {
-        if let a = aliveCache[key], a.mask == mask { return a }
+        if let a = aliveCache[key], timed(\.compare, { a.mask == mask }) { return a }
         let made = Alive(sm, mask: mask)
         aliveCache[key] = made
         return made
@@ -195,7 +207,7 @@ enum StrokeEraser {
             let sk = key(s)
             let sm = samples(sk, s)
             // 遮罩每次讀都是一份新的：讀一次就好
-            let mask = s.mask?.cgPath
+            let mask = timed(\.readMask) { s.mask?.cgPath }
             // 螢光筆局部擦除：哪些點擦掉了看自己的紀錄（見 Alive）；其他的看圓心在不在遮罩裡
             let highlighter = partial && NotebookViewController.isHighlighterStroke(s)
             let st = highlighter ? alive(sk, sm, mask: mask) : nil
@@ -299,16 +311,33 @@ enum StrokeEraser {
         func bands(_ rs: [[Int]]) -> CGPath {
             let lines = CGMutablePath()
             for run in rs {
-                let pts = run.map { loc[$0] }
-                if pts.count > 1, zip(pts, pts.dropFirst()).contains(where: { dist($0, $1) > 0.01 }) {
-                    lines.addLines(between: pts)
-                } else {
-                    lines.move(to: pts[0])
-                    lines.addLine(to: CGPoint(x: pts[0].x + 0.01, y: pts[0].y))
+                // 重複的點（停在原地畫的）去掉
+                var pts: [CGPoint] = []
+                for i in run where pts.last.map({ dist($0, loc[i]) > 0.01 }) ?? true { pts.append(loc[i]) }
+                guard pts.count > 1 else {
+                    lines.move(to: loc[run[0]])
+                    lines.addLine(to: CGPoint(x: loc[run[0]].x + 0.01, y: loc[run[0]].y))
+                    continue
                 }
+                // 轉角處切開（兩邊的圓頭補成圓角）；其他接縫用斜角：點之間只有 2pt，轉一點點的地方斜角和圓角差不到 0.01pt，
+                // 外形的元素少很多（圓角每個接縫都是一段曲線）
+                var piece = [pts[0]]
+                for j in 1..<pts.count {
+                    piece.append(pts[j])
+                    if j + 1 < pts.count {
+                        let a = CGVector(dx: pts[j].x - pts[j - 1].x, dy: pts[j].y - pts[j - 1].y)
+                        let b = CGVector(dx: pts[j + 1].x - pts[j].x, dy: pts[j + 1].y - pts[j].y)
+                        let cos = (a.dx * b.dx + a.dy * b.dy) / (hypot(a.dx, a.dy) * hypot(b.dx, b.dy))
+                        if cos < 0.94 {  // 轉超過 20°
+                            lines.addLines(between: piece)
+                            piece = [pts[j]]
+                        }
+                    }
+                }
+                if piece.count > 1 { lines.addLines(between: piece) }
             }
             counts.outlines += 1
-            return lines.copy(strokingWithWidth: 2 * r, lineCap: .round, lineJoin: .round, miterLimit: 1)
+            return lines.copy(strokingWithWidth: 2 * r, lineCap: .round, lineJoin: .bevel, miterLimit: 1)
         }
         let hitIdx = (0..<n).filter { hit[$0] }
         if st.known {
@@ -323,21 +352,22 @@ enum StrokeEraser {
                 if i % chunkSize == chunkSize - 1, c + 1 < st.outlines.count { st.outlines[c + 1] = nil }
             }
             let whole = CGMutablePath()
-            for (c, chunk) in sm.chunks.enumerated() {
-                if st.outlines[c] == nil {
-                    let kept = (max(0, chunk.range.lowerBound - 1)..<min(n, chunk.range.upperBound + 1)).filter { st.state[$0] == 1 }
-                    var o: CGPath = kept.isEmpty ? CGMutablePath() : bands(runs(kept))
-                    if let clip = st.clip, !kept.isEmpty, !clip.contains(chunk.box.insetBy(dx: -r, dy: -r)) {
-                        o = o.intersection(CGPath(rect: clip, transform: nil))
-                        counts.booleans += 1
-                    }
-                    st.outlines[c] = o
+            for (c, chunk) in sm.chunks.enumerated() where st.outlines[c] == nil {
+                let kept = (max(0, chunk.range.lowerBound - 1)..<min(n, chunk.range.upperBound + 1)).filter { st.state[$0] == 1 }
+                var o: CGPath = kept.isEmpty ? CGMutablePath() : bands(runs(kept))
+                if let clip = st.clip, !kept.isEmpty, !clip.contains(chunk.box.insetBy(dx: -r, dy: -r)) {
+                    o = o.intersection(CGPath(rect: clip, transform: nil))
+                    counts.booleans += 1
                 }
-                if let o = st.outlines[c] { whole.addPath(o) }
+                st.outlines[c] = o
             }
-            let m = PKStroke(ink: s.ink, path: s.path, transform: s.transform, mask: UIBezierPath(cgPath: whole), randomSeed: s.randomSeed)
+            timed(\.assemble) { for o in st.outlines { if let o { whole.addPath(o) } } }
+            whole.applyWithBlock { _ in counts.elements += 1 }
+            let m = timed(\.makeStroke) {
+                PKStroke(ink: s.ink, path: s.path, transform: s.transform, mask: UIBezierPath(cgPath: whole), randomSeed: s.randomSeed)
+            }
             // 記下 PencilKit 存起來的遮罩（它會換成自己的寫法）：下一下讀到的是這個，才對得上
-            st.mask = m.mask?.cgPath
+            st.mask = timed(\.readBack) { m.mask?.cgPath }
             return m
         }
         // 不知道每個點擦掉了沒（之前擦過、重新打開或復原）：從原本的遮罩挖掉碰到的圓，旁邊還在的圓不挖

@@ -384,6 +384,9 @@ final class HighlighterEraseTests: XCTestCase {
                                   name, speed, path.count - 1, total * 1000 * per, c.seconds * 1000 * Double(per), Double(c.booleans) * per,
                                   Double(c.outlines) * per, Double(c.inside) * per, Double(c.derived) * per, Double(c.samples) * per, worst * 1000)
                 print(line)
+                print(String(format: "BLOCKPARTS %@ %@ per100pt: readMask=%.1fms compare=%.1fms assemble=%.1fms makeStroke=%.1fms readBack=%.1fms elementsPerMove=%.0f",
+                             name, speed, c.readMask * 1000 * Double(per), c.compare * 1000 * Double(per), c.assemble * 1000 * Double(per),
+                             c.makeStroke * 1000 * Double(per), c.readBack * 1000 * Double(per), Double(c.elements) / Double(path.count - 1)))
                 XCTAssertTrue(editor.canvas.drawing.strokes.contains { $0.mask != nil }, "\(name) \(speed) 測試的前提：擦到了")
                 XCTAssertLessThan(worst, 0.05, "每移動一下不超過 50ms：\(line)")
                 XCTAssertLessThan(total * per, 0.5, "橡皮擦每走 100pt 不超過 0.5 秒：\(line)")
