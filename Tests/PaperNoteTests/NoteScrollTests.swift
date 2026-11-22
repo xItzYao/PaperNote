@@ -118,8 +118,13 @@ final class NoteScrollTests: XCTestCase {
         let page = try XCTUnwrap(newPage, "捲動時應該有新頁面進來")
         XCTAssertFalse(page.frame.intersects(editor.visibleDocRect()), "新進來的頁面應該還在畫面外")
         XCTAssertTrue(page.inkView.isBuilding, "畫面外的頁面不該在捲動那一格建筆跡")
-        spin(0.5)
-        XCTAssertFalse(page.inkView.isBuilding)
+        // 等背景畫好：CI 的模擬器剛啟動時第一次要 0.5～0.6 秒（之後 0.1～0.2 秒），不能只等固定的時間；3 秒還沒好就是壞了
+        let deadline = CACurrentMediaTime() + 3
+        while page.inkView.isBuilding || editor.pageViews.values.contains(where: { !$0.inkView.showsBitmap }),
+              CACurrentMediaTime() < deadline {
+            spin(0.02)
+        }
+        XCTAssertFalse(page.inkView.isBuilding, "3 秒內要在背景畫好")
         XCTAssertTrue(page.inkView.showsBitmap, "背景畫好之後整頁是一張圖")
         for v in editor.pageViews.values {
             XCTAssertTrue(v.inkView.showsBitmap, "捲動時每一頁的筆跡都是一張圖，不是一堆向量層")
