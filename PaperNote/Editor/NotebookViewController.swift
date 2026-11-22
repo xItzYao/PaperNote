@@ -341,6 +341,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     let eraserCapture = InkCaptureRecognizer(target: nil, action: nil)
     /// 橡皮擦上一個位置（文件座標）：和下一個點連起來，中間經過的都擦
     var lastEraserPoint: CGPoint?
+    /// 這次擦除（筆碰到螢幕到離開）擦完的筆跡：下一下直接用，不從 PencilKit 讀回來（讀回來的遮罩是新的一份，對不上記著哪些點擦掉了）
+    var eraseWorking: [PKStroke]?
     /// 這一次擦除的上一步（第一次擦到東西時登記，之後併進去）
     var eraseStep: Int?
     /// 套索改顏色時的自訂顏色選擇器

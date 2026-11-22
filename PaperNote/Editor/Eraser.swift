@@ -310,12 +310,15 @@ enum StrokeEraser {
         let after = mask.subtracting(cut)
         counts.booleans += 1
         for i in hitIdx { st.state[i] = 0 }
-        st.mask = after
         // 還有留下的點嗎：旁邊還在的點一定在；沒有的話看紀錄，不知道的再問遮罩（跳著找，找到就停）
+        st.mask = after
         let left = !near.isEmpty || st.state.contains(1)
             || Swift.stride(from: 0, to: n, by: 3).contains(where: { st.state[$0] < 0 && st.isAlive($0) })
         guard left else { return nil }
-        return PKStroke(ink: s.ink, path: s.path, transform: s.transform, mask: UIBezierPath(cgPath: after), randomSeed: s.randomSeed)
+        let m = PKStroke(ink: s.ink, path: s.path, transform: s.transform, mask: UIBezierPath(cgPath: after), randomSeed: s.randomSeed)
+        // 記下 PencilKit 存起來的遮罩（它會換成自己的寫法）：下一下讀到的是這個，才對得上
+        st.mask = m.mask?.cgPath
+        return m
     }
 
     /// 除錯紀錄用：一筆 PencilKit 筆跡的外框、遮罩、點的透明度
@@ -354,6 +357,7 @@ extension NotebookViewController {
     func eraserBegan(at p: CGPoint) {
         inkEraseUndoRegistered = []
         eraseStep = nil
+        eraseWorking = nil
         lastEraserPoint = p
         erase(along: [p])
     }
@@ -368,6 +372,7 @@ extension NotebookViewController {
     func eraserEnded() {
         lastEraserPoint = nil
         eraseStep = nil
+        eraseWorking = nil
         overlay.showEraser(at: nil, radius: 0)
         updateUITestDump()
         if tool == .eraser && settings.eraserAutoReturn {
@@ -389,13 +394,15 @@ extension NotebookViewController {
                 eraseHighlights(at: p)
                 eraseInk(at: p)
             }
-            if var strokes = StrokeEraser.erase(canvas.drawing.strokes, along: path, radius: radius, partial: settings.pixelEraser) {
+            let current = eraseWorking ?? canvas.drawing.strokes
+            if var strokes = StrokeEraser.erase(current, along: path, radius: radius, partial: settings.pixelEraser) {
                 // 整筆擦除碰到虛線的其中一段：同一條的其他段也拿掉
-                if !settings.pixelEraser { strokes = DashedStroke.removingErasedDashes(from: strokes, before: canvas.drawing.strokes) }
+                if !settings.pixelEraser { strokes = DashedStroke.removingErasedDashes(from: strokes, before: current) }
                 history.record(.init(drawing: canvas.drawing, pages: [:]))
                 var d = canvas.drawing
                 d.strokes = strokes
                 setDrawing(d)
+                eraseWorking = strokes
             }
         }
         if eraseStep == nil, history.recordCount > before { eraseStep = history.topStepID }
