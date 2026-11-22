@@ -264,6 +264,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var uiTestStrokes: UILabel?
     var uiTestLog: UILabel?
     var uiTestInk: UILabel?
+    /// UI 測試：第一頁表格在視窗裡的位置
+    var uiTestTablePoint: UILabel?
     /// PencilKit 開始書寫的時間（收尾後清掉）；下筆時還沒清掉就代表上一筆卡住了
     var pkUsingSince: CFTimeInterval?
     /// 切到橡皮擦前的模式（筆身再點兩下、或擦完自動切回時回到這裡）
@@ -453,7 +455,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             o.isAccessibilityElement = true
             view.addSubview(o)
             uiTestOffset = o
-            for (i, id) in ["pkStrokes", "debugTail", "pkInk"].enumerated() {
+            for (i, id) in ["pkStrokes", "debugTail", "pkInk", "tablePoint"].enumerated() {
                 let l = UILabel(frame: CGRect(x: 0, y: 4 + 2 * CGFloat(i), width: 2, height: 2))
                 l.accessibilityIdentifier = id
                 l.accessibilityLabel = id == "pkStrokes" ? "0" : "-"
@@ -462,7 +464,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
                 switch i {
                 case 0: uiTestStrokes = l
                 case 1: uiTestLog = l
-                default: uiTestInk = l
+                case 2: uiTestInk = l
+                default: uiTestTablePoint = l
                 }
             }
         }
@@ -949,6 +952,14 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         l.accessibilityLabel = "\(canvas.drawing.strokes.count)"
         uiTestInk?.accessibilityLabel = canvas.drawing.strokes.last?.ink.inkType.rawValue ?? "-"
         uiTestLog?.accessibilityLabel = DebugLog.text.split(separator: "\n").suffix(25).joined(separator: " / ")
+        uiTestTablePoint?.accessibilityLabel = uiTestTableSpot()
+    }
+
+    /// UI 測試要點表格：第一頁的表格現在看得到的那一塊的中心（視窗座標）。打開時頁面不一定捲在最上面
+    private func uiTestTableSpot() -> String {
+        guard didInitialLayout, let e = pages.first?.elements.first(where: \.isTable) else { return "-" }
+        let r = pagesContainer.convert(docFrame(of: e, pageIndex: 0), to: nil).intersection(view.convert(canvas.frame, to: nil))
+        return r.isEmpty ? "-" : "\(Int(r.midX)),\(Int(r.midY))"
     }
 
     /// 改變頁面尺寸、增刪頁面時：先依舊版面拆分筆跡，再依新版面組回去

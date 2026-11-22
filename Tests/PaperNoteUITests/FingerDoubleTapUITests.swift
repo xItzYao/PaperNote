@@ -10,8 +10,20 @@ final class FingerDoubleTapUITests: XCTestCase {
                                "-fingerDrawing", fingerDrawing ? "<true/>" : "<false/>"]
         app.launch()
         XCTAssertTrue(app.buttons["套索"].waitForExistence(timeout: 20), "要打開測試用的筆記本")
-        // 表格在第一頁的上面（x 60…420、y 120…264，頁寬 595）
-        app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.33)).doubleTap()
+        // 點表格真正在螢幕上的位置：捲到哪裡、螢幕多大都不一定
+        let spot = app.descendants(matching: .any)["tablePoint"]
+        var point: [Double] = []
+        let ready = Date().addingTimeInterval(10)
+        while Date() < ready {
+            let now = spot.label.split(separator: ",").compactMap { Double($0) }
+            // 版面排好、位置不再變
+            if now.count == 2, now == point { break }
+            point = now
+            RunLoop.current.run(until: Date().addingTimeInterval(0.7))
+        }
+        guard point.count == 2 else { return XCTFail("表格要在畫面上｜\(spot.label)") }
+        app.windows.firstMatch.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: point[0], dy: point[1])).doubleTap()
         let log = app.descendants(matching: .any)["debugTail"]
         let end = Date().addingTimeInterval(5)
         while Date() < end, !log.label.contains("double tap edit table") {
