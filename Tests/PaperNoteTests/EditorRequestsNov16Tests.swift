@@ -57,7 +57,8 @@ final class EditorRequestsNov16Tests: XCTestCase {
         let onA = FakeTouch(type: .direct, location: center(a)), onB = FakeTouch(type: .direct, location: center(b))
         let tap = try XCTUnwrap(editor.tapGesture), pan = try XCTUnwrap(editor.toolPan)
         XCTAssertFalse(editor.gestureRecognizer(tap, shouldReceive: onA), "沒選起來的不能用手指選")
-        XCTAssertFalse(editor.gestureRecognizer(try XCTUnwrap(editor.doubleTapGesture), shouldReceive: onA))
+        XCTAssertTrue(editor.gestureRecognizer(try XCTUnwrap(editor.doubleTapGesture), shouldReceive: onA),
+                      "11/22 改的：手指點一下不能選，但表格、電路圖點兩下可以編輯")
         XCTAssertTrue(editor.gestureRecognizer(tap, shouldReceive: FakeTouch(type: .pencil, location: center(a))), "Pencil 照樣可以選")
 
         editor.select(a)

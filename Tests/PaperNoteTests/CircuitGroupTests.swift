@@ -197,7 +197,13 @@ final class CircuitGroupTests: XCTestCase {
     func testTappingTheSelectedComponentRenamesItWhenPlacing() throws { try checkTapRenames(in: .place(.capacitor)) }
 
     func testDoubleTapGestureIsNotUsedInTheCircuitTool() {
-        XCTAssertFalse(editor.doubleTapGesture.isEnabled, "第二下已經是改名，不要再跳一次")
+        // 11/22 起手勢在每個工具都開著（手指點兩下表格、別的電路圖要能編輯），但正在編輯的電路圖不收
+        editor.circuitTarget = editor.hitElement(at: at(left))
+        XCTAssertNotNil(editor.circuitTarget)
+        for type: UITouch.TouchType in [.pencil, .direct] {
+            XCTAssertFalse(editor.gestureRecognizer(editor.doubleTapGesture, shouldReceive: FakeTouch(type: type, location: at(left))),
+                           "第二下已經是改名，不要再跳一次")
+        }
     }
 
     // MARK: 上下標
