@@ -17,8 +17,7 @@ final class AboutViewTests: XCTestCase {
 
     /// 上架：App 裡要有隱私權政策的連結
     func testPrivacyPolicyLink() {
-        XCTAssertEqual(AboutView.privacyPolicyURL.scheme, "https")
-        XCTAssertEqual(AboutView.privacyPolicyURL.lastPathComponent, "PRIVACY.md")
+        XCTAssertEqual(AboutView.privacyPolicyURL.absoluteString, "https://papernote.yaoyaoyao.in/privacy/")
     }
 
     /// 上架：隱私權清單有包進 App，用到的 required reason API 都有申報原因（沒有的話 App Store Connect 不收）
