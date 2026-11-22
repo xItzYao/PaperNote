@@ -63,3 +63,24 @@ schemes:
       # 模擬器是英文系統；測試裡比對的是中文字串
       commandLineArguments:
         "-appLanguage zh-Hant": true
+  # CI 用：各自只編自己那一包測試（快很多）
+  PaperNoteTests:
+    build:
+      targets:
+        PaperNote: all
+        PaperNoteTests: [test]
+    test:
+      targets:
+        - PaperNoteTests
+      commandLineArguments:
+        "-appLanguage zh-Hant": true
+  PaperNoteUITests:
+    build:
+      targets:
+        PaperNote: all
+        PaperNoteUITests: [test]
+    test:
+      targets:
+        - PaperNoteUITests
+      commandLineArguments:
+        "-appLanguage zh-Hant": true

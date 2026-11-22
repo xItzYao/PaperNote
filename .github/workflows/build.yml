@@ -3,39 +3,46 @@ name: Build IPA
 on:
   push:
     branches: [main, ink-engine]
+    # 只改文件、Sponsor 按鈕、網站：App 沒變，不用編、不用測
+    paths-ignore: ['**/*.md', LICENSE, .github/FUNDING.yml, 'site/**']
   workflow_dispatch:
+    inputs:
+      only:
+        description: '只跑這些測試（逗號分開，例如 PaperNoteTests/SelectInkTests），不做 IPA；空白＝全部'
+        required: false
+        type: string
+        default: ''
 
-# 同一個分支又推了新的：舊的那次不用跑完（新的那次會跑一樣的測試）
+# 同一個分支又推了新的：舊的那次不用跑完（新的那次會跑一樣的測試）。只跑幾個測試的不會打斷完整的
 concurrency:
-  group: build-${{ github.ref }}
+  group: build-${{ github.ref }}-${{ inputs.only || 'all' }}
   cancel-in-progress: true
 
+# 免費方案同時只有 5 台 macOS：完整的一輪剛好用 5 台（測試 4 台、IPA 和小檢查 1 台）
 jobs:
-  pdfkit-check:
-    runs-on: macos-15
-    timeout-minutes: 10
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
       - name: Check every UI string has an English translation
         run: python3 scripts/check_localization.py
-      - name: Check PDF text selection math
-        run: swift Tests/pdf_selection_check.swift
-      - name: Check the last character on a line
-        run: swift Tests/pdf_line_end_check.swift
-      - name: Check circuit geometry
-        run: |
-          swiftc -O PaperNote/Model/CircuitData.swift PaperNote/Util/Localization.swift Tests/CircuitCheck/main.swift -o circuit_check
-          ./circuit_check
+      - name: Decide which tests run where
+        id: plan
+        env:
+          ONLY: ${{ inputs.only }}
+        run: python3 scripts/ci_test_plan.py
 
-  # 單元測試和 UI 測試分成兩個工作同時跑
   simulator-tests:
-    name: simulator-tests (${{ matrix.bundle }})
+    needs: plan
+    name: tests (${{ matrix.name }})
     runs-on: macos-15
-    timeout-minutes: 40
+    timeout-minutes: 30
     strategy:
       fail-fast: false
-      matrix:
-        bundle: [PaperNoteTests, PaperNoteUITests]
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -44,11 +51,16 @@ jobs:
 
       - name: Install XcodeGen
         run: brew install xcodegen
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
 
       - name: Generate project
         run: xcodegen generate
 
       - name: Run tests on an iPad simulator
+        env:
+          SCHEME: ${{ matrix.scheme }}
+          TEST_ARGS: ${{ matrix.args }}
         run: |
           set -o pipefail
           # 取最新 iOS 版本裡的第一台 iPad 模擬器
@@ -69,36 +81,49 @@ jobs:
           xcrun simctl bootstatus "$UDID" -b > boot.log 2>&1 &
           BOOT=$!
           FILTER="error:|Test Case .* (passed|failed)|XCTAssert|Executed|TEST (BUILD |EXECUTE )?(SUCCEEDED|FAILED)"
+          echo "::notice::phase build $(date -u +%T)"
+          # 每個 scheme 只編自己那一包測試：跑 UI 測試不用先編五百多個單元測試
           xcodebuild build-for-testing \
             -project PaperNote.xcodeproj \
-            -scheme PaperNote \
+            -scheme "$SCHEME" \
             -destination "id=$UDID" \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            ONLY_ACTIVE_ARCH=YES \
             2>&1 | tee test.log | grep -E "$FILTER" || true
           grep -q "TEST BUILD SUCCEEDED" test.log
+          echo "::notice::phase boot $(date -u +%T)"
           wait $BOOT || true
           tail -3 boot.log
+          echo "::notice::phase test $(date -u +%T)"
+          # 失敗時不收整台模擬器的診斷資料（要好幾分鐘，我們只看 test.log）
+          # shellcheck disable=SC2086
           xcodebuild test-without-building \
             -project PaperNote.xcodeproj \
-            -scheme PaperNote \
+            -scheme "$SCHEME" \
             -destination "id=$UDID" \
             -derivedDataPath build \
-            -only-testing:${{ matrix.bundle }} \
+            -parallel-testing-enabled NO \
+            -collect-test-diagnostics never \
+            $TEST_ARGS \
             CODE_SIGNING_ALLOWED=NO \
             2>&1 | tee -a test.log | grep -E "$FILTER" || true
+          echo "::notice::phase done $(date -u +%T)"
           grep -qE "TEST (EXECUTE )?SUCCEEDED" test.log
+          # 一個都沒跑到也算失敗
+          grep -qE "Executed [1-9][0-9]* test" test.log
 
       - name: Upload test log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-log-${{ matrix.bundle }}
+          name: test-log-${{ matrix.name }}
           path: test.log
 
       # PencilKitInkStudy 畫出來的 PencilKit 筆跡（自製引擎照著調）
       - name: Upload PencilKit ink study
-        if: always() && matrix.bundle == 'PaperNoteTests'
+        if: always() && matrix.name == 'unit-1'
         uses: actions/upload-artifact@v4
         with:
           name: ink-study
@@ -106,8 +131,9 @@ jobs:
           if-no-files-found: ignore
 
   build:
+    if: ${{ !inputs.only }}
     runs-on: macos-15
-    timeout-minutes: 40
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -116,6 +142,8 @@ jobs:
 
       - name: Install XcodeGen
         run: brew install xcodegen
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
 
       - name: Generate project
         run: xcodegen generate
@@ -136,6 +164,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
+            COMPILER_INDEX_STORE_ENABLE=NO \
             build 2>&1 | tee build.log | grep -E "error:|warning: unre|BUILD (SUCCEEDED|FAILED)" || true
           grep -q "BUILD SUCCEEDED" build.log
 
@@ -157,3 +186,18 @@ jobs:
         with:
           name: PaperNote-ipa
           path: PaperNote.ipa
+
+      # 不用模擬器的小檢查：放在這台一起做，不另外佔一台 macOS
+      - name: Check PDF text selection math
+        if: ${{ !cancelled() }}
+        run: swift Tests/pdf_selection_check.swift
+
+      - name: Check the last character on a line
+        if: ${{ !cancelled() }}
+        run: swift Tests/pdf_line_end_check.swift
+
+      - name: Check circuit geometry
+        if: ${{ !cancelled() }}
+        run: |
+          swiftc -O PaperNote/Model/CircuitData.swift PaperNote/Util/Localization.swift Tests/CircuitCheck/main.swift -o circuit_check
+          ./circuit_check
