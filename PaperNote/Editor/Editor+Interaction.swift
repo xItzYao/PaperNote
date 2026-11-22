@@ -17,8 +17,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         textHandlePan.delegate = self
         canvas.addGestureRecognizer(textHandlePan)
 
-        doubleTapGesture = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
-        doubleTapGesture.numberOfTapsRequired = 2
+        doubleTapGesture = EditDoubleTapRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
         doubleTapGesture.delegate = self
         canvas.addGestureRecognizer(doubleTapGesture)
 
@@ -113,7 +112,8 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         toolPan.isEnabled = tool.usesToolPan
         // 筆／橡皮擦／套索模式下，手指點物件也能直接選取（見 shouldReceive）
         tapGesture.isEnabled = true
-        doubleTapGesture.isEnabled = tool == .select
+        // 每個工具都開著：手指點兩下表格、電路圖就編輯（收哪些觸碰見 shouldReceive）
+        doubleTapGesture.isEnabled = true
         pencilPointTracker.isEnabled = true
         holdRecognizer.isEnabled = tool.isInking && settings.shapeSnap && !customInkActive
         inkRecognizer.isEnabled = customInkActive
@@ -190,7 +190,11 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         }
         // 被動追蹤筆尖的辨識器要和 PencilKit 同時運作
         let passive: [UIGestureRecognizer?] = [holdRecognizer, pencilPointTracker]
-        return passive.contains { $0 === g || $0 === other }
+        if passive.contains(where: { $0 === g || $0 === other }) { return true }
+        // 開了「用手指書寫」：寫字、擦除在手指一碰到就開始，不同時辨識的話點兩下永遠輪不到
+        guard g === doubleTapGesture || other === doubleTapGesture else { return false }
+        let o = g === doubleTapGesture ? other : g
+        return o === inkRecognizer || o === eraserCapture || o === canvas.drawingGestureRecognizer
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRequireFailureOf other: UIGestureRecognizer) -> Bool {
@@ -241,6 +245,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             guard touch.type == .direct, let i = pageIndex(containing: p) else { return false }
             return clipboardHasContent || session.pdfPage(for: pages[i]) != nil
         }
+        if g === doubleTapGesture { return doubleTapShouldReceive(touch) }
         if g === toolPan, toolPan.numberOfTouches == 0 {
             toolPanByDrawingTouch = touch.type == .pencil || settings.fingerDrawing
         }
@@ -251,7 +256,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         // 手指（沒開「用手指書寫」）：只能拖動、點已經選起來的東西（和旁邊的控制點、按鈕），不能選新的；
         // 其他地方交給捲動、縮放頁面
         if touch.type == .direct, !settings.fingerDrawing,
-           g === tapGesture || g === toolPan || g === longPressGesture || g === doubleTapGesture {
+           g === tapGesture || g === toolPan || g === longPressGesture {
             return fingerReachesSelection(at: touch.location(in: pagesContainer))
         }
         // 截圖、PDF 文字、手繪表格、套索：沒開「用手指書寫」時只接受 Pencil，手指只用來捲動
@@ -267,6 +272,32 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             return false
         }
         return true
+    }
+
+    /// 點兩下收不收這個觸碰。手指：表格、電路圖上任何工具都收；Pencil：只有選取工具（別的工具是寫字、畫圖）
+    private func doubleTapShouldReceive(_ touch: UITouch) -> Bool {
+        let first = !doubleTapGesture.inProgress
+        if first { stepBeforeEditTap = nil }
+        guard touch.type == .direct else { return tool == .select }
+        let p = touch.location(in: pagesContainer)
+        if fingerEditTarget(at: p) != nil {
+            // 筆尖剛離開：碰到表格的是寫字的手
+            if tool != .select, CACurrentMediaTime() - lastPencilTime < 0.5 { return false }
+            if first, settings.fingerDrawing, tool != .select { stepBeforeEditTap = history.topStepID ?? 0 }
+            return true
+        }
+        return tool == .select && (settings.fingerDrawing || fingerReachesSelection(at: p))
+    }
+
+    /// 手指在 p 點兩下要編輯的表格、電路圖。正在編輯的電路圖除外（第二下是改名）；
+    /// 電路工具開了「用手指書寫」時，手指在電路圖上是放、選元件
+    func fingerEditTarget(at p: CGPoint) -> ElementRef? {
+        guard let hit = hitElement(at: p), case let (pi, ei)? = locate(hit) else { return nil }
+        let e = pages[pi].elements[ei]
+        if e.isTable { return hit }
+        guard e.isCircuit else { return nil }
+        if tool == .circuit, settings.fingerDrawing || hit == circuitTarget { return nil }
+        return hit
     }
 
     /// 手指按的地方是不是已經選起來的東西：選起來的物件（含表格的標頭、＋、控制點）、套索圈起來的範圍和縮放把手、
@@ -509,14 +540,41 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
 
     @objc func handleDoubleTap(_ g: UITapGestureRecognizer) {
         let p = g.location(in: pagesContainer)
-        guard tool == .select else { return }
+        guard let step = stepBeforeEditTap else {
+            editElement(at: p)
+            return
+        }
+        stepBeforeEditTap = nil
+        // 這時第二下還沒寫完（PencilKit 的那一筆也晚一點才送來）：等它記好，再一起收回
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self else { return }
+            self.discardEdits(after: step)
+            self.editElement(at: p)
+        }
+    }
+
+    /// 點兩下：表格打字、電路圖切到電路工具；選取工具裡還有文字框、圖片
+    private func editElement(at p: CGPoint) {
+        guard tool == .select || fingerEditTarget(at: p) != nil else { return }
         guard let hit = hitElement(at: p), case let (pi, ei)? = locate(hit) else { return }
-        select(hit)
         let e = pages[pi].elements[ei]
+        if tool != .select {
+            if e.isCircuit {
+                editCircuit(hit)
+                return
+            }
+            setTool(.select)
+        }
+        select(hit)
         switch e.content {
         case let .table(t):
             let local = p - contentOrigin(pi) - e.frame.origin
-            if let cell = t.cell(at: local) { beginTextEditing(hit, cell: cell) }
+            guard let cell = t.cell(at: local) else { return }
+            // 先結束上一格的打字：打字中不會更新選到的格子
+            endTextEditing()
+            updateCellSelection(from: p, to: p)
+            beginTextEditing(hit, cell: cell)
+            DebugLog.add("double tap edit table r\(cell.row) c\(cell.col)")
         case .text:
             beginTextEditing(hit, cell: nil)
         case .image:
@@ -533,6 +591,8 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
             return
         }
         setTool(.circuit)
+        // 從別的電路圖換過來：選著的元件是那一張的
+        if circuitTarget != ref { circuitSel = nil }
         circuitTarget = ref
         rebuildSubBar()
         updateCircuitChrome()

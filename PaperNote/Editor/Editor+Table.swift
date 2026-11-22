@@ -62,6 +62,7 @@ extension NotebookViewController {
             overlay.showCellSelection(nil)
         }
         tableCellLabel?.text = cellLabel(tableCellSel)
+        for update in tableColorBoxes { update() }
     }
 
     func columnName(_ c: Int) -> String {
@@ -92,7 +93,8 @@ extension NotebookViewController {
     /// 重複、合併、分割、手繪格線、刪除列、刪除欄｜平均分配、鎖定（點了選欄寬或列高）｜底色、字色、⊖ 字級 ⊕｜格線、⊖ 線寬 ⊕｜刪除表格。
     /// 插入列欄：點標頭（兩側的 ＋，再點一下標頭打開選單）；打字：點兩下格子；固定位置：左上角的鎖頭
     func buildTableRibbon() -> [UIView] {
-        guard let s = selectedTable() else { return [] }
+        tableColorBoxes = []
+        guard selectedTable() != nil else { return [] }
         var views: [UIView] = []
 
         let cell = UILabel()
@@ -104,22 +106,21 @@ extension NotebookViewController {
         views.append(cell)
 
         let actions = tableRibbonActions()
-        let a = tableSelectionAnchor()
         var row: [UIView] = actions.edit.map(ribbonButton)
         row.append(toolbarSeparator())
         row.append(ribbonMenuButton(L("平均分配"), symbol: "arrow.left.and.right.square") { [weak self] in self?.tableDistributeItems() ?? [] })
         row.append(ribbonMenuButton(L("鎖定"), symbol: "lock.rectangle") { [weak self] in self?.tableLockItems() ?? [] })
         row.append(toolbarSeparator())
-        row.append(ribbonColorButton(L("底色"), hex: s.table.fill(a.row, a.col), clear: L("無底色")) { [weak self] hex in
+        row.append(ribbonColorButton(L("底色"), clear: L("無底色"), current: { $0.fill($1.row, $1.col) }) { [weak self] hex in
             self?.tableAction { t, r in t.setFill(r, hex: hex) }
         })
-        row.append(ribbonColorButton(L("字色"), hex: s.table.textColor(a.row, a.col) ?? TableData.defaultTextColor, clear: nil) { [weak self] hex in
+        row.append(ribbonColorButton(L("字色"), clear: nil, current: { $0.textColor($1.row, $1.col) ?? TableData.defaultTextColor }) { [weak self] hex in
             self?.tableAction { t, r in t.setTextColor(r, hex: hex) }
         })
         row.append(ribbonStepper(L("字級"), value: \.fontSize, minus: { $0.fontSize = max($0.fontSize - 2, 8) },
                                  plus: { $0.fontSize = min($0.fontSize + 2, 48) }))
         row.append(toolbarSeparator())
-        row.append(ribbonColorButton(L("格線"), hex: s.table.lineColorHex, clear: nil) { [weak self] hex in
+        row.append(ribbonColorButton(L("格線"), clear: nil, current: { table, _ in table.lineColorHex }) { [weak self] hex in
             guard let self, let s = self.selectedTable(), let hex else { return }
             self.modifyTable(s.ref) { $0.lineColorHex = hex }
         })
@@ -162,18 +163,28 @@ extension NotebookViewController {
         return scroll
     }
 
-    /// 顏色框框＋名稱：點一下打開調色盤，選了就套用。clear：調色盤多一格「無」（回傳 nil）
-    func ribbonColorButton(_ title: String, hex: String?, clear: String?, _ pick: @escaping (String?) -> Void) -> UIButton {
+    /// 顏色框框＋名稱：點一下打開調色盤，選了就套用。clear：調色盤多一格「無」（回傳 nil）。
+    /// current：選取範圍左上那格現在的顏色。框框和調色盤都照它，不記建立工具列那一刻的顏色
+    func ribbonColorButton(_ title: String, clear: String?, current: @escaping (TableData, (row: Int, col: Int)) -> String?,
+                           _ pick: @escaping (String?) -> Void) -> UIButton {
+        let color = { [weak self] () -> String? in
+            guard let self, let s = self.selectedTable() else { return nil }
+            return current(s.table, self.tableSelectionAnchor())
+        }
+        var shown = color()
         weak var button: UIButton?
-        let a = UIAction(title: title, image: Self.colorBox(hex)) { [weak self] _ in
+        let a = UIAction(title: title, image: Self.colorBox(shown)) { [weak self] _ in
             guard let self, let b = button else { return }
-            self.presentColorPalette(title: title, selected: hex, clear: clear, from: b) { [weak b] out in
-                pick(out)
-                b?.configuration?.image = Self.colorBox(out)
-            }
+            self.presentColorPalette(title: title, selected: color(), clear: clear, from: b, pick)
         }
         let b = ribbonButton(a)
         button = b
+        tableColorBoxes.append { [weak b] in
+            let now = color()
+            guard let b, now != shown else { return }
+            shown = now
+            b.configuration?.image = Self.colorBox(now)
+        }
         return b
     }
 
@@ -400,8 +411,11 @@ extension NotebookViewController {
             canvas.drawing = rest
             isApplyingDrawing = false
         }
-        setInkHidden(ink)
-        overlay.showLassoPreview(inkPreviewImage(pk, movingInk, rect: frame), frame: frame)
+        let preview = inkPreviewImage(pk, movingInk, rect: frame)
+        showInkChangesAtOnce {
+            setInkHidden(ink)
+            overlay.showLassoPreview(preview, frame: frame)
+        }
         inkCarry = InkCarry(original: drawing, strokeIndices: indices, ink: ink, previewFrame: frame)
     }
 
@@ -413,24 +427,28 @@ extension NotebookViewController {
 
     /// 放開：字放回去並平移 d；自製筆刷的筆跡放到表格所在的第 target 頁。不另外登記復原（和表格算同一步，由呼叫端登記）
     func finishInkCarry(_ c: InkCarry, by d: CGPoint, toPage target: Int) {
-        overlay.showLassoPreview(nil, frame: .zero)
-        setInkHidden([])
-        if !c.strokeIndices.isEmpty {
-            var drawing = c.original
-            let t = CGAffineTransform(translationX: d.x, y: d.y)
-            for i in c.strokeIndices { drawing.strokes[i].transform = drawing.strokes[i].transform.concatenating(t) }
-            setDrawing(drawing)
+        showInkChangesAtOnce {
+            overlay.showLassoPreview(nil, frame: .zero)
+            setInkHidden([])
+            if !c.strokeIndices.isEmpty {
+                var drawing = c.original
+                let t = CGAffineTransform(translationX: d.x, y: d.y)
+                for i in c.strokeIndices { drawing.strokes[i].transform = drawing.strokes[i].transform.concatenating(t) }
+                setDrawing(drawing)
+            }
+            moveInk(c.ink, by: d, toPage: target)
         }
-        moveInk(c.ink, by: d, toPage: target)
     }
 
     /// 沒有移動或拖曳取消：字放回原位
     func cancelInkCarry() {
         guard let c = inkCarry else { return }
         inkCarry = nil
-        overlay.showLassoPreview(nil, frame: .zero)
-        setInkHidden([])
-        if !c.strokeIndices.isEmpty { setDrawing(c.original) }
+        showInkChangesAtOnce {
+            overlay.showLassoPreview(nil, frame: .zero)
+            setInkHidden([])
+            if !c.strokeIndices.isEmpty { setDrawing(c.original) }
+        }
     }
 
     /// 自製筆刷的筆跡平移 d，全部放到第 target 頁（原本就在那一頁的原地換掉，順序不變）

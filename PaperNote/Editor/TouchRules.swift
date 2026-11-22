@@ -11,6 +11,8 @@ import Foundation
 /// | 電路 | App 的 toolPan、點一下 | 放、選、拖元件、接線 | 捲動、縮放頁面（開了「用手指書寫」才放、選元件） |
 /// | 選取、擴展頁面 | App 的 toolPan | 拖曳物件／控制點 | 拖曳物件／控制點，空白處捲動 |
 ///
+/// 任何工具、有沒有開「用手指書寫」都一樣：手指在表格、電路圖上點兩下＝編輯（見 `fingerEditTarget`）。
+///
 /// 手掌（面積很大，或寫字時壓在螢幕上的觸碰）一律不觸發任何手勢，見 `isPalmTouch`。
 extension EditorTool {
     /// 拖曳由 App 自己的 toolPan 處理（筆、螢光筆、橡皮擦交給 PencilKit）

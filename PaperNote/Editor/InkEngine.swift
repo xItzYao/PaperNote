@@ -524,11 +524,28 @@ final class PageInkView: UIView {
         update()
     }
 
-    /// 套索移動中先藏起來的筆跡
+    /// 套索移動中先藏起來的筆跡。預覽圖在同一個畫面更新裡換上、拿掉：不能等背景畫好
     func setHidden(_ ids: Set<UUID>) {
         guard ids != hiddenIDs else { return }
         hiddenIDs = ids
-        update()
+        update(atOnce: true)
+    }
+
+    private var holding = false
+    private var changedWhileHolding = false
+
+    /// 一個動作要改好幾次（放回來、一筆一筆換位置、換頁）：中間的樣子都不畫，showChanges 時一次換成最後的樣子
+    func holdUpdates() {
+        holding = true
+        changedWhileHolding = false
+    }
+
+    /// 馬上換成最後的樣子（改再多筆也不交給背景：交給背景就要晚幾格畫面）
+    func showChanges() {
+        holding = false
+        guard changedWhileHolding else { return }
+        changedWhileHolding = false
+        update(atOnce: true)
     }
 
     private var scaleWork: DispatchWorkItem?
@@ -566,17 +583,28 @@ final class PageInkView: UIView {
 
     private var wantsBitmap: Bool { bounds.width * bounds.height * renderScale * renderScale <= Self.maxBitmapPixels }
 
-    private func update() {
+    /// atOnce：改再多筆也在這一次畫面更新裡畫好
+    private func update(atOnce: Bool = false) {
+        if holding {
+            changedWhileHolding = true
+            return
+        }
         guard bounds.width > 0, bounds.height > 0 else { return }
-        guard wantsBitmap else { showVector(); return }
+        guard wantsBitmap else { showVector(atOnce: atOnce); return }
         let visible = visibleStrokes
         // 現有的圖（解析度舊了也一樣）先跟著改，畫面不用等；改動太多就整張在背景重畫
         if let ctx = bitmap, bitmapOffset == offset, bitmapSize == bounds.size,
-           Self.applyChanges(from: bitmapContent, to: visible, in: ctx) {
+           Self.applyChanges(from: bitmapContent, to: visible, in: ctx, limit: atOnce ? .max : Self.maxPatchStrokes) {
             bitmapContent = visible
             layer.contents = ctx.makeImage()
             if bitmapScale == renderScale {
                 removeVector()
+                // 現在這張就是最新的：背景還在畫的是舊內容，畫好也不能換上
+                if isBuilding {
+                    _ = nextGeneration()
+                    isBuilding = false
+                    building = nil
+                }
                 return
             }
         }
@@ -662,10 +690,16 @@ final class PageInkView: UIView {
         }
     }
 
-    /// 換上畫好的圖；畫的期間有改過的筆跡接著補上
+    /// 換上畫好的圖；畫的期間有改過的筆跡先補上才換。補不上（改太多）就不換、照現在的重畫：
+    /// 先換上再重畫的話，畫面會先回到舊的樣子（例如剛移走的字跳回原位）
     private func adopt(_ ctx: CGContext, content: [InkStroke], scale: CGFloat, offset: CGPoint, size: CGSize) {
+        let visible = visibleStrokes
+        if content != visible, !Self.applyChanges(from: content, to: visible, in: ctx, limit: Self.maxPatchStrokes) {
+            update()
+            return
+        }
         bitmap = ctx
-        bitmapContent = content
+        bitmapContent = visible
         bitmapScale = scale
         bitmapOffset = offset
         bitmapSize = size
@@ -691,9 +725,9 @@ final class PageInkView: UIView {
 
     /// 只重畫改到的地方：只是多寫了幾筆就直接畫上去；其他改動（擦掉、改顏色、移動）清掉那一塊再重畫。
     /// 改動太多回傳 false、不畫
-    private static func applyChanges(from old: [InkStroke], to new: [InkStroke], in ctx: CGContext) -> Bool {
+    private static func applyChanges(from old: [InkStroke], to new: [InkStroke], in ctx: CGContext, limit: Int) -> Bool {
         if new.count >= old.count, new.prefix(old.count).elementsEqual(old) {
-            guard new.count - old.count <= maxPatchStrokes else { return false }
+            guard new.count - old.count <= limit else { return false }
             InkRenderer.drawBatched(Array(new.dropFirst(old.count)), in: ctx)
             return true
         }
@@ -716,7 +750,7 @@ final class PageInkView: UIView {
             dirty = dirty.union(InkGeometry.bounds(of: s))
             changed += 1
         }
-        guard changed <= maxPatchStrokes else { return false }
+        guard changed <= limit else { return false }
         guard !dirty.isNull else { return true }
         // 多留 1pt 給反鋸齒的邊
         dirty = dirty.insetBy(dx: -1, dy: -1)
@@ -735,7 +769,7 @@ final class PageInkView: UIView {
 
     private var vectorShown: Bool { !(layer.sublayers ?? []).isEmpty }
 
-    private func showVector() {
+    private func showVector(atOnce: Bool) {
         if bitmap != nil || building != nil {
             // 從點陣圖換成向量：背景還沒畫好的圖不要了
             _ = nextGeneration()
@@ -746,9 +780,13 @@ final class PageInkView: UIView {
             bitmapSize = .zero
             // 舊的圖先留著顯示，向量好了才拿掉
         }
-        // 向量還在背景算：算好會自己補上最新的筆跡
-        if isBuilding { return }
-        rebuildVector()
+        if isBuilding {
+            // 向量還在背景算：算好會自己補上最新的筆跡
+            guard atOnce else { return }
+            _ = nextGeneration()
+            isBuilding = false
+        }
+        rebuildVector(atOnce: atOnce)
     }
 
     private func removeVector() {
@@ -826,9 +864,9 @@ final class PageInkView: UIView {
 
     /// 前後疊放順序不變；只重畫內容有變的那幾層（寫一筆通常只動到最後一層）。
     /// 第一次建（剛換成向量、或剛進來的頁面）在背景算路徑
-    private func rebuildVector() {
+    private func rebuildVector(atOnce: Bool = false) {
         let visible = visibleStrokes
-        if chunks.isEmpty && !visible.isEmpty {
+        if !atOnce && chunks.isEmpty && !visible.isEmpty {
             let gen = generation
             let offset = self.offset
             isBuilding = true
@@ -838,9 +876,11 @@ final class PageInkView: UIView {
                 DispatchQueue.main.async { [weak self] in
                     guard let self, self.generation == gen else { return }
                     self.isBuilding = false
+                    // 算的期間改過的筆跡一起補上：算好的舊樣子不能自己先送上畫面
+                    CATransaction.begin()
                     self.applyVector(new, paths: paths, offset: offset)
-                    // 算的期間改過的筆跡接著補上
-                    if self.visibleStrokes != visible { self.rebuildVector() }
+                    if self.visibleStrokes != visible { self.rebuildVector(atOnce: true) }
+                    CATransaction.commit()
                 }
             }
             return

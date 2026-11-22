@@ -159,6 +159,17 @@ final class EditorRequestsNov22Tests: XCTestCase {
         XCTAssertEqual(editor.selected, ref)
     }
 
+    func testOnlyTwoShortStillTapsCloseTogetherCount() {
+        var t = FingerTaps()
+        XCTAssertTrue(t.began(at: CGPoint(x: 100, y: 100), time: 1))
+        XCTAssertTrue(t.moved(to: CGPoint(x: 104, y: 103)), "手指抖一點點還是點")
+        XCTAssertFalse(t.moved(to: CGPoint(x: 120, y: 100)), "移開了是在寫字、捲動")
+        XCTAssertTrue(t.ended(at: 1.1))
+        XCTAssertFalse(t.ended(at: 1.6), "按太久是手靠在螢幕上")
+        XCTAssertTrue(t.began(at: CGPoint(x: 112, y: 108), time: 1.3), "第二下在附近")
+        XCTAssertFalse(t.began(at: CGPoint(x: 170, y: 100), time: 1.3), "離太遠是兩個不同的點")
+    }
+
     // MARK: 2. 底色的預覽
 
     private func button(_ title: String, in v: UIView) -> UIButton? {

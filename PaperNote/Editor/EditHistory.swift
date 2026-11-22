@@ -77,6 +77,15 @@ final class EditHistory {
         undoSteps.removeAll { $0.id == id }
     }
 
+    /// id 之後記的每一步都收回、也不能重做（那些動作其實是別的操作：點兩下編輯時點出來的墨點）
+    func discard(after id: Int, apply: (State) -> Void) {
+        while let s = undoSteps.last, s.id > id {
+            undoSteps.removeLast()
+            apply(s.restore)
+        }
+        groupOpen = false
+    }
+
     func removeAll() {
         undoSteps.removeAll()
         redoSteps.removeAll()

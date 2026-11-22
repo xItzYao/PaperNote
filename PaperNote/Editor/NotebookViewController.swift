@@ -228,7 +228,10 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     // 手勢
     var toolPan: UIPanGestureRecognizer!
     var tapGesture: UITapGestureRecognizer!
-    var doubleTapGesture: UITapGestureRecognizer!
+    var doubleTapGesture: EditDoubleTapRecognizer!
+    /// 手指點兩下的第一下按下之前，最上面那一步的編號（0＝還沒有任何一步）。
+    /// 開了「用手指書寫」時這兩下也會寫出墨點、放下元件：進入編輯時回到這一步
+    var stepBeforeEditTap: Int?
     var longPressGesture: UILongPressGestureRecognizer!
     var textLongPress: UILongPressGestureRecognizer!
     /// 拖曳文字選取兩端的控制點（手指或 Pencil）
@@ -335,6 +338,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     /// 工具列的＋（插入表格的小視窗指著它）
     weak var insertButton: UIButton?
     weak var tableCellLabel: UILabel?
+    /// 表格工具列的顏色框：照現在選到的格子更新
+    var tableColorBoxes: [() -> Void] = []
 
     // 橡皮擦擦螢光標示
     /// 橡皮擦：App 自己擦（見 Eraser.swift），PencilKit 的橡皮擦不用
@@ -1062,6 +1067,11 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         }
         if let sel = selected, locate(sel) == nil { select(nil) }
         scheduleSave()
+    }
+
+    /// 收回 id 這一步之後做的
+    func discardEdits(after id: Int) {
+        history.discard(after: id, apply: restoreEditState)
     }
 
     @objc func undoTapped() {

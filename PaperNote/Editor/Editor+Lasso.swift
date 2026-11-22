@@ -350,9 +350,10 @@ extension NotebookViewController {
         let movingInk = inkStrokes(sel.ink)
         lassoMoveInk = movingInk
         lassoPreviewScale = 1
-        setInkHidden(sel.ink)
-        if let img = inkPreviewImage(lassoMoveStrokes, movingInk, rect: sel.bounds) {
-            overlay.showLassoPreview(img, frame: sel.bounds)
+        let preview = inkPreviewImage(lassoMoveStrokes, movingInk, rect: sel.bounds)
+        showInkChangesAtOnce {
+            setInkHidden(sel.ink)
+            if let preview { overlay.showLassoPreview(preview, frame: sel.bounds) }
         }
         lassoMoveElementFrames = [:]
         for ref in sel.elements {
@@ -415,11 +416,9 @@ extension NotebookViewController {
         let t = lassoDragTransform(to: p)
         lassoMoveStart = nil
         lassoScaling = false
-        overlay.showLassoPreview(nil, frame: .zero)
         // 一次復原整個移動（筆跡可能移到別頁，那一頁也要能復原）
         let inkTargets = inkStrokes(sel.ink).map { pages[inkPageIndex(for: InkGeometry.applying($0, t))].id }
         recordEdit(drawing: original, pageIDs: Array(Set(affectedPageIDs(sel) + inkTargets)))
-        setInkHidden([])
 
         var drawing = canvas.drawing
         let base = drawing.strokes.count
@@ -428,8 +427,13 @@ extension NotebookViewController {
             s.transform = s.transform.concatenating(t)
             return s
         })
-        setDrawing(drawing)
-        let movedInk = transformModel(sel, t)
+        var movedInk: [InkRef] = []
+        showInkChangesAtOnce {
+            overlay.showLassoPreview(nil, frame: .zero)
+            setInkHidden([])
+            setDrawing(drawing)
+            movedInk = transformModel(sel, t)
+        }
         lassoMoveStrokes = []
         lassoMoveInk = []
         lassoMoveOriginal = nil
@@ -516,6 +520,18 @@ extension NotebookViewController {
         for (id, v) in pageViews {
             v.inkView.setHidden(Set(refs.filter { $0.pageID == id }.map(\.id)))
         }
+    }
+
+    /// body 裡對筆跡的所有改動和預覽圖一起換：畫面不會看到中間的樣子（字回到原位、字和預覽都不見、兩份重疊）。
+    /// 外面包一層 CATransaction：body 裡自己 commit 的那幾次才不會各自先送上畫面
+    func showInkChangesAtOnce(_ body: () -> Void) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let views = pageViews.values.map(\.inkView)
+        for v in views { v.holdUpdates() }
+        body()
+        for v in views { v.showChanges() }
+        CATransaction.commit()
     }
 
     /// 移動中的預覽圖：PencilKit 筆跡和自製筆刷的筆跡畫在一起（rect 是文件座標）；沒有筆跡回傳 nil
