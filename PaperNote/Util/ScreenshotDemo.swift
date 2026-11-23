@@ -252,10 +252,10 @@ enum ScreenshotDemo {
         p.elements.append(title)
         var h = DemoHand(seed: 4, color: navy, width: 2.2)
         p.ink.append(h.line(CGPoint(x: 42, y: title.frame.maxY), CGPoint(x: 380, y: title.frame.maxY + 3)))
-        p.elements.append(PageElement(frame: CGRect(x: 40, y: 100, width: 500, height: 290), content: .circuit(activeFilter())))
+        p.elements.append(PageElement(frame: CGRect(x: 40, y: 100, width: 500, height: 320), content: .circuit(activeFilter())))
         let notes = text(t("增益：Av = −R2 / R1 = −4.7\n截止頻率：fc = 1 / (2π R2 C1) ≈ 3.4 kHz",
                            "Gain: Av = −R2 / R1 = −4.7\nCutoff: fc = 1 / (2π R2 C1) ≈ 3.4 kHz"),
-                         36, 410, w: 540, size: 21)
+                         36, 440, w: 540, size: 21)
         p.elements.append(notes)
         h.color = red
         p.ink.append(h.box(notes.frame.insetBy(dx: -4, dy: -6)))
@@ -379,7 +379,7 @@ enum ScreenshotDemo {
     }
 
     private static func activeFilter() -> CircuitData {
-        let dy: CGFloat = 30
+        let dy: CGFloat = 50
         func w(_ pts: [(CGFloat, CGFloat)], label: String? = nil, at: CGPoint? = nil) -> CircuitWire {
             wire(pts.map { ($0.0, $0.1 + dy) }, label: label, at: at.map { CGPoint(x: $0.x, y: $0.y + dy) })
         }
