@@ -213,9 +213,9 @@ enum ScreenshotDemo {
         p.elements.append(PageElement(frame: CGRect(x: 128, y: 352, width: 340, height: 200), content: .circuit(invertingAmp())))
         var h = DemoHand(seed: 2, color: red, width: 2.2)
         if let r = marks["vshort"]?.last {
-            let note = CGPoint(x: 470, y: r.midY + 34)
-            p.ink.append(contentsOf: h.arrow(CGPoint(x: r.maxX + 4, y: r.maxY + 2), CGPoint(x: note.x - 6, y: note.y - 6)))
-            p.elements.append(text("v₊ = v₋", note.x, note.y - 16, w: 120, size: 22, color: red))
+            let note = CGPoint(x: 474, y: r.midY)
+            p.ink.append(contentsOf: h.arrow(CGPoint(x: r.maxX + 6, y: r.midY + 1), CGPoint(x: note.x - 6, y: note.y)))
+            p.elements.append(text("v₊ = v₋", note.x, note.y - 17, w: 120, size: 22, color: red))
         }
         if let r = marks["gain"]?.first {
             p.ink.append(h.star(at: CGPoint(x: r.minX - 26, y: r.midY), r: 10))
@@ -379,7 +379,7 @@ enum ScreenshotDemo {
     }
 
     private static func activeFilter() -> CircuitData {
-        let dy: CGFloat = 20
+        let dy: CGFloat = 30
         func w(_ pts: [(CGFloat, CGFloat)], label: String? = nil, at: CGPoint? = nil) -> CircuitWire {
             wire(pts.map { ($0.0, $0.1 + dy) }, label: label, at: at.map { CGPoint(x: $0.x, y: $0.y + dy) })
         }
@@ -393,15 +393,15 @@ enum ScreenshotDemo {
                         c(.ground, 80, 240),
                         r1,
                         c(.opAmp, 320, 160),
-                        c(.resistor, 320, 80, name: "R2", value: "47", prefix: "K"),
-                        c(.capacitor, 320, 30, name: "C1", value: "1", prefix: "n"),
+                        c(.resistor, 320, 100, name: "R2", value: "47", prefix: "K"),
+                        c(.capacitor, 320, 20, name: "C1", value: "1", prefix: "n"),
                         c(.ground, 260, 220)]
         d.wires = [w([(80, 160), (80, 140), (150, 140)]),
                    w([(210, 140), (280, 140)]),
-                   w([(240, 140), (240, 80), (290, 80)]),
-                   w([(240, 80), (240, 30), (290, 30)]),
-                   w([(350, 80), (390, 80), (390, 160)]),
-                   w([(350, 30), (390, 30), (390, 80)]),
+                   w([(240, 140), (240, 100), (290, 100)]),
+                   w([(240, 100), (240, 20), (290, 20)]),
+                   w([(350, 100), (390, 100), (390, 160)]),
+                   w([(350, 20), (390, 20), (390, 100)]),
                    w([(360, 160), (450, 160)], label: "Vout", at: CGPoint(x: 434, y: 146)),
                    w([(280, 180), (260, 180), (260, 200)])]
         selectedPart = r1.id
