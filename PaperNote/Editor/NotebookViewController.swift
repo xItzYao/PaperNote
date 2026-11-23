@@ -438,6 +438,9 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         pinOverlay.onInsertIntoPage = { [weak self] img in self?.insertImage(img, jpeg: false, at: nil) }
         pinOverlay.notebookID = session.id
         view.addSubview(pinOverlay)
+        #if DEBUG
+        if ScreenshotDemo.isOn { scheduleScreenshotScene() }
+        #endif
 
         if ProcessInfo.processInfo.arguments.contains("-uiTestNotebook") {
             // UI 測試讀的除錯紀錄定時更新（不是每個地方記完都會更新，例如手勢沒有走完）
