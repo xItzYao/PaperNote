@@ -17,10 +17,8 @@ enum ScreenshotDemo {
     static var english: Bool { AppLanguage.current == .english }
     static func t(_ zh: String, _ en: String) -> String { english ? en : zh }
 
-    /// 主要那一本（編輯器看到是這一本才擺場景）
-    private(set) static var mainID: UUID?
-    /// 每個場景要看的頁
-    private(set) static var scenePages: [String: UUID] = [:]
+    /// 每個場景打開哪一本的哪一頁（編輯器看到是那一本才擺場景）
+    private(set) static var sceneTargets: [String: (notebook: UUID, page: UUID)] = [:]
     private(set) static var circuitRef: ElementRef?
     private(set) static var selectedPart: UUID?
     private(set) static var tableRef: ElementRef?
@@ -43,7 +41,7 @@ enum ScreenshotDemo {
         for f in store.index.folders where f.parentId == nil { store.deleteFolder(f.id) }
         TabStore.shared.prune(existing: [])
         PinStore.shared.removeAll()
-        scenePages = [:]
+        sceneTargets = [:]
 
         for name in [t("社團", "Club"), t("大一", "Freshman year"), t("大二上", "Sophomore fall")] {
             _ = store.createFolder(name: name, parent: nil)
@@ -62,11 +60,12 @@ enum ScreenshotDemo {
                                       lines: t("4.3 分部積分\n∫ x eˣ dx = x eˣ − ∫ eˣ dx\n= (x − 1) eˣ + C",
                                                "4.3 Integration by parts\n∫ x eˣ dx = x eˣ − ∫ eˣ dx\n= (x − 1) eˣ + C"))
         _ = (lab, circuits)
+        handoutNotebook(store)
         guard let main = mainNotebook(store) else { return nil }
         store.setStarred(main, true)
-        mainID = main
-        guard scene != "library", let page = scenePages[scene] ?? scenePages["notes"] else { return nil }
-        return (main, page, [calculus, exam])
+        guard scene != "library", let target = sceneTargets[scene] else { return nil }
+        let others = target.notebook == main ? [calculus, exam] : [calculus, main]
+        return (target.notebook, target.page, others)
     }
 
     private static func simpleNotebook(_ store: LibraryStore, title: String, cover: Int, paper: PaperStyle, seed: UInt64,
@@ -82,8 +81,9 @@ enum ScreenshotDemo {
         var h = DemoHand(seed: seed, color: navy, width: 2.4)
         p.ink.append(h.line(CGPoint(x: 52, y: head.frame.maxY + 2), CGPoint(x: 330, y: head.frame.maxY + 5)))
         h.color = red
-        p.ink.append(h.ellipse(CGPoint(x: 400, y: 600), rx: 90, ry: 55))
-        p.ink.append(contentsOf: h.arrow(CGPoint(x: 150, y: 680), CGPoint(x: 300, y: 610)))
+        let body = p.elements[1].frame
+        p.ink.append(h.line(CGPoint(x: 40, y: body.minY + 6), CGPoint(x: 39, y: body.maxY - 6)))
+        p.ink.append(h.star(at: CGPoint(x: 30, y: head.frame.midY), r: 9))
         s.document.pages = [p]
         s.save()
         s.writeLibraryThumbnails()
@@ -102,22 +102,40 @@ enum ScreenshotDemo {
 
         let notes = notesPage(s)
         var pdf1 = Page(background: .pdf(file: file, index: 0))
-        var pdf2 = Page(background: .pdf(file: file, index: 1))
         decoratePDF1(&pdf1, marks: handout.marks)
-        decoratePDF2(&pdf2, marks: handout.marks)
         let circuit = circuitPage()
         let table = tablePage()
         let practice = practicePage()
-        s.document.pages = [notes, pdf1, pdf2, circuit, table, practice]
+        let blank = Page(background: .paper(width: 595, height: 842, style: .grid))
+        s.document.pages = [notes, pdf1, circuit, table, practice, blank]
         s.save()
         s.writeLibraryThumbnails()
 
-        scenePages = ["notes": notes.id, "pdf": pdf1.id, "extend": pdf2.id, "circuit": circuit.id,
-                      "table": table.id, "pin": practice.id]
+        for (scene, page) in [("notes", notes), ("pdf", pdf1), ("circuit", circuit), ("table", table), ("pin", practice)] {
+            sceneTargets[scene] = (meta.id, page.id)
+        }
         pdfPageID = pdf1.id
         if let e = circuit.elements.first(where: \.isCircuit) { circuitRef = ElementRef(pageID: circuit.id, elementID: e.id) }
         if let e = table.elements.first(where: \.isTable) { tableRef = ElementRef(pageID: table.id, elementID: e.id) }
         return meta.id
+    }
+
+    /// 講義本身：第 2 頁往右擴展，寫補充
+    private static func handoutNotebook(_ store: LibraryStore) {
+        let meta = store.createNotebook(title: t("電子學講義 Ch.5", "Electronics Handout Ch.5"), folder: nil, paper: .blank,
+                                        landscape: false, coverHex: Palette.covers[3])
+        guard let s = try? NotebookSession(id: meta.id) else { return }
+        let file = "handout.pdf"
+        let handout = Handout.make()
+        try? handout.data.write(to: s.filesURL.appendingPathComponent(file), options: .atomic)
+        var pdf1 = Page(background: .pdf(file: file, index: 0))
+        var pdf2 = Page(background: .pdf(file: file, index: 1))
+        decoratePDF1(&pdf1, marks: handout.marks)
+        decoratePDF2(&pdf2, marks: handout.marks)
+        s.document.pages = [pdf1, pdf2]
+        s.save()
+        s.writeLibraryThumbnails()
+        sceneTargets["extend"] = (meta.id, pdf2.id)
     }
 
     /// 第 1 頁：RC 低通濾波器的手寫筆記
@@ -173,7 +191,7 @@ enum ScreenshotDemo {
         p.elements.append(key)
         let kw = width(of: t("重點：R 或 C 越大，fc 越低。", "Key point: larger R or C means a lower fc."), size: 21)
         s.drawings[p.id] = PKDrawing(strokes: [marker([CGPoint(x: 40, y: key.frame.midY + 2), CGPoint(x: 42 + kw + 4, y: key.frame.midY + 3)],
-                                                      color: UIColor(hex: "#FFE14DFF"), width: 20)])
+                                                      color: UIColor(hex: "#FFE14DFF").withAlphaComponent(0.5), width: 20)])
 
         let example = text(t("例：R = 1 kΩ、C = 100 nF\n→ fc = 1 / (2π × 10³ × 10⁻⁷) ≈ 1.6 kHz",
                              "e.g. R = 1 kΩ, C = 100 nF\n→ fc = 1 / (2π × 10³ × 10⁻⁷) ≈ 1.6 kHz"),
@@ -192,7 +210,7 @@ enum ScreenshotDemo {
             TextHighlight(rects: marks["gain"] ?? [], colorHex: "#B9F6CAFF"),
             TextHighlight(rects: marks["ratio"] ?? [], colorHex: "#F8BBD0FF"),
         ]
-        p.elements.append(PageElement(frame: CGRect(x: 128, y: 302, width: 340, height: 200), content: .circuit(invertingAmp())))
+        p.elements.append(PageElement(frame: CGRect(x: 128, y: 352, width: 340, height: 200), content: .circuit(invertingAmp())))
         var h = DemoHand(seed: 2, color: red, width: 2.2)
         if let r = marks["vshort"]?.last {
             let note = CGPoint(x: 470, y: r.midY + 34)
@@ -212,7 +230,7 @@ enum ScreenshotDemo {
     private static func decoratePDF2(_ p: inout Page, marks: [String: [CGRect]]) {
         p.insets.right = 260
         p.highlights = [TextHighlight(rects: marks["gain2"] ?? [], colorHex: "#FFF176FF")]
-        p.elements.append(PageElement(frame: CGRect(x: 128, y: 302, width: 340, height: 200), content: .circuit(nonInvertingAmp())))
+        p.elements.append(PageElement(frame: CGRect(x: 128, y: 352, width: 340, height: 200), content: .circuit(nonInvertingAmp())))
         var h = DemoHand(seed: 3, color: red, width: 2.2)
         let note = text(t("補充\n反相：Av = −Rf / Rin\n非反相：Av = 1 + Rf / Rin\n→ 不會反相，\n　輸入阻抗很大",
                           "Compare\nInverting: Av = −Rf / Rin\nNon-inverting:\n  Av = 1 + Rf / Rin\n→ no inversion,\n  high input impedance"),
@@ -259,14 +277,15 @@ enum ScreenshotDemo {
         p.elements.append(PageElement(frame: CGRect(x: 58, y: 110, width: tb.size.width, height: tb.size.height), content: .table(tb)))
         let notes = text(t("口訣：ELI the ICE man\nL：電壓 E 領先電流 I\nC：電流 I 領先電壓 E",
                            "ELI the ICE man\nL: voltage E leads current I\nC: current I leads voltage E"),
-                         56, 340, w: 500, size: 22)
+                         56, 400, w: 500, size: 22)
         p.elements.append(notes)
         var h = DemoHand(seed: 5, color: red, width: 2.2)
         let w = width(of: "ELI the ICE man", size: 22) + (english ? 0 : width(of: "口訣：", size: 22))
-        p.ink.append(h.line(CGPoint(x: 62, y: notes.frame.minY + 36), CGPoint(x: 66 + w, y: notes.frame.minY + 38)))
+        let lh = TextFonts.font(hand, size: 22).lineHeight
+        p.ink.append(h.line(CGPoint(x: 62, y: notes.frame.minY + 5 + lh), CGPoint(x: 66 + w, y: notes.frame.minY + 7 + lh)))
         h.color = blue
-        p.ink.append(contentsOf: h.arrow(CGPoint(x: 480, y: 270), CGPoint(x: 420, y: 238)))
-        p.elements.append(text(t("記得 j！", "don't forget j!"), 470, 270, w: 120, size: 19, color: blue))
+        p.ink.append(contentsOf: h.arrow(CGPoint(x: 322, y: 330), CGPoint(x: 330, y: 264)))
+        p.elements.append(text(t("記得 j！", "don't forget j!"), 300, 334, w: 200, size: 19, color: blue))
         return p
     }
 
@@ -369,13 +388,13 @@ enum ScreenshotDemo {
             part(kind, x, y + dy, rotation: rotation, name: name, value: value, prefix: prefix)
         }
         var d = CircuitData()
-        let c1 = c(.capacitor, 320, 30, name: "C1", value: "1", prefix: "n")
+        let r1 = c(.resistor, 180, 140, name: "R1", value: "10", prefix: "K")
         d.components = [c(.sineSource, 80, 190, rotation: 90, name: "Vin"),
                         c(.ground, 80, 240),
-                        c(.resistor, 180, 140, name: "R1", value: "10", prefix: "K"),
+                        r1,
                         c(.opAmp, 320, 160),
                         c(.resistor, 320, 80, name: "R2", value: "47", prefix: "K"),
-                        c1,
+                        c(.capacitor, 320, 30, name: "C1", value: "1", prefix: "n"),
                         c(.ground, 260, 220)]
         d.wires = [w([(80, 160), (80, 140), (150, 140)]),
                    w([(210, 140), (280, 140)]),
@@ -385,7 +404,7 @@ enum ScreenshotDemo {
                    w([(350, 30), (390, 30), (390, 80)]),
                    w([(360, 160), (450, 160)], label: "Vout", at: CGPoint(x: 434, y: 146)),
                    w([(280, 180), (260, 180), (260, 200)])]
-        selectedPart = c1.id
+        selectedPart = r1.id
         return d
     }
 
@@ -438,7 +457,7 @@ enum ScreenshotDemo {
     /// 截圖懸浮的那張：PDF 第 1 頁的圖和例題
     static func pinImage(_ session: NotebookSession) -> UIImage? {
         guard let id = pdfPageID, let page = session.document.pages.first(where: { $0.id == id }) else { return nil }
-        let crop = CGRect(x: 44, y: 292, width: 507, height: 362)
+        let crop = CGRect(x: 44, y: 340, width: 507, height: 356)
         let fmt = UIGraphicsImageRendererFormat()
         fmt.scale = 2
         fmt.opaque = true
@@ -517,14 +536,14 @@ private enum Handout {
                 run(l, x: 56, y: y, font: body)
                 y += 24
             }
-            centered(t("圖 5-3　反相放大器", "Figure 5-3  Inverting amplifier"), y: 512, font: serif(11), color: gray)
+            centered(t("圖 5-3　反相放大器", "Figure 5-3  Inverting amplifier"), y: 562, font: serif(11), color: gray)
             UIColor(white: 0.55, alpha: 1).setStroke()
-            let box = UIBezierPath(rect: CGRect(x: 56, y: 556, width: 483, height: 86))
+            let box = UIBezierPath(rect: CGRect(x: 56, y: 600, width: 483, height: 86))
             box.lineWidth = 0.8
             box.stroke()
-            run([(t("例題 5-1", "Example 5-1"), "example")], x: 70, y: 568, font: serif(14))
-            run([(t("Rin = 10 kΩ、Rf = 47 kΩ、Vin = 0.2 V，", "Rin = 10 kΩ, Rf = 47 kΩ and Vin = 0.2 V."), nil)], x: 70, y: 594, font: body)
-            run([(t("求電壓增益 Av 與輸出電壓 Vout。", "Find the voltage gain Av and the output Vout."), nil)], x: 70, y: 616, font: body)
+            run([(t("例題 5-1", "Example 5-1"), "example")], x: 70, y: 612, font: serif(14))
+            run([(t("Rin = 10 kΩ、Rf = 47 kΩ、Vin = 0.2 V，", "Rin = 10 kΩ, Rf = 47 kΩ and Vin = 0.2 V."), nil)], x: 70, y: 638, font: body)
+            run([(t("求電壓增益 Av 與輸出電壓 Vout。", "Find the voltage gain Av and the output Vout."), nil)], x: 70, y: 660, font: body)
 
             ctx.beginPage()
             header(5)
@@ -555,7 +574,7 @@ private enum Handout {
                 run(l, x: 56, y: y, font: body)
                 y += 24
             }
-            centered(t("圖 5-4　非反相放大器", "Figure 5-4  Non-inverting amplifier"), y: 512, font: serif(11), color: gray)
+            centered(t("圖 5-4　非反相放大器", "Figure 5-4  Non-inverting amplifier"), y: 562, font: serif(11), color: gray)
         }
         return (data, marks)
     }
@@ -652,7 +671,7 @@ struct DemoHand {
 
 extension NotebookViewController {
     func scheduleScreenshotScene() {
-        guard session.id == ScreenshotDemo.mainID else { return }
+        guard session.id == ScreenshotDemo.sceneTargets[ScreenshotDemo.scene]?.notebook else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.applyScreenshotScene() }
     }
 
@@ -680,14 +699,14 @@ extension NotebookViewController {
             setTool(.pen)
             if let img = ScreenshotDemo.pinImage(session) {
                 let w: CGFloat = 470
-                PinStore.shared.add(image: img, center: CGPoint(x: pinOverlay.bounds.width - w / 2 - 24, y: 470),
+                PinStore.shared.add(image: img, center: CGPoint(x: pinOverlay.bounds.width - w / 2 - 24, y: pinOverlay.bounds.height * 0.66),
                                     width: w, notebookID: session.id)
                 pinOverlay.reload()
             }
         default:
             setTool(.pen)
         }
-        if let id = demo.scenePages[demo.scene], let i = pageIndex(of: id) { scrollToPage(i, animated: false) }
+        if let id = demo.sceneTargets[demo.scene]?.page, let i = pageIndex(of: id) { scrollToPage(i, animated: false) }
         ScreenshotDemo.markReady(in: view, after: 2.0)
     }
 }
