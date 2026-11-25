@@ -52,13 +52,14 @@ struct StickerCategory: Codable, Equatable, Identifiable {
     var cover: StickerRecord? { stickers.first { $0.id == coverID } ?? stickers.first }
 }
 
+/// 貼紙資料夾裡的 categories.json
+struct StickerIndex: Codable {
+    var categories: [StickerCategory]
+    var selected: UUID?
+}
+
 final class StickerStore {
     static let shared = StickerStore()
-
-    private struct Index: Codable {
-        var categories: [StickerCategory]
-        var selected: UUID?
-    }
 
     private(set) var categories: [StickerCategory] = []
     private var selectedID: UUID?
@@ -72,9 +73,19 @@ final class StickerStore {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         self.directory = directory ?? support.appendingPathComponent("Stickers", isDirectory: true)
         try? FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
+        load()
+    }
+
+    /// 從雲端還原（合併進磁碟上的檔案）之後重新讀
+    func reload() {
+        cache.removeAllObjects()
+        load()
+    }
+
+    private func load() {
         let fm = FileManager.default
         func exists(_ s: StickerRecord) -> Bool { fm.fileExists(atPath: self.directory.appendingPathComponent(s.file).path) }
-        if let data = try? Data(contentsOf: indexURL), let saved = try? JSONDecoder().decode(Index.self, from: data) {
+        if let data = try? Data(contentsOf: indexURL), let saved = try? JSONDecoder().decode(StickerIndex.self, from: data) {
             categories = saved.categories.map { c in
                 var c = c
                 c.stickers = c.stickers.filter(exists)
@@ -90,7 +101,7 @@ final class StickerStore {
     }
 
     private func persist() {
-        if let data = try? JSONEncoder().encode(Index(categories: categories, selected: selectedID)) {
+        if let data = try? JSONEncoder().encode(StickerIndex(categories: categories, selected: selectedID)) {
             try? data.write(to: indexURL, options: .atomic)
         }
     }

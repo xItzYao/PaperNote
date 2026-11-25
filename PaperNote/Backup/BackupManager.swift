@@ -20,12 +20,16 @@ struct RestoreResult: Equatable {
 /// 兩種都只移到 Google Drive 的垃圾桶，留一個救回來的機會。
 /// PaperNoteBackup 底下由 App 管理；它本身和它外面的東西一律不動。
 final class BackupManager: ObservableObject {
-    static let shared = BackupManager(drive: DriveClient(), library: .shared)
+    static let shared = BackupManager(drive: DriveClient(), library: .shared, global: .device)
     static let rootFolderName = "PaperNoteBackup"
     private static let notebooksFolderName = "Notebooks"
     static let archiveName = "notebook.zip"
     /// 筆記本裡不打包、各自上傳的資料夾（PDF、圖片）
     private static let attachmentsFolderName = "files"
+    /// global.zip 在備份紀錄裡的 key（筆記本用 UUID，不會撞到）
+    private static let globalKey = "global"
+    /// 還原時同時下載幾本
+    static let parallelDownloads = 4
 
     @Published private(set) var isRunning = false
     @Published private(set) var status = ""
@@ -62,15 +66,17 @@ final class BackupManager: ObservableObject {
 
     private let drive: DriveAPI
     private let library: LibraryStore
+    private let global: GlobalBackup
     private var state = BackupState()
     private let stateURL: URL
     private var timer: Timer?
     private var pending: DispatchWorkItem?
     private var started = false
 
-    init(drive: DriveAPI, library: LibraryStore, stateURL: URL? = nil) {
+    init(drive: DriveAPI, library: LibraryStore, global: GlobalBackup, stateURL: URL? = nil) {
         self.drive = drive
         self.library = library
+        self.global = global
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         self.stateURL = stateURL ?? support.appendingPathComponent("backup-state.json")
@@ -216,7 +222,18 @@ final class BackupManager: ObservableObject {
                 continue
             }
             let rel = "\(Self.notebooksFolderName)/\(key)/\(Self.archiveName)"
-            changed.append(Pending(url: url, rel: rel, md5: md5, kind: .archive(notebook: key, fingerprint: a.fingerprint)))
+            changed.append(Pending(url: url, rel: rel, md5: md5, kind: .archive(key: key, fingerprint: a.fingerprint)))
+        }
+        // 貼紙、元件庫、筆刷設定：PaperNoteBackup/global.zip
+        if let g = try global.contents(work: work), state.archives?[Self.globalKey]?.fingerprint != g.fingerprint {
+            let url = work.appendingPathComponent(GlobalBackup.fileName)
+            try Self.pack(g.files).write(to: url)
+            let md5 = try Self.md5(of: url)
+            if let rec = state.archives?[Self.globalKey], rec.md5 == md5 {
+                setArchive(Self.globalKey, ArchiveRecord(id: rec.id, fingerprint: g.fingerprint, md5: md5))
+            } else {
+                changed.append(Pending(url: url, rel: GlobalBackup.fileName, md5: md5, kind: .archive(key: Self.globalKey, fingerprint: g.fingerprint)))
+            }
         }
 
         var uploaded = 0
@@ -237,8 +254,8 @@ final class BackupManager: ObservableObject {
             switch f.kind {
             case let .file(size, mtime):
                 state.files[f.rel] = FileRecord(id: id, size: size, mtime: mtime, md5: f.md5)
-            case let .archive(notebook, fingerprint):
-                setArchive(notebook, ArchiveRecord(id: id, fingerprint: fingerprint, md5: f.md5 ?? ""))
+            case let .archive(key, fingerprint):
+                setArchive(key, ArchiveRecord(id: id, fingerprint: fingerprint, md5: f.md5 ?? ""))
             }
             if (i + 1) % 10 == 0 { saveState() }
         }
@@ -257,7 +274,7 @@ final class BackupManager: ObservableObject {
     private struct Pending {
         enum Kind {
             case file(size: Int, mtime: Double)
-            case archive(notebook: String, fingerprint: String)
+            case archive(key: String, fingerprint: String)
         }
         let url: URL
         let rel: String
@@ -494,26 +511,62 @@ final class BackupManager: ObservableObject {
         // 已經放進 Notebooks 的筆記本一定要有名稱和位置，不然重開 App 會被當成遺失的「復原的筆記本」
         let folders = manifest.folders.compactMap { $0.status == .deleted || purgedFolders.contains($0.id) ? nil : $0.folder }
         await MainActor.run { self.library.mergeRestored(folders: folders, notebooks: []) }
+        try await restoreGlobal(in: root)
         let fm = FileManager.default
-        var restored: [NotebookMeta] = []
-        for (i, f) in remoteNotebooks.enumerated() {
-            guard let id = UUID(uuidString: f.name), !purged.contains(id), entries[id]?.status != .deleted else { continue }
-            let dest = library.notebookURL(id)
-            if fm.fileExists(atPath: dest.path) { continue }
-            await setStatus(L("下載筆記本…（\(i + 1)/\(remoteNotebooks.count)）"))
-            // 先下載到暫存：中途失敗不會留下半本筆記本
-            let tmp = fm.temporaryDirectory.appendingPathComponent("restore-\(UUID().uuidString)", isDirectory: true)
-            defer { try? fm.removeItem(at: tmp) }
-            try await downloadNotebook(f.id, to: tmp)
-            guard let data = try? Data(contentsOf: NotebookSession.documentURL(in: tmp)),
-                  let doc = try? JSONDecoder.app.decode(NotebookDocument.self, from: data) else { continue }
-            let meta = Self.restoredMeta(id: id, entry: entries[id], document: doc)
-            try await MainActor.run {
-                try FileManager.default.moveItem(at: tmp, to: dest)
-                self.library.mergeRestored(folders: [], notebooks: [meta])
-            }
-            restored.append(meta)
+        let todo = remoteNotebooks.compactMap { f -> (id: UUID, folder: String)? in
+            guard let id = UUID(uuidString: f.name), !purged.contains(id), entries[id]?.status != .deleted,
+                  !fm.fileExists(atPath: library.notebookURL(id).path) else { return nil }
+            return (id, f.id)
         }
+        // 同時下載幾本：一次只抓一個檔案時，等待和單一連線的速度才是瓶頸。
+        // 一本失敗不影響其他本，全部跑完再回報第一個錯誤（再按一次還原會補下載失敗的）
+        var restored: [NotebookMeta] = []
+        var firstError: Error?
+        var next = 0, finished = 0
+        await setStatus(L("下載筆記本…（\(0)/\(todo.count)）"))
+        let fetch = { (item: (id: UUID, folder: String)) async -> Result<(UUID, URL), Error> in
+            do {
+                return .success((item.id, try await self.fetchNotebook(item.folder)))
+            } catch {
+                return .failure(error)
+            }
+        }
+        await withTaskGroup(of: Result<(UUID, URL), Error>.self) { group in
+            while next < min(Self.parallelDownloads, todo.count) {
+                let item = todo[next]
+                next += 1
+                group.addTask { await fetch(item) }
+            }
+            while let result = await group.next() {
+                finished += 1
+                await setStatus(L("下載筆記本…（\(finished)/\(todo.count)）"))
+                switch result {
+                case let .success((id, tmp)):
+                    defer { try? fm.removeItem(at: tmp) }
+                    // 讀不出來的（不是筆記本）跳過，不算錯誤
+                    guard let data = try? Data(contentsOf: NotebookSession.documentURL(in: tmp)),
+                          let doc = try? JSONDecoder.app.decode(NotebookDocument.self, from: data) else { break }
+                    let meta = Self.restoredMeta(id: id, entry: entries[id], document: doc)
+                    do {
+                        try await MainActor.run {
+                            try FileManager.default.moveItem(at: tmp, to: self.library.notebookURL(id))
+                            self.library.mergeRestored(folders: [], notebooks: [meta])
+                        }
+                        restored.append(meta)
+                    } catch {
+                        firstError = firstError ?? error
+                    }
+                case let .failure(error):
+                    firstError = firstError ?? error
+                }
+                if next < todo.count {
+                    let item = todo[next]
+                    next += 1
+                    group.addTask { await fetch(item) }
+                }
+            }
+        }
+        if let firstError { throw firstError }
         let result = await MainActor.run { () -> RestoreResult in
             let kept = restored.compactMap { self.library.notebook($0.id) }
             let result = RestoreResult(notebooks: kept.count, trashed: kept.filter(self.library.isHidden).count)
@@ -534,6 +587,34 @@ final class BackupManager: ObservableObject {
         }
         meta.deletedAt = entry.status == .trashed ? (meta.deletedAt ?? Date()) : nil
         return meta
+    }
+
+    /// 下載一本到暫存資料夾（完整了才搬進 App，中途失敗不會留下半本）；失敗會清掉暫存
+    private func fetchNotebook(_ folderID: String) async throws -> URL {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("restore-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try await downloadNotebook(folderID, to: tmp)
+            return tmp
+        } catch {
+            try? FileManager.default.removeItem(at: tmp)
+            throw error
+        }
+    }
+
+    /// 貼紙、元件庫、筆刷設定：合併進這台，不蓋掉已經有的。舊版的備份沒有 global.zip
+    private func restoreGlobal(in root: String) async throws {
+        guard let file = try await drive.findFile(named: GlobalBackup.fileName, in: root) else { return }
+        await setStatus(L("下載貼紙與元件庫…"))
+        let fm = FileManager.default
+        let tmp = fm.temporaryDirectory.appendingPathComponent("global-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: tmp) }
+        let zipURL = tmp.appendingPathComponent(GlobalBackup.fileName)
+        try await drive.download(file.id, to: zipURL)
+        let dir = tmp.appendingPathComponent("contents", isDirectory: true)
+        try Self.unpack(zipURL, into: dir)
+        let global = self.global
+        try await MainActor.run { try global.merge(from: dir) }
     }
 
     /// notebook.zip 解開、files/ 的附件照檔案下載。有 notebook.zip 時旁邊的散檔是更新前留下的，不下載；

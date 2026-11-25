@@ -1,10 +1,13 @@
 import XCTest
+import UIKit
 import CryptoKit
 @testable import PaperNote
 
 /// 假的 Google Drive。行為照 drive.file：App 只看得到自己建立的檔案；
 /// 資料夾移到垃圾桶會連裡面看不到的檔案一起移（和真的 Drive 一樣）。
-/// 動到 App 不該動的東西就記在 violations
+/// 動到 App 不該動的東西就記在 violations。
+/// 在主執行緒上跑：還原會同時下載好幾本，資料不會互相踩到
+@MainActor
 private final class FakeDrive: DriveAPI {
     final class Item {
         let id: String
@@ -38,6 +41,9 @@ private final class FakeDrive: DriveAPI {
     var lookups: [String] = []
     /// 下載過的檔案名稱
     var downloads: [String] = []
+    /// 同時在下載的最多幾個
+    private(set) var maxConcurrentDownloads = 0
+    private var activeDownloads = 0
     private var next = 0
 
     private func newID() -> String {
@@ -112,6 +118,11 @@ private final class FakeDrive: DriveAPI {
         guard let item = items[fileID] else { throw BackupError.http(404, "") }
         if !item.appCreated { violations.append("讀了使用者的 \(item.name)") }
         downloads.append(item.name)
+        // 下載要花一點時間：讓同時進行的其他下載有機會開始
+        activeDownloads += 1
+        maxConcurrentDownloads = max(maxConcurrentDownloads, activeDownloads)
+        for _ in 0..<5 { await Task.yield() }
+        activeDownloads -= 1
         try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         try item.data.write(to: destination)
     }
@@ -180,6 +191,9 @@ private final class FakeDrive: DriveAPI {
 private final class Device {
     let dir: URL
     let store: LibraryStore
+    /// 這台的貼紙、元件庫、筆刷設定（不碰測試機真的資料）
+    let global: GlobalBackup
+    private let suite: String
     let backup: BackupManager
 
     init(drive: DriveAPI) throws {
@@ -187,11 +201,18 @@ private final class Device {
         let docs = dir.appendingPathComponent("Documents", isDirectory: true)
         try FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
         store = LibraryStore(documentsURL: docs)
-        backup = BackupManager(drive: drive, library: store, stateURL: dir.appendingPathComponent("state.json"))
+        suite = "BackupTests-\(UUID().uuidString)"
+        global = GlobalBackup(support: dir.appendingPathComponent("Support", isDirectory: true), defaults: UserDefaults(suiteName: suite)!)
+        backup = BackupManager(drive: drive, library: store, global: global, stateURL: dir.appendingPathComponent("state.json"))
     }
+
+    var defaults: UserDefaults { global.defaults }
+    var stickersURL: URL { global.support.appendingPathComponent("Stickers", isDirectory: true) }
+    var pinsURL: URL { global.support.appendingPathComponent("Pins", isDirectory: true) }
 
     func cleanUp() {
         try? FileManager.default.removeItem(at: dir)
+        UserDefaults().removePersistentDomain(forName: suite)
     }
 }
 
@@ -264,7 +285,136 @@ final class BackupTests: XCTestCase {
         drive.items[item.id] = nil
     }
 
+    // MARK: 回報的問題：貼紙、元件庫不在備份裡
+
+    /// a 的貼紙、貼圖、自訂電路、筆刷設定放進雲端
+    private func makeGlobalData(on a: Device) throws {
+        let stickers = StickerStore(directory: a.stickersURL)
+        let category = stickers.addCategory(named: "電路符號")
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 4, height: 4)).image { ctx in
+            UIColor.red.setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: 4, height: 4))
+        }
+        XCTAssertNotNil(stickers.add(image, to: category.id))
+        try FileManager.default.createDirectory(at: a.pinsURL, withIntermediateDirectories: true)
+        try Data("截圖".utf8).write(to: a.pinsURL.appendingPathComponent("pin-a.png"))
+        try JSONEncoder().encode([PinRecord(file: "pin-a.png", center: .zero, width: 100)])
+            .write(to: a.pinsURL.appendingPathComponent("pins.json"))
+        a.defaults.set(try JSONEncoder().encode([CustomCircuit(name: "OTA", data: CircuitData())]), forKey: "customCircuits")
+        a.defaults.set(try JSONEncoder().encode([CustomCircuitCategory(key: "user.a", name: "類比")]), forKey: "customCircuitCategories")
+        a.defaults.set(["#123456FF"], forKey: "favoriteColors")
+        a.defaults.set([1.0, 2.0, 3.0], forKey: "styleWidths.monoline")
+        a.defaults.set(true, forKey: "不相關的設定")
+    }
+
+    private func circuits(_ d: Device) throws -> [CustomCircuit] {
+        try JSONDecoder().decode([CustomCircuit].self, from: XCTUnwrap(d.defaults.data(forKey: "customCircuits")))
+    }
+
+    /// 換一台 iPad：貼紙、貼圖、自訂電路回來；這台已經有的不被蓋掉，筆刷設定這台沒設過才用雲端的
+    func testStickersAndComponentsComeBackOnAnotherIPad() async throws {
+        let a = try device()
+        try makeGlobalData(on: a)
+        _ = notebook("筆記", on: a)
+        _ = try await a.backup.syncWithRetry()
+        let root = try XCTUnwrap(drive.folder(path: [BackupManager.rootFolderName]))
+        XCTAssertEqual(drive.count(named: "global.zip", in: root.id), 1)
+
+        let b = try device()
+        let mine = StickerStore(directory: b.stickersURL)
+        _ = mine.addCategory(named: "b 的分類")
+        b.defaults.set(try JSONEncoder().encode([CustomCircuit(name: "b 的電路", data: CircuitData())]), forKey: "customCircuits")
+        b.defaults.set(["#ABCDEFFF"], forKey: "favoriteColors")
+        for _ in 0..<2 { _ = try await b.backup.restore() }
+
+        let stickers = StickerStore(directory: b.stickersURL)
+        XCTAssertEqual(stickers.categories.map(\.name), ["b 的分類", "電路符號"], "還原兩次也不會重複")
+        let sticker = try XCTUnwrap(stickers.categories.last?.stickers.first)
+        XCTAssertNotNil(stickers.image(for: sticker))
+        let pins = try JSONDecoder().decode([PinRecord].self, from: Data(contentsOf: b.pinsURL.appendingPathComponent("pins.json")))
+        XCTAssertEqual(pins.map(\.file), ["pin-a.png"])
+        XCTAssertEqual(try Data(contentsOf: b.pinsURL.appendingPathComponent("pin-a.png")), Data("截圖".utf8))
+        XCTAssertEqual(try circuits(b).map(\.name), ["b 的電路", "OTA"])
+        let categories = try JSONDecoder().decode([CustomCircuitCategory].self, from: XCTUnwrap(b.defaults.data(forKey: "customCircuitCategories")))
+        XCTAssertEqual(categories.map(\.name), ["類比"])
+        XCTAssertEqual(b.defaults.stringArray(forKey: "favoriteColors"), ["#ABCDEFFF"], "這台設定過的不蓋掉")
+        XCTAssertEqual(b.defaults.array(forKey: "styleWidths.monoline") as? [Double], [1, 2, 3], "這台沒設定過就用雲端的")
+        XCTAssertNil(b.defaults.object(forKey: "不相關的設定"))
+        XCTAssertEqual(drive.violations, [])
+    }
+
+    /// 沒變就不重傳；改了一個顏色就只傳 global.zip
+    func testGlobalDataIsUploadedOnlyWhenItChanges() async throws {
+        let a = try device()
+        try makeGlobalData(on: a)
+        _ = try await a.backup.syncWithRetry()
+        resetCounters()
+
+        _ = try await relaunched(a).syncWithRetry()
+        XCTAssertEqual(drive.uploads, [])
+        XCTAssertFalse(drive.lookups.contains("global.zip"))
+
+        a.defaults.set(["#123456FF", "#654321FF"], forKey: "favoriteColors")
+        _ = try await relaunched(a).syncWithRetry()
+        XCTAssertEqual(drive.uploads, ["global.zip"])
+
+        // 紀錄不見（中斷連結再連結）：內容一樣就不重傳
+        resetCounters()
+        a.backup.resetRemoteState()
+        _ = try await relaunched(a).syncWithRetry()
+        XCTAssertFalse(drive.uploads.contains("global.zip"))
+    }
+
+    /// 沒有貼紙也沒有設定：不用傳 global.zip
+    func testNothingGlobalUploadsNothing() async throws {
+        let a = try device()
+        _ = notebook("只有筆記", on: a)
+        _ = try await a.backup.syncWithRetry()
+        let root = try XCTUnwrap(drive.folder(path: [BackupManager.rootFolderName]))
+        XCTAssertEqual(drive.count(named: "global.zip", in: root.id), 0)
+    }
+
     // MARK: 回報的問題：還原要下載幾千個小檔案，很慢
+
+    /// 回報的問題：還原要 20 分鐘。同時下載幾本，但不超過上限；全部都要回來
+    func testRestoreDownloadsSeveralNotebooksAtOnce() async throws {
+        let a = try device()
+        let ids = (1...7).map { notebook("第 \($0) 本", on: a).id }
+        _ = try await a.backup.syncWithRetry()
+
+        let b = try device()
+        let result = try await b.backup.restore()
+
+        XCTAssertEqual(result.notebooks, 7)
+        XCTAssertEqual(Set(ids.compactMap { b.store.notebook($0)?.title }).count, 7)
+        XCTAssertGreaterThan(drive.maxConcurrentDownloads, 1)
+        XCTAssertLessThanOrEqual(drive.maxConcurrentDownloads, BackupManager.parallelDownloads)
+    }
+
+    /// 真的下載成檔案（不整個放進記憶體），內容一樣
+    func testClientDownloadsToAFile() async throws {
+        URLProtocol.registerClass(RecordingProtocol.self)
+        defer {
+            URLProtocol.unregisterClass(RecordingProtocol.self)
+            RecordingProtocol.reset()
+        }
+        RecordingProtocol.statusCode = 200
+        RecordingProtocol.body = Data("講義內容".utf8)
+        let dest = FileManager.default.temporaryDirectory.appendingPathComponent("dl-\(UUID().uuidString)/a.pdf")
+        defer { try? FileManager.default.removeItem(at: dest.deletingLastPathComponent()) }
+
+        try await DriveClient(accessToken: { "token" }).download("abc", to: dest)
+
+        XCTAssertEqual(try Data(contentsOf: dest), Data("講義內容".utf8))
+        XCTAssertEqual(RecordingProtocol.requests.first?.url?.absoluteString, "https://www.googleapis.com/drive/v3/files/abc?alt=media")
+
+        RecordingProtocol.reset()
+        RecordingProtocol.statusCode = 404
+        do {
+            try await DriveClient(accessToken: { "token" }).download("gone", to: dest)
+            XCTFail("找不到要回報")
+        } catch BackupError.http(404, _) {}
+    }
 
     /// 每本筆記本在雲端是一個 notebook.zip，PDF 和圖片（files/）各自一個檔案；還原只下載這些
     func testNotebookIsOneZipPlusAttachments() async throws {
@@ -391,7 +541,7 @@ final class BackupTests: XCTestCase {
         let nb = notebook("等等刪", on: d)
         _ = try await d.backup.syncWithRetry()
         let failing = FailingDeleteDrive(drive)
-        let flaky = BackupManager(drive: failing, library: d.store, stateURL: d.dir.appendingPathComponent("state.json"))
+        let flaky = BackupManager(drive: failing, library: d.store, global: d.global, stateURL: d.dir.appendingPathComponent("state.json"))
 
         d.store.deleteNotebook(nb.id)
         do {
@@ -401,7 +551,7 @@ final class BackupTests: XCTestCase {
         XCTAssertEqual(d.store.index.purgedNotebooks.map(\.id), [nb.id], "沒刪成要繼續記著")
         XCTAssertEqual(try status(nb.id), .deleted, "清單先傳，這時還原也不會帶回來")
 
-        let retry = BackupManager(drive: drive, library: d.store, stateURL: d.dir.appendingPathComponent("state.json"))
+        let retry = BackupManager(drive: drive, library: d.store, global: d.global, stateURL: d.dir.appendingPathComponent("state.json"))
         _ = try await retry.syncWithRetry()
         XCTAssertNil(drive.notebookFolder(nb.id))
         XCTAssertTrue(d.store.index.purgedNotebooks.isEmpty)
@@ -638,7 +788,7 @@ final class BackupTests: XCTestCase {
         XCTAssertEqual(relaunched.index.notebooks.map(\.title), [titles[done]])
 
         // 網路恢復後再還原：剩下的回到原本的資料夾
-        let again = BackupManager(drive: drive, library: b.store, stateURL: b.dir.appendingPathComponent("state-again.json"))
+        let again = BackupManager(drive: drive, library: b.store, global: b.global, stateURL: b.dir.appendingPathComponent("state-again.json"))
         let result = try await again.restore()
         XCTAssertEqual(result, RestoreResult(notebooks: 1, trashed: 0))
         XCTAssertEqual(Set(b.store.notebooks(in: folder.id).map(\.title)), ["第一本", "第二本"])
@@ -683,7 +833,7 @@ final class BackupTests: XCTestCase {
         let nb = notebook("刪到一半", on: a)
         _ = try await a.backup.syncWithRetry()
         a.store.deleteNotebook(nb.id)
-        let flaky = BackupManager(drive: FailingDeleteDrive(drive), library: a.store, stateURL: a.dir.appendingPathComponent("state.json"))
+        let flaky = BackupManager(drive: FailingDeleteDrive(drive), library: a.store, global: a.global, stateURL: a.dir.appendingPathComponent("state.json"))
         do { _ = try await flaky.syncWithRetry() } catch {}
         XCTAssertGreaterThan(drive.filesAnywhere(under: try XCTUnwrap(drive.notebookFolder(nb.id)).id).count, 0)
 
@@ -796,7 +946,7 @@ final class BackupTests: XCTestCase {
     // MARK: 回報的問題：看起來每次都全部重傳
 
     private func relaunched(_ d: Device, drive api: DriveAPI? = nil) -> BackupManager {
-        BackupManager(drive: api ?? drive, library: d.store, stateURL: d.dir.appendingPathComponent("state.json"))
+        BackupManager(drive: api ?? drive, library: d.store, global: d.global, stateURL: d.dir.appendingPathComponent("state.json"))
     }
 
     private func resetCounters() {

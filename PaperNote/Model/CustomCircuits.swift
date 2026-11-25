@@ -43,6 +43,18 @@ final class CustomCircuitStore {
     private(set) var categories: [CustomCircuitCategory] = []
 
     private init() {
+        load()
+    }
+
+    /// 從雲端還原（合併進偏好設定）之後重新讀
+    func reload() {
+        load()
+        NotificationCenter.default.post(name: .customCircuitsChanged, object: nil)
+    }
+
+    private func load() {
+        circuits = []
+        categories = []
         if let data = UserDefaults.standard.data(forKey: key),
            let saved = try? JSONDecoder().decode([CustomCircuit].self, from: data) {
             circuits = saved
