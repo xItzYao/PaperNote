@@ -1,10 +1,13 @@
 import XCTest
+import UIKit
 import CryptoKit
 @testable import PaperNote
 
 /// 假的 Google Drive。行為照 drive.file：App 只看得到自己建立的檔案；
 /// 資料夾移到垃圾桶會連裡面看不到的檔案一起移（和真的 Drive 一樣）。
-/// 動到 App 不該動的東西就記在 violations
+/// 動到 App 不該動的東西就記在 violations。
+/// 在主執行緒上跑：還原會同時下載好幾本，資料不會互相踩到
+@MainActor
 private final class FakeDrive: DriveAPI {
     final class Item {
         let id: String
@@ -36,6 +39,16 @@ private final class FakeDrive: DriveAPI {
     var uploads: [String] = []
     /// 用名稱找過的檔案
     var lookups: [String] = []
+    /// 下載過的檔案名稱
+    var downloads: [String] = []
+    /// 同時在下載的最多幾個
+    private(set) var maxConcurrentDownloads = 0
+    private var activeDownloads = 0
+    /// 同時在上傳的最多幾個
+    private(set) var maxConcurrentUploads = 0
+    private var activeUploads = 0
+    /// 列過內容的資料夾名稱
+    var listings: [String] = []
     private var next = 0
 
     private func newID() -> String {
@@ -87,12 +100,18 @@ private final class FakeDrive: DriveAPI {
     }
 
     func children(of folder: String) async throws -> [DriveFile] {
-        visible(in: folder).map(driveFile)
+        listings.append(items[folder]?.name ?? folder)
+        return visible(in: folder).map(driveFile)
     }
 
     func upload(_ fileURL: URL, name: String, parent: String, existingID: String?) async throws -> String {
         let data = try Data(contentsOf: fileURL)
         uploads.append(name)
+        // 上傳要花一點時間：讓同時進行的其他上傳有機會開始
+        activeUploads += 1
+        maxConcurrentUploads = max(maxConcurrentUploads, activeUploads)
+        for _ in 0..<5 { await Task.yield() }
+        activeUploads -= 1
         next += 1
         if let existingID {
             guard let item = items[existingID] else { throw BackupError.http(404, "") }
@@ -109,6 +128,12 @@ private final class FakeDrive: DriveAPI {
     func download(_ fileID: String, to destination: URL) async throws {
         guard let item = items[fileID] else { throw BackupError.http(404, "") }
         if !item.appCreated { violations.append("讀了使用者的 \(item.name)") }
+        downloads.append(item.name)
+        // 下載要花一點時間：讓同時進行的其他下載有機會開始
+        activeDownloads += 1
+        maxConcurrentDownloads = max(maxConcurrentDownloads, activeDownloads)
+        for _ in 0..<5 { await Task.yield() }
+        activeDownloads -= 1
         try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         try item.data.write(to: destination)
     }
@@ -167,8 +192,15 @@ private final class FakeDrive: DriveAPI {
         return try BackupManifest.decode(file.data)
     }
 
+    /// 更新前的格式：Notebooks/<id>/ 資料夾
     func notebookFolder(_ id: UUID) -> Item? {
         folder(path: [BackupManager.rootFolderName, "Notebooks", id.uuidString])
+    }
+
+    /// Notebooks/<id>.papernote
+    func papernote(_ id: UUID) -> Item? {
+        guard let notebooks = folder(path: [BackupManager.rootFolderName, "Notebooks"]) else { return nil }
+        return items.values.first { $0.parent == notebooks.id && $0.name == "\(id.uuidString).papernote" }
     }
 }
 
@@ -177,18 +209,28 @@ private final class FakeDrive: DriveAPI {
 private final class Device {
     let dir: URL
     let store: LibraryStore
+    /// 這台的貼紙、元件庫、筆刷設定（不碰測試機真的資料）
+    let global: GlobalBackup
+    private let suite: String
     let backup: BackupManager
 
-    init(drive: FakeDrive) throws {
+    init(drive: DriveAPI) throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("BackupTests-\(UUID().uuidString)", isDirectory: true)
         let docs = dir.appendingPathComponent("Documents", isDirectory: true)
         try FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
         store = LibraryStore(documentsURL: docs)
-        backup = BackupManager(drive: drive, library: store, stateURL: dir.appendingPathComponent("state.json"))
+        suite = "BackupTests-\(UUID().uuidString)"
+        global = GlobalBackup(support: dir.appendingPathComponent("Support", isDirectory: true), defaults: UserDefaults(suiteName: suite)!)
+        backup = BackupManager(drive: drive, library: store, global: global, stateURL: dir.appendingPathComponent("state.json"))
     }
+
+    var defaults: UserDefaults { global.defaults }
+    var stickersURL: URL { global.support.appendingPathComponent("Stickers", isDirectory: true) }
+    var pinsURL: URL { global.support.appendingPathComponent("Pins", isDirectory: true) }
 
     func cleanUp() {
         try? FileManager.default.removeItem(at: dir)
+        UserDefaults().removePersistentDomain(forName: suite)
     }
 }
 
@@ -225,6 +267,403 @@ final class BackupTests: XCTestCase {
         try drive.manifest().notebooks.first { $0.id == id }?.status
     }
 
+    /// 雲端這本筆記本的 .papernote 檔
+    private func papernoteArchive(_ id: UUID) throws -> ZipArchive {
+        let item = try XCTUnwrap(drive.papernote(id))
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("entries-\(UUID().uuidString).papernote")
+        try item.data.write(to: url)
+        // ZipArchive 讀的是記憶體對應，檔案留在暫存區（測試結束系統會清）
+        return try ZipArchive(url: url)
+    }
+
+    /// 雲端這本筆記本的 .papernote 裡有哪些檔案
+    private func zipEntries(_ id: UUID) throws -> [String] {
+        try papernoteArchive(id).entries.filter { !$0.isDirectory }.map(\.path)
+    }
+
+    /// 把雲端的一本筆記本改成更新前的格式。
+    /// loose：再前一版，全部是一個一個的檔案；不然是 notebook.zip，PDF 和圖片在旁邊的 files/
+    private func makeOldFormat(_ id: UUID, loose: Bool = true) async throws {
+        let archive = try papernoteArchive(id)
+        let notebooks = try XCTUnwrap(drive.folder(path: [BackupManager.rootFolderName, "Notebooks"]))
+        let folder = try await drive.createFolder(named: id.uuidString, in: notebooks.id)
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("old-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        var packed = ZipWriter()
+        var hasPacked = false
+        for (i, e) in archive.entries.enumerated() where !e.isDirectory && e.path.hasPrefix("notebook/") {
+            let rel = String(e.path.dropFirst("notebook/".count))
+            let data = try archive.contents(of: e)
+            if !loose && !rel.hasPrefix("files/") {
+                try packed.add(rel, data, compress: false)
+                hasPacked = true
+                continue
+            }
+            var parent = folder
+            for name in rel.split(separator: "/").dropLast().map(String.init) {
+                if let existing = try await drive.findFolder(named: name, in: parent) {
+                    parent = existing
+                } else {
+                    parent = try await drive.createFolder(named: name, in: parent)
+                }
+            }
+            let file = tmp.appendingPathComponent("\(i)")
+            try data.write(to: file)
+            _ = try await drive.upload(file, name: (rel as NSString).lastPathComponent, parent: parent, existingID: nil)
+        }
+        if hasPacked {
+            let file = tmp.appendingPathComponent("notebook.zip")
+            try packed.finish().write(to: file)
+            _ = try await drive.upload(file, name: "notebook.zip", parent: folder, existingID: nil)
+        }
+        let newFormat = try XCTUnwrap(drive.papernote(id))
+        drive.items[newFormat.id] = nil
+    }
+
+    /// 這個筆記本資料夾裡全部的檔案和內容
+    private func contents(of dir: URL) -> [String: Data] {
+        var out: [String: Data] = [:]
+        let base = dir.resolvingSymlinksInPath().path + "/"
+        let en = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: [.isRegularFileKey])
+        while let url = en?.nextObject() as? URL {
+            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+            out[String(url.resolvingSymlinksInPath().path.dropFirst(base.count))] = try? Data(contentsOf: url)
+        }
+        return out
+    }
+
+    // MARK: 回報的問題：貼紙、元件庫不在備份裡
+
+    /// a 的貼紙、貼圖、自訂電路、筆刷設定放進雲端
+    private func makeGlobalData(on a: Device) throws {
+        let stickers = StickerStore(directory: a.stickersURL)
+        let category = stickers.addCategory(named: "電路符號")
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 4, height: 4)).image { ctx in
+            UIColor.red.setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: 4, height: 4))
+        }
+        XCTAssertNotNil(stickers.add(image, to: category.id))
+        try FileManager.default.createDirectory(at: a.pinsURL, withIntermediateDirectories: true)
+        try Data("截圖".utf8).write(to: a.pinsURL.appendingPathComponent("pin-a.png"))
+        try JSONEncoder().encode([PinRecord(file: "pin-a.png", center: .zero, width: 100)])
+            .write(to: a.pinsURL.appendingPathComponent("pins.json"))
+        a.defaults.set(try JSONEncoder().encode([CustomCircuit(name: "OTA", data: CircuitData())]), forKey: "customCircuits")
+        a.defaults.set(try JSONEncoder().encode([CustomCircuitCategory(key: "user.a", name: "類比")]), forKey: "customCircuitCategories")
+        a.defaults.set(["#123456FF"], forKey: "favoriteColors")
+        a.defaults.set([1.0, 2.0, 3.0], forKey: "styleWidths.monoline")
+        a.defaults.set(true, forKey: "不相關的設定")
+    }
+
+    private func circuits(_ d: Device) throws -> [CustomCircuit] {
+        try JSONDecoder().decode([CustomCircuit].self, from: XCTUnwrap(d.defaults.data(forKey: "customCircuits")))
+    }
+
+    /// 換一台 iPad：貼紙、貼圖、自訂電路回來；這台已經有的不被蓋掉，筆刷設定這台沒設過才用雲端的
+    func testStickersAndComponentsComeBackOnAnotherIPad() async throws {
+        let a = try device()
+        try makeGlobalData(on: a)
+        _ = notebook("筆記", on: a)
+        _ = try await a.backup.syncWithRetry()
+        let root = try XCTUnwrap(drive.folder(path: [BackupManager.rootFolderName]))
+        XCTAssertEqual(drive.count(named: "global.zip", in: root.id), 1)
+
+        let b = try device()
+        let mine = StickerStore(directory: b.stickersURL)
+        _ = mine.addCategory(named: "b 的分類")
+        b.defaults.set(try JSONEncoder().encode([CustomCircuit(name: "b 的電路", data: CircuitData())]), forKey: "customCircuits")
+        b.defaults.set(["#ABCDEFFF"], forKey: "favoriteColors")
+        for _ in 0..<2 { _ = try await b.backup.restore() }
+
+        let stickers = StickerStore(directory: b.stickersURL)
+        XCTAssertEqual(stickers.categories.map(\.name), ["b 的分類", "電路符號"], "還原兩次也不會重複")
+        let sticker = try XCTUnwrap(stickers.categories.last?.stickers.first)
+        XCTAssertNotNil(stickers.image(for: sticker))
+        let pins = try JSONDecoder().decode([PinRecord].self, from: Data(contentsOf: b.pinsURL.appendingPathComponent("pins.json")))
+        XCTAssertEqual(pins.map(\.file), ["pin-a.png"])
+        XCTAssertEqual(try Data(contentsOf: b.pinsURL.appendingPathComponent("pin-a.png")), Data("截圖".utf8))
+        XCTAssertEqual(try circuits(b).map(\.name), ["b 的電路", "OTA"])
+        let categories = try JSONDecoder().decode([CustomCircuitCategory].self, from: XCTUnwrap(b.defaults.data(forKey: "customCircuitCategories")))
+        XCTAssertEqual(categories.map(\.name), ["類比"])
+        XCTAssertEqual(b.defaults.stringArray(forKey: "favoriteColors"), ["#ABCDEFFF"], "這台設定過的不蓋掉")
+        XCTAssertEqual(b.defaults.array(forKey: "styleWidths.monoline") as? [Double], [1, 2, 3], "這台沒設定過就用雲端的")
+        XCTAssertNil(b.defaults.object(forKey: "不相關的設定"))
+        XCTAssertEqual(drive.violations, [])
+    }
+
+    /// 沒變就不重傳；改了一個顏色就只傳 global.zip
+    func testGlobalDataIsUploadedOnlyWhenItChanges() async throws {
+        let a = try device()
+        try makeGlobalData(on: a)
+        _ = try await a.backup.syncWithRetry()
+        resetCounters()
+
+        _ = try await relaunched(a).syncWithRetry()
+        XCTAssertEqual(drive.uploads, [])
+        XCTAssertFalse(drive.lookups.contains("global.zip"))
+
+        a.defaults.set(["#123456FF", "#654321FF"], forKey: "favoriteColors")
+        _ = try await relaunched(a).syncWithRetry()
+        XCTAssertEqual(drive.uploads, ["global.zip"])
+
+        // 紀錄不見（中斷連結再連結）：內容一樣就不重傳
+        resetCounters()
+        a.backup.resetRemoteState()
+        _ = try await relaunched(a).syncWithRetry()
+        XCTAssertFalse(drive.uploads.contains("global.zip"))
+    }
+
+    /// 沒有貼紙也沒有設定：不用傳 global.zip
+    func testNothingGlobalUploadsNothing() async throws {
+        let a = try device()
+        _ = notebook("只有筆記", on: a)
+        _ = try await a.backup.syncWithRetry()
+        let root = try XCTUnwrap(drive.folder(path: [BackupManager.rootFolderName]))
+        XCTAssertEqual(drive.count(named: "global.zip", in: root.id), 0)
+    }
+
+    // MARK: 回報的問題：還原要下載幾千個小檔案，很慢
+
+    /// 回報的問題：還原要 20 分鐘。同時下載幾本，但不超過上限；全部都要回來
+    func testRestoreDownloadsSeveralNotebooksAtOnce() async throws {
+        let a = try device()
+        let ids = (1...7).map { notebook("第 \($0) 本", on: a).id }
+        _ = try await a.backup.syncWithRetry()
+
+        let b = try device()
+        let result = try await b.backup.restore()
+
+        XCTAssertEqual(result.notebooks, 7)
+        XCTAssertEqual(Set(ids.compactMap { b.store.notebook($0)?.title }).count, 7)
+        XCTAssertGreaterThan(drive.maxConcurrentDownloads, 1)
+        XCTAssertLessThanOrEqual(drive.maxConcurrentDownloads, BackupManager.parallelTransfers)
+    }
+
+    /// 備份也同時傳好幾本，但不超過上限
+    func testBackupUploadsSeveralNotebooksAtOnce() async throws {
+        let a = try device()
+        let ids = (1...7).map { notebook("第 \($0) 本", on: a).id }
+        _ = try await a.backup.syncWithRetry()
+
+        XCTAssertEqual(Set(drive.uploads.filter { $0.hasSuffix(".papernote") }), Set(ids.map { "\($0.uuidString).papernote" }))
+        XCTAssertGreaterThan(drive.maxConcurrentUploads, 1)
+        XCTAssertLessThanOrEqual(drive.maxConcurrentUploads, BackupManager.parallelTransfers)
+    }
+
+    /// 真的下載成檔案（不整個放進記憶體），內容一樣
+    func testClientDownloadsToAFile() async throws {
+        URLProtocol.registerClass(RecordingProtocol.self)
+        defer {
+            URLProtocol.unregisterClass(RecordingProtocol.self)
+            RecordingProtocol.reset()
+        }
+        RecordingProtocol.statusCode = 200
+        RecordingProtocol.body = Data("講義內容".utf8)
+        let dest = FileManager.default.temporaryDirectory.appendingPathComponent("dl-\(UUID().uuidString)/a.pdf")
+        defer { try? FileManager.default.removeItem(at: dest.deletingLastPathComponent()) }
+
+        try await DriveClient(accessToken: { "token" }).download("abc", to: dest)
+
+        XCTAssertEqual(try Data(contentsOf: dest), Data("講義內容".utf8))
+        XCTAssertEqual(RecordingProtocol.requests.first?.url?.absoluteString, "https://www.googleapis.com/drive/v3/files/abc?alt=media")
+
+        RecordingProtocol.reset()
+        RecordingProtocol.statusCode = 404
+        do {
+            try await DriveClient(accessToken: { "token" }).download("gone", to: dest)
+            XCTFail("找不到要回報")
+        } catch BackupError.http(404, _) {}
+    }
+
+    /// 需求：一本筆記本在雲端就是一個 .papernote（PDF、圖片、筆跡、縮圖都在裡面），還原只下載這個檔案；
+    /// 下載下來可以直接用「匯入」打開
+    func testNotebookIsOnePaperNoteFile() async throws {
+        let a = try device()
+        let nb = notebook("打包", on: a)
+        let dir = a.store.notebookURL(nb.id)
+        let fm = FileManager.default
+        for sub in ["drawings", "thumbs", "files"] {
+            try fm.createDirectory(at: dir.appendingPathComponent(sub), withIntermediateDirectories: true)
+        }
+        for i in 1...3 { try Data("筆跡 \(i)".utf8).write(to: dir.appendingPathComponent("drawings/p\(i).drawing")) }
+        try Data("縮圖".utf8).write(to: dir.appendingPathComponent("thumbs/cover.jpg"))
+        try Data("講義".utf8).write(to: dir.appendingPathComponent("files/handout.pdf"))
+        try Data("照片".utf8).write(to: dir.appendingPathComponent("files/img-1.jpg"))
+        _ = try await a.backup.syncWithRetry()
+
+        let notebooks = try XCTUnwrap(drive.folder(path: [BackupManager.rootFolderName, "Notebooks"]))
+        let inFolder = try await drive.children(of: notebooks.id).map(\.name)
+        XCTAssertEqual(inFolder, ["\(nb.id.uuidString).papernote"], "一本一個檔案，沒有資料夾")
+        XCTAssertEqual(Set(try zipEntries(nb.id)),
+                       ["papernote.json", "notebook/document.json", "notebook/drawings/p1.drawing", "notebook/drawings/p2.drawing",
+                        "notebook/drawings/p3.drawing", "notebook/thumbs/cover.jpg", "notebook/files/handout.pdf",
+                        "notebook/files/img-1.jpg"])
+
+        let b = try device()
+        drive.downloads = []
+        _ = try await b.backup.restore()
+
+        XCTAssertEqual(drive.downloads.filter { $0 != BackupManifest.fileName }, ["\(nb.id.uuidString).papernote"])
+        XCTAssertEqual(contents(of: b.store.notebookURL(nb.id)), contents(of: dir))
+        XCTAssertEqual(b.store.notebook(nb.id)?.title, "打包")
+        XCTAssertEqual(drive.violations, [])
+
+        // 從 Google Drive 下載下來，直接匯入
+        let downloaded = fm.temporaryDirectory.appendingPathComponent("打包-\(UUID().uuidString).papernote")
+        defer { try? fm.removeItem(at: downloaded) }
+        try XCTUnwrap(drive.papernote(nb.id)).data.write(to: downloaded)
+        let imported = try b.store.importPaperNote(from: downloaded, folder: nil)
+        XCTAssertEqual(imported.title, "打包 (1)")
+        XCTAssertEqual(contents(of: b.store.notebookURL(imported.id)), contents(of: dir))
+    }
+
+    /// 文字和筆跡壓縮；PDF、圖片本來就壓縮過，原樣放
+    func testTextIsCompressedAndPicturesAreNot() async throws {
+        let a = try device()
+        let nb = notebook("壓縮", on: a)
+        let dir = a.store.notebookURL(nb.id)
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("files"), withIntermediateDirectories: true)
+        let ink = Data(String(repeating: "一筆一筆的筆跡 ", count: 5_000).utf8)
+        try ink.write(to: dir.appendingPathComponent("page.drawing"))
+        let pdf = Data((0..<20_000).map { UInt8(truncatingIfNeeded: $0 &* 7919) })
+        try pdf.write(to: dir.appendingPathComponent("files/handout.pdf"))
+        _ = try await a.backup.syncWithRetry()
+
+        let archive = try papernoteArchive(nb.id)
+        let drawing = try XCTUnwrap(archive.entries.first { $0.path == "notebook/page.drawing" })
+        XCTAssertEqual(drawing.method, 8)
+        XCTAssertLessThan(drawing.compressedSize * 10, drawing.uncompressedSize)
+        XCTAssertEqual(try archive.contents(of: drawing), ink)
+        let handout = try XCTUnwrap(archive.entries.first { $0.path == "notebook/files/handout.pdf" })
+        XCTAssertEqual(handout.method, 0)
+        XCTAssertEqual(try archive.contents(of: handout), pdf)
+    }
+
+    /// 改名：雲端檔案裡的名稱也要更新（下載下來匯入才對）
+    func testRenameUpdatesTheNameInside() async throws {
+        let a = try device()
+        let nb = notebook("舊名", on: a)
+        _ = try await a.backup.syncWithRetry()
+        resetCounters()
+
+        a.store.renameNotebook(nb.id, to: "新名")
+        _ = try await a.backup.syncWithRetry()
+
+        XCTAssertEqual(drive.uploads.filter { $0 != BackupManifest.fileName }, ["\(nb.id.uuidString).papernote"])
+        let archive = try papernoteArchive(nb.id)
+        XCTAssertEqual(PaperNoteFile.manifest(in: archive)?.title, "新名")
+    }
+
+    /// 更新前的資料夾還在旁邊：有 .papernote 就照它還原，舊資料夾不下載
+    func testPaperNoteFileWinsOverAnOldFolder() async throws {
+        let a = try device()
+        let nb = notebook("新格式", on: a)
+        _ = try await a.backup.syncWithRetry()
+        let notebooks = try XCTUnwrap(drive.folder(path: [BackupManager.rootFolderName, "Notebooks"]))
+        let folder = try await drive.createFolder(named: nb.id.uuidString, in: notebooks.id)
+        let page = { Page(background: .paper(width: 100, height: 100, style: .blank)) }
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("stale-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try NotebookSession.writeDocument(NotebookDocument(pages: [page(), page(), page()]), to: tmp)
+        _ = try await drive.upload(NotebookSession.documentURL(in: tmp), name: "document.json", parent: folder, existingID: nil)
+
+        let b = try device()
+        drive.downloads = []
+        _ = try await b.backup.restore()
+
+        XCTAssertFalse(drive.downloads.contains("document.json"))
+        let restored = try Data(contentsOf: NotebookSession.documentURL(in: b.store.notebookURL(nb.id)))
+        XCTAssertEqual(try JSONDecoder.app.decode(NotebookDocument.self, from: restored).pages.count, 1)
+    }
+
+    /// 再前一版的備份（全部是散檔）還是還原得回來
+    func testRestoreFromLooseFilesOfAnOldVersion() async throws {
+        let a = try device()
+        let nb = notebook("上一版備份的", on: a)
+        let dir = a.store.notebookURL(nb.id)
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("drawings"), withIntermediateDirectories: true)
+        try Data("筆跡".utf8).write(to: dir.appendingPathComponent("drawings/p.drawing"))
+        _ = try await a.backup.syncWithRetry()
+        try await makeOldFormat(nb.id)
+
+        let b = try device()
+        let result = try await b.backup.restore()
+
+        XCTAssertEqual(result.notebooks, 1)
+        XCTAssertEqual(b.store.notebook(nb.id)?.title, "上一版備份的")
+        XCTAssertEqual(try Data(contentsOf: b.store.notebookURL(nb.id).appendingPathComponent("drawings/p.drawing")), Data("筆跡".utf8))
+    }
+
+    /// 上一版的備份（notebook.zip＋files/）還原得回來
+    func testRestoreFromTheNotebookZipVersion() async throws {
+        let a = try device()
+        let nb = notebook("notebook.zip 版", on: a)
+        let dir = a.store.notebookURL(nb.id)
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("files"), withIntermediateDirectories: true)
+        try Data("筆跡".utf8).write(to: dir.appendingPathComponent("page.drawing"))
+        try Data("講義".utf8).write(to: dir.appendingPathComponent("files/handout.pdf"))
+        _ = try await a.backup.syncWithRetry()
+        try await makeOldFormat(nb.id, loose: false)
+
+        let b = try device()
+        drive.downloads = []
+        let result = try await b.backup.restore()
+
+        XCTAssertEqual(result.notebooks, 1)
+        XCTAssertEqual(Set(drive.downloads.filter { $0 != BackupManifest.fileName }), ["notebook.zip", "handout.pdf"])
+        XCTAssertEqual(contents(of: b.store.notebookURL(nb.id)), contents(of: dir))
+    }
+
+    /// 從上一版更新：第一次備份把每本換成 .papernote，傳好後舊資料夾移到 Drive 垃圾桶（內容還救得回來）；
+    /// 之後就不用再傳
+    func testUpdatingFromTheNotebookZipVersion() async throws {
+        let a = try device()
+        let nb = notebook("要換格式", on: a)
+        let dir = a.store.notebookURL(nb.id)
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("files"), withIntermediateDirectories: true)
+        try Data("講義".utf8).write(to: dir.appendingPathComponent("files/handout.pdf"))
+        _ = try await a.backup.syncWithRetry()
+        try await makeOldFormat(nb.id, loose: false)
+        let old = try XCTUnwrap(drive.notebookFolder(nb.id))
+        // 上一版留下的備份紀錄
+        let stateURL = a.dir.appendingPathComponent("state.json")
+        var state = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any])
+        state["archives"] = [nb.id.uuidString: ["id": "舊的", "fingerprint": "舊的", "md5": "舊的"]]
+        state["files"] = ["library.json": ["id": "舊的", "size": 1, "mtime": 1],
+                          "Notebooks/\(nb.id.uuidString)/files/handout.pdf": ["id": "舊的", "size": 1, "mtime": 1]]
+        try JSONSerialization.data(withJSONObject: state).write(to: stateURL)
+        resetCounters()
+
+        _ = try await relaunched(a).syncWithRetry()
+
+        XCTAssertEqual(drive.uploads.filter { $0 != BackupManifest.fileName }, ["\(nb.id.uuidString).papernote"])
+        XCTAssertNotNil(drive.papernote(nb.id))
+        XCTAssertNil(drive.notebookFolder(nb.id), "舊資料夾移到 Drive 垃圾桶")
+        XCTAssertNotNil(drive.trash[old.id])
+        XCTAssertTrue(drive.trash.values.contains { $0.name == "handout.pdf" })
+        XCTAssertEqual(drive.violations, [])
+
+        resetCounters()
+        _ = try await relaunched(a).syncWithRetry()
+        XCTAssertEqual(drive.uploads, [])
+    }
+
+    /// 雲端只有舊格式、這台沒有的筆記本（還沒還原）：舊資料夾不能動
+    func testOldFolderOfANotebookNotOnThisIPadStays() async throws {
+        let a = try device()
+        let nb = notebook("別台的", on: a)
+        _ = try await a.backup.syncWithRetry()
+        try await makeOldFormat(nb.id, loose: false)
+
+        let b = try device()
+        _ = notebook("這台的", on: b)
+        _ = try await b.backup.syncWithRetry()
+
+        XCTAssertNotNil(drive.notebookFolder(nb.id))
+        XCTAssertTrue(drive.trashed.isEmpty)
+    }
+
     // MARK: 回報的問題：永久刪除後雲端還留著
 
     /// 只丟進垃圾桶：雲端檔案不能動，清單記成在垃圾桶
@@ -233,14 +672,13 @@ final class BackupTests: XCTestCase {
         let nb = notebook("丟垃圾桶", on: d)
         _ = try await d.backup.syncWithRetry()
         XCTAssertEqual(try status(nb.id), .active)
-        let before = drive.filesAnywhere(under: try XCTUnwrap(drive.notebookFolder(nb.id)).id).count
-        XCTAssertGreaterThan(before, 0)
+        let before = try XCTUnwrap(drive.papernote(nb.id)).data
 
         d.store.trashNotebook(nb.id)
         _ = try await d.backup.syncWithRetry()
 
         XCTAssertEqual(try status(nb.id), .trashed)
-        XCTAssertEqual(drive.filesAnywhere(under: try XCTUnwrap(drive.notebookFolder(nb.id)).id).count, before)
+        XCTAssertEqual(drive.papernote(nb.id)?.data, before)
         XCTAssertEqual(drive.violations, [])
     }
 
@@ -256,9 +694,9 @@ final class BackupTests: XCTestCase {
         XCTAssertEqual(d.store.index.purgedNotebooks.map(\.id), [nb.id], "等雲端刪掉之前要記著")
         _ = try await d.backup.syncWithRetry()
 
-        XCTAssertNil(drive.notebookFolder(nb.id), "資料夾也要移走，不留空的")
-        XCTAssertTrue(drive.trash.values.contains { $0.name == "document.json" }, "內容還在 Drive 垃圾桶")
-        XCTAssertGreaterThan(drive.filesAnywhere(under: try XCTUnwrap(drive.notebookFolder(keep.id)).id).count, 0, "別本不受影響")
+        XCTAssertNil(drive.papernote(nb.id))
+        XCTAssertTrue(drive.trash.values.contains { $0.name == "\(nb.id.uuidString).papernote" }, "內容還在 Drive 垃圾桶")
+        XCTAssertNotNil(drive.papernote(keep.id), "別本不受影響")
         XCTAssertEqual(try status(nb.id), .deleted)
         XCTAssertEqual(try status(keep.id), .active)
         let entry = try XCTUnwrap(drive.manifest().notebooks.first { $0.id == nb.id })
@@ -274,7 +712,7 @@ final class BackupTests: XCTestCase {
         let nb = notebook("等等刪", on: d)
         _ = try await d.backup.syncWithRetry()
         let failing = FailingDeleteDrive(drive)
-        let flaky = BackupManager(drive: failing, library: d.store, stateURL: d.dir.appendingPathComponent("state.json"))
+        let flaky = BackupManager(drive: failing, library: d.store, global: d.global, stateURL: d.dir.appendingPathComponent("state.json"))
 
         d.store.deleteNotebook(nb.id)
         do {
@@ -284,9 +722,9 @@ final class BackupTests: XCTestCase {
         XCTAssertEqual(d.store.index.purgedNotebooks.map(\.id), [nb.id], "沒刪成要繼續記著")
         XCTAssertEqual(try status(nb.id), .deleted, "清單先傳，這時還原也不會帶回來")
 
-        let retry = BackupManager(drive: drive, library: d.store, stateURL: d.dir.appendingPathComponent("state.json"))
+        let retry = BackupManager(drive: drive, library: d.store, global: d.global, stateURL: d.dir.appendingPathComponent("state.json"))
         _ = try await retry.syncWithRetry()
-        XCTAssertNil(drive.notebookFolder(nb.id))
+        XCTAssertNil(drive.papernote(nb.id))
         XCTAssertTrue(d.store.index.purgedNotebooks.isEmpty)
     }
 
@@ -307,13 +745,13 @@ final class BackupTests: XCTestCase {
         XCTAssertEqual(drive.violations, [])
     }
 
-    /// 只有標記永久刪除的才清：別台 iPad 上還在用的筆記本，資料夾空了也不能刪
+    /// 只有標記永久刪除的才清：別台 iPad 上還在用的筆記本，舊資料夾空了也不能刪
     func testEmptyFolderOfALiveNotebookStays() async throws {
         let a = try device()
         let nb = notebook("另一台的", on: a)
         _ = try await a.backup.syncWithRetry()
-        let folder = try XCTUnwrap(drive.notebookFolder(nb.id))
-        for f in try await drive.children(of: folder.id) { try await drive.trashFile(f) }
+        let notebooks = try XCTUnwrap(drive.folder(path: [BackupManager.rootFolderName, "Notebooks"]))
+        _ = try await drive.createFolder(named: nb.id.uuidString, in: notebooks.id)
 
         let b = try device()
         _ = try await b.backup.syncWithRetry()
@@ -339,21 +777,30 @@ final class BackupTests: XCTestCase {
         XCTAssertEqual(result.notebooks, 0, "在 Drive 垃圾桶的不會被還原")
     }
 
-    /// 頁面永久刪除後留下的檔案：雲端跟著刪，筆記本其他檔案不動
+    /// 頁面永久刪除後留下的檔案：筆跡和附件跟著離開 .papernote，雲端不會多出別的檔案
     func testFilesOfDeletedPagesAreRemoved() async throws {
         let d = try device()
         let nb = notebook("有頁面", on: d)
-        let ink = d.store.notebookURL(nb.id).appendingPathComponent("page.drawing")
+        let dir = d.store.notebookURL(nb.id)
+        for sub in ["drawings", "files"] {
+            try FileManager.default.createDirectory(at: dir.appendingPathComponent(sub), withIntermediateDirectories: true)
+        }
+        let ink = dir.appendingPathComponent("drawings/page.drawing")
+        let attachment = dir.appendingPathComponent("files/old.pdf")
         try Data("筆跡".utf8).write(to: ink)
+        try Data("附件".utf8).write(to: attachment)
         _ = try await d.backup.syncWithRetry()
-        let folder = try XCTUnwrap(drive.notebookFolder(nb.id))
-        XCTAssertEqual(drive.count(named: "page.drawing", in: folder.id), 1)
+        XCTAssertTrue(try zipEntries(nb.id).contains("notebook/drawings/page.drawing"))
+        XCTAssertTrue(try zipEntries(nb.id).contains("notebook/files/old.pdf"))
 
         try FileManager.default.removeItem(at: ink)
+        try FileManager.default.removeItem(at: attachment)
         _ = try await d.backup.syncWithRetry()
 
-        XCTAssertEqual(drive.count(named: "page.drawing", in: folder.id), 0)
-        XCTAssertEqual(drive.count(named: "document.json", in: folder.id), 1)
+        XCTAssertFalse(try zipEntries(nb.id).contains("notebook/drawings/page.drawing"))
+        XCTAssertFalse(try zipEntries(nb.id).contains("notebook/files/old.pdf"))
+        let notebooks = try XCTUnwrap(drive.folder(path: [BackupManager.rootFolderName, "Notebooks"]))
+        XCTAssertEqual(drive.count(named: "\(nb.id.uuidString).papernote", in: notebooks.id), 1)
         XCTAssertEqual(drive.violations, [])
     }
 
@@ -362,13 +809,12 @@ final class BackupTests: XCTestCase {
         let d = try device()
         let nb = notebook("還要救回來", on: d)
         _ = try await d.backup.syncWithRetry()
-        let folder = try XCTUnwrap(drive.notebookFolder(nb.id))
-        let before = drive.filesAnywhere(under: folder.id).count
+        let before = try XCTUnwrap(drive.papernote(nb.id)).data
 
         try FileManager.default.removeItem(at: d.store.notebookURL(nb.id))
         _ = try await d.backup.syncWithRetry()
 
-        XCTAssertEqual(drive.filesAnywhere(under: folder.id).count, before)
+        XCTAssertEqual(drive.papernote(nb.id)?.data, before)
         XCTAssertTrue(drive.trashed.isEmpty)
     }
 
@@ -379,17 +825,17 @@ final class BackupTests: XCTestCase {
         let nb = notebook("要刪的", on: d)
         _ = try await d.backup.syncWithRetry()
 
-        // 使用者自己的東西，名字故意和 App 的一樣。PaperNoteBackup 同層、上層的都不能動；
-        // 放進筆記本資料夾的，隨著筆記本一起刪（那層是 App 管理的）
+        // 使用者自己的東西，名字故意和 App 的一樣。PaperNoteBackup 同層、上層的都不能動
         let root = try XCTUnwrap(drive.folder(path: [BackupManager.rootFolderName]))
-        let notebookFolder = try XCTUnwrap(drive.notebookFolder(nb.id))
+        let notebooks = try XCTUnwrap(drive.folder(path: [BackupManager.rootFolderName, "Notebooks"]))
         let users = [
             drive.addUserFile(name: "畢業論文.pdf", parent: "root"),
             drive.addUserFile(name: BackupManifest.fileName, parent: "root"),
             drive.addUserFile(name: "document.json", parent: "root"),
+            drive.addUserFile(name: "\(nb.id.uuidString).papernote", parent: "root"),
             drive.addUserFile(name: "我放進來的.pdf", parent: root.id),
+            drive.addUserFile(name: "我放進來的.pdf", parent: notebooks.id),
         ]
-        let insideNotebook = drive.addUserFile(name: "我放進筆記本資料夾的.pdf", parent: notebookFolder.id)
         let lookalike = drive.addUserFile(name: "Notebooks", parent: "root", isFolder: true)
         let lookalikeNotebook = drive.addUserFile(name: nb.id.uuidString, parent: lookalike, isFolder: true)
         let lookalikeFile = drive.addUserFile(name: "document.json", parent: lookalikeNotebook)
@@ -397,8 +843,7 @@ final class BackupTests: XCTestCase {
         d.store.deleteNotebook(nb.id)
         _ = try await d.backup.syncWithRetry()
 
-        XCTAssertNil(drive.notebookFolder(nb.id))
-        XCTAssertNil(drive.items[insideNotebook])
+        XCTAssertNil(drive.papernote(nb.id))
         for id in users + [lookalike, lookalikeNotebook, lookalikeFile] {
             XCTAssertNotNil(drive.items[id], "使用者的檔案不能不見")
         }
@@ -479,6 +924,45 @@ final class BackupTests: XCTestCase {
 
     // MARK: 還原照清單
 
+    /// 回報的問題：還原到一半斷線（螢幕暗掉、切出 App），下載好的筆記本在重開 App 後
+    /// 變成最外層的「復原的筆記本」；再還原一次只補回空的資料夾
+    func testInterruptedRestoreKeepsNamesAndFolders() async throws {
+        let a = try device()
+        let folder = a.store.createFolder(name: "課程", parent: nil)
+        let first = notebook("第一本", on: a, folder: folder.id)
+        let second = notebook("第二本", on: a, folder: folder.id)
+        _ = try await a.backup.syncWithRetry()
+        let titles = [first.id: "第一本", second.id: "第二本"]
+
+        // 第一本下載好之後斷線
+        let notebooks = try XCTUnwrap(drive.folder(path: [BackupManager.rootFolderName, "Notebooks"]))
+        let order = try await drive.children(of: notebooks.id)
+        XCTAssertEqual(order.count, 2)
+        let done = try XCTUnwrap(UUID(uuidString: String(order[0].name.dropLast(".papernote".count))))
+        let b = try Device(drive: FailingDeleteDrive(drive, failingID: order[1].id))
+        devices.append(b)
+        do {
+            _ = try await b.backup.restore()
+            XCTFail("第二本應該斷線")
+        } catch {}
+
+        let nb = try XCTUnwrap(b.store.notebook(done), "下載好的筆記本要馬上記進資料庫")
+        XCTAssertEqual(nb.title, titles[done])
+        XCTAssertEqual(nb.folderId, folder.id)
+        XCTAssertNotNil(b.store.folder(folder.id))
+
+        // 重開 App 不能多出「復原的筆記本」
+        let relaunched = LibraryStore(documentsURL: b.store.documentsURL)
+        XCTAssertEqual(relaunched.index.notebooks.map(\.title), [titles[done]])
+
+        // 網路恢復後再還原：剩下的回到原本的資料夾
+        let again = BackupManager(drive: drive, library: b.store, global: b.global, stateURL: b.dir.appendingPathComponent("state-again.json"))
+        let result = try await again.restore()
+        XCTAssertEqual(result, RestoreResult(notebooks: 1, trashed: 0))
+        XCTAssertEqual(Set(b.store.notebooks(in: folder.id).map(\.title)), ["第一本", "第二本"])
+        XCTAssertTrue(b.store.notebooks(in: nil).isEmpty)
+    }
+
     /// 需求：在垃圾桶的還原後還在垃圾桶（刪除時間也一樣），永久刪除的不還原，一般的正常回來
     func testRestoreFollowsTheManifest() async throws {
         let a = try device()
@@ -517,9 +1001,9 @@ final class BackupTests: XCTestCase {
         let nb = notebook("刪到一半", on: a)
         _ = try await a.backup.syncWithRetry()
         a.store.deleteNotebook(nb.id)
-        let flaky = BackupManager(drive: FailingDeleteDrive(drive), library: a.store, stateURL: a.dir.appendingPathComponent("state.json"))
+        let flaky = BackupManager(drive: FailingDeleteDrive(drive), library: a.store, global: a.global, stateURL: a.dir.appendingPathComponent("state.json"))
         do { _ = try await flaky.syncWithRetry() } catch {}
-        XCTAssertGreaterThan(drive.filesAnywhere(under: try XCTUnwrap(drive.notebookFolder(nb.id)).id).count, 0)
+        XCTAssertNotNil(drive.papernote(nb.id))
 
         let b = try device()
         let result = try await b.backup.restore()
@@ -563,8 +1047,8 @@ final class BackupTests: XCTestCase {
 
         XCTAssertEqual(try status(nb.id), .active, "還沒還原的還在清單裡")
         XCTAssertEqual(try status(mine.id), .active)
-        XCTAssertEqual(drive.count(named: "library.json", in: root.id), 1, "不會多一份")
-        XCTAssertEqual(drive.count(named: BackupManifest.fileName, in: root.id), 1)
+        XCTAssertEqual(drive.count(named: "library.json", in: root.id), 0, "清單裡都有，不用另外傳")
+        XCTAssertEqual(drive.count(named: BackupManifest.fileName, in: root.id), 1, "不會多一份")
 
         let result = try await b.backup.restore()
         XCTAssertEqual(result.notebooks, 1)
@@ -572,8 +1056,8 @@ final class BackupTests: XCTestCase {
 
         // 還原回來的再備份：覆蓋原本的檔案，不會多一份
         _ = try await b.backup.syncWithRetry()
-        let folder = try XCTUnwrap(drive.notebookFolder(nb.id))
-        XCTAssertEqual(drive.count(named: "document.json", in: folder.id), 1)
+        let notebooks = try XCTUnwrap(drive.folder(path: [BackupManager.rootFolderName, "Notebooks"]))
+        XCTAssertEqual(drive.count(named: "\(nb.id.uuidString).papernote", in: notebooks.id), 1)
     }
 
     /// 這次更新前的備份（沒有清單）：名稱照 library.json；
@@ -584,10 +1068,13 @@ final class BackupTests: XCTestCase {
         let leftover = notebook("以前刪掉的", on: a)
         _ = try await a.backup.syncWithRetry()
         let root = try XCTUnwrap(drive.folder(path: [BackupManager.rootFolderName]))
+        // 那時候的備份有 library.json
         var index = a.store.index
         index.notebooks.removeAll { $0.id == leftover.id }
-        let lib = try await fileID("library.json", in: root.id)
-        drive.items[lib]?.data = try JSONEncoder.app.encode(index)
+        let lib = FileManager.default.temporaryDirectory.appendingPathComponent("library-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: lib) }
+        try JSONEncoder.app.encode(index).write(to: lib)
+        _ = try await drive.upload(lib, name: "library.json", parent: root.id, existingID: nil)
         let manifest = try await fileID(BackupManifest.fileName, in: root.id)
         try await drive.trashFile(DriveFile(id: manifest, name: BackupManifest.fileName, mimeType: "application/json"))
 
@@ -606,6 +1093,7 @@ final class BackupTests: XCTestCase {
         let a = try device()
         let nb = notebook("重複", on: a)
         _ = try await a.backup.syncWithRetry()
+        try await makeOldFormat(nb.id)
         let folder = try XCTUnwrap(drive.notebookFolder(nb.id))
         let page = { Page(background: .paper(width: 100, height: 100, style: .blank)) }
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("dup-\(UUID().uuidString)", isDirectory: true)
@@ -614,6 +1102,7 @@ final class BackupTests: XCTestCase {
         try NotebookSession.writeDocument(NotebookDocument(pages: [page(), page()]), to: tmp)
         _ = try await drive.upload(NotebookSession.documentURL(in: tmp), name: "document.json", parent: folder.id, existingID: nil)
         XCTAssertEqual(drive.count(named: "document.json", in: folder.id), 2)
+        XCTAssertNil(drive.papernote(nb.id))
 
         let b = try device()
         _ = try await b.backup.restore()
@@ -629,12 +1118,13 @@ final class BackupTests: XCTestCase {
     // MARK: 回報的問題：看起來每次都全部重傳
 
     private func relaunched(_ d: Device, drive api: DriveAPI? = nil) -> BackupManager {
-        BackupManager(drive: api ?? drive, library: d.store, stateURL: d.dir.appendingPathComponent("state.json"))
+        BackupManager(drive: api ?? drive, library: d.store, global: d.global, stateURL: d.dir.appendingPathComponent("state.json"))
     }
 
     private func resetCounters() {
         drive.uploads = []
         drive.lookups = []
+        drive.listings = []
     }
 
     /// 關掉 App 再打開：紀錄要讀得回來、修改時間要對得上，連比對都不用
@@ -649,32 +1139,7 @@ final class BackupTests: XCTestCase {
 
         XCTAssertEqual(count, 0)
         XCTAssertEqual(drive.uploads, [])
-        XCTAssertFalse(drive.lookups.contains("document.json"), "修改時間存檔後要一模一樣")
-        XCTAssertFalse(drive.lookups.contains("page.drawing"))
-    }
-
-    /// 更新 App 前留下的紀錄沒有 MD5：不能因此全部重傳
-    func testOldStateFileDoesNotReupload() async throws {
-        let d = try device()
-        let nb = notebook("舊紀錄", on: d)
-        _ = try await d.backup.syncWithRetry()
-        let url = d.dir.appendingPathComponent("state.json")
-        var state = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
-        var files = try XCTUnwrap(state["files"] as? [String: [String: Any]])
-        for key in files.keys { files[key]?["md5"] = nil }
-        state["files"] = files
-        try JSONSerialization.data(withJSONObject: state).write(to: url)
-        resetCounters()
-
-        // 內容沒變、時間也沒變
-        _ = try await relaunched(d).syncWithRetry()
-        XCTAssertEqual(drive.uploads, [])
-
-        // 時間變了、紀錄沒有 MD5：和雲端比，一樣就不傳
-        let doc = NotebookSession.documentURL(in: d.store.notebookURL(nb.id))
-        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-500)], ofItemAtPath: doc.path)
-        _ = try await relaunched(d).syncWithRetry()
-        XCTAssertEqual(drive.uploads, [])
+        XCTAssertEqual(drive.listings, [], "修改時間存檔後要一模一樣，連雲端都不用問")
     }
 
     /// 內容一樣、只是重新存過（例如打開筆記本重畫縮圖）：不傳，也不用問雲端
@@ -691,14 +1156,14 @@ final class BackupTests: XCTestCase {
 
         XCTAssertEqual(count, 0)
         XCTAssertEqual(drive.uploads, [])
-        XCTAssertFalse(drive.lookups.contains("cover.jpg"))
+        XCTAssertEqual(drive.listings, [])
 
         // 之後時間沒再變：也不用再算一次
         let again = try await relaunched(d).syncWithRetry()
         XCTAssertEqual(again, 0)
     }
 
-    /// 只改一個檔案：只傳那一個
+    /// 只改一本的一個檔案：只傳那本
     func testOnlyTheChangedFileIsUploaded() async throws {
         let d = try device()
         let nb = notebook("改這本", on: d)
@@ -711,7 +1176,7 @@ final class BackupTests: XCTestCase {
         try Data("新的筆跡內容".utf8).write(to: ink)
         let count = try await d.backup.syncWithRetry()
 
-        XCTAssertEqual(drive.uploads, ["page.drawing"])
+        XCTAssertEqual(drive.uploads, ["\(nb.id.uuidString).papernote"])
         XCTAssertEqual(count, 1)
     }
 
@@ -741,17 +1206,14 @@ final class BackupTests: XCTestCase {
         resetCounters()
         _ = try await b.backup.syncWithRetry()
 
-        XCTAssertFalse(drive.uploads.contains("document.json"))
-        XCTAssertFalse(drive.uploads.contains("page.drawing"))
+        XCTAssertFalse(drive.uploads.contains("\(nb.id.uuidString).papernote"))
     }
 
-    /// 備份到一半被中斷：傳好的要記得，不足 10 個也一樣
+    /// 備份到一半被中斷：傳好的要記得，下次只傳沒傳好的
     func testInterruptedBackupKeepsProgress() async throws {
         let d = try device()
-        let nb = notebook("中斷", on: d)
-        let dir = d.store.notebookURL(nb.id)
-        for i in 1...4 { try Data("頁 \(i)".utf8).write(to: dir.appendingPathComponent("p\(i).drawing")) }
-        // 清單、library.json、第一個檔案會成功
+        for i in 1...4 { _ = notebook("中斷 \(i)", on: d) }
+        // 清單和兩本會成功
         let flaky = relaunched(d, drive: FailingDeleteDrive(drive, uploadsBeforeFailure: 3))
         do {
             _ = try await flaky.syncWithRetry()
@@ -761,8 +1223,7 @@ final class BackupTests: XCTestCase {
 
         _ = try await relaunched(d).syncWithRetry()
 
-        let names = drive.lookups.filter { $0 != BackupManifest.fileName && $0 != "library.json" }
-        XCTAssertEqual(names.count, 4, "共 5 個檔案，傳好的那個不用再比對")
+        XCTAssertEqual(drive.uploads.filter { $0.hasSuffix(".papernote") }.count, 2, "共 4 本，傳好的兩本不用再傳")
     }
 
     func testMD5MatchesTheFormatDriveUses() throws {
@@ -827,7 +1288,7 @@ final class BackupTests: XCTestCase {
             }
             XCTAssertEqual(drive.items[id]?.data, Data(bad.utf8), "雲端不變")
         }
-        XCTAssertNotNil(drive.notebookFolder(nb.id))
+        XCTAssertNotNil(drive.papernote(nb.id))
     }
 
     /// 一樣的內容不重傳清單
@@ -846,26 +1307,35 @@ final class BackupTests: XCTestCase {
     }
 }
 
-/// 刪除時會失敗的 Drive（例如網路斷了）
+/// 刪除時會失敗的 Drive（例如網路斷了）；也可以在讀某個資料夾或下載某個檔案時斷線
+@MainActor
 private final class FailingDeleteDrive: DriveAPI {
     private let base: FakeDrive
     private var uploadsLeft: Int
+    private let failingID: String?
 
-    init(_ base: FakeDrive, uploadsBeforeFailure: Int = .max) {
+    init(_ base: FakeDrive, uploadsBeforeFailure: Int = .max, failingID: String? = nil) {
         self.base = base
         uploadsLeft = uploadsBeforeFailure
+        self.failingID = failingID
     }
 
     func findFolder(named name: String, in parent: String) async throws -> String? { try await base.findFolder(named: name, in: parent) }
     func findFile(named name: String, in parent: String) async throws -> DriveFile? { try await base.findFile(named: name, in: parent) }
     func createFolder(named name: String, in parent: String) async throws -> String { try await base.createFolder(named: name, in: parent) }
-    func children(of folder: String) async throws -> [DriveFile] { try await base.children(of: folder) }
+    func children(of folder: String) async throws -> [DriveFile] {
+        if folder == failingID { throw BackupError.http(500, "斷線") }
+        return try await base.children(of: folder)
+    }
     func upload(_ fileURL: URL, name: String, parent: String, existingID: String?) async throws -> String {
         guard uploadsLeft > 0 else { throw BackupError.http(500, "斷線") }
         uploadsLeft -= 1
         return try await base.upload(fileURL, name: name, parent: parent, existingID: existingID)
     }
-    func download(_ fileID: String, to destination: URL) async throws { try await base.download(fileID, to: destination) }
+    func download(_ fileID: String, to destination: URL) async throws {
+        if fileID == failingID { throw BackupError.http(500, "斷線") }
+        try await base.download(fileID, to: destination)
+    }
     func trashFile(_ file: DriveFile) async throws { throw BackupError.http(500, "斷線") }
     func trashFolder(_ folder: DriveFile) async throws { throw BackupError.http(500, "斷線") }
 }

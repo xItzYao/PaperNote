@@ -146,48 +146,103 @@ struct ZipArchive {
     }
 }
 
-/// 寫 zip 檔（不壓縮：筆記本裡大多是 PDF 和圖片，本來就壓縮過；檔名標 UTF-8）
+/// 寫 zip 檔（檔名標 UTF-8）。文字、筆跡用 deflate 壓縮；PDF、圖片本來就壓縮過，原樣放。
+/// 沒有時間戳記：內容一樣，寫出來的 zip 就一模一樣（備份靠這個判斷要不要重傳）
 struct ZipWriter {
     private var out = Data()
+    /// 有值＝直接寫進檔案（大 PDF 不用整個 zip 放在記憶體）
+    private let file: FileHandle?
+    private var offset = 0
     private var central = Data()
     private var count = 0
 
-    /// path：zip 裡的路徑，用「/」分隔
-    mutating func add(_ path: String, _ data: Data) throws {
+    /// 本來就壓縮過的檔案：再壓也不會變小，只是白花時間
+    private static let compressedExtensions: Set<String> = ["pdf", "jpg", "jpeg", "png", "heic", "gif", "webp", "zip", "papernote",
+                                                            "mp4", "mov", "m4a"]
+
+    /// 寫在記憶體裡，用 finish() 拿結果
+    init() { file = nil }
+
+    /// 直接寫進 url，最後要 close()
+    init(writingTo url: URL) throws {
+        try? FileManager.default.removeItem(at: url)
+        guard FileManager.default.createFile(atPath: url.path, contents: nil) else { throw ZipError.unsupported(url.lastPathComponent) }
+        file = try FileHandle(forWritingTo: url)
+    }
+
+    /// path：zip 裡的路徑，用「/」分隔。compress 沒指定就看副檔名決定
+    mutating func add(_ path: String, _ data: Data, compress: Bool? = nil) throws {
         let name = Data(path.utf8)
-        guard data.count < 0xFFFF_FFFF, out.count < 0xFFFF_FFFF, name.count < 0xFFFF else { throw ZipError.unsupported(path) }
-        let crc = CRC32.checksum(data), size = UInt32(data.count), offset = UInt32(out.count)
-        // 檔案標頭：版本、旗標（UTF-8 檔名）、不壓縮、時間、日期、CRC、大小×2、檔名長度、額外欄位長度
-        Self.u32(0x0403_4b50, &out)
-        for v: UInt16 in [20, 0x800, 0, 0, 0x21] { Self.u16(v, &out) }
-        for v in [crc, size, size] { Self.u32(v, &out) }
-        Self.u16(UInt16(name.count), &out)
-        Self.u16(0, &out)
-        out.append(name)
-        out.append(data)
-        // 目錄：版本×2、旗標、不壓縮、時間、日期、CRC、大小×2、檔名／額外／註解長度、磁碟、內部屬性、外部屬性、位置
+        guard data.count < 0xFFFF_FFFF, offset < 0xFFFF_FFFF, name.count < 0xFFFF else { throw ZipError.unsupported(path) }
+        let ext = (path as NSString).pathExtension.lowercased()
+        let packed = (compress ?? !Self.compressedExtensions.contains(ext)) ? Self.deflate(data) : nil
+        let body = packed ?? data
+        let method: UInt16 = packed == nil ? 0 : 8
+        let crc = CRC32.checksum(data), csize = UInt32(body.count), usize = UInt32(data.count), at = UInt32(offset)
+        // 檔案標頭：版本、旗標（UTF-8 檔名）、壓縮方式、時間、日期、CRC、大小×2、檔名長度、額外欄位長度
+        var header = Data()
+        Self.u32(0x0403_4b50, &header)
+        for v: UInt16 in [20, 0x800, method, 0, 0x21] { Self.u16(v, &header) }
+        for v in [crc, csize, usize] { Self.u32(v, &header) }
+        Self.u16(UInt16(name.count), &header)
+        Self.u16(0, &header)
+        header.append(name)
+        try write(header)
+        try write(body)
+        // 目錄：版本×2、旗標、壓縮方式、時間、日期、CRC、大小×2、檔名／額外／註解長度、磁碟、內部屬性、外部屬性、位置
         Self.u32(0x0201_4b50, &central)
-        for v: UInt16 in [20, 20, 0x800, 0, 0, 0x21] { Self.u16(v, &central) }
-        for v in [crc, size, size] { Self.u32(v, &central) }
+        for v: UInt16 in [20, 20, 0x800, method, 0, 0x21] { Self.u16(v, &central) }
+        for v in [crc, csize, usize] { Self.u32(v, &central) }
         for v: UInt16 in [UInt16(name.count), 0, 0, 0, 0] { Self.u16(v, &central) }
         Self.u32(0, &central)
-        Self.u32(offset, &central)
+        Self.u32(at, &central)
         central.append(name)
         count += 1
     }
 
-    /// 寫完的 zip
-    func finish() throws -> Data {
-        guard count < 0xFFFF, out.count < 0xFFFF_FFFF else { throw ZipError.unsupported("zip") }
-        var d = out
-        let cdOffset = UInt32(d.count)
-        d.append(central)
+    private mutating func write(_ d: Data) throws {
+        if let file { try file.write(contentsOf: d) } else { out.append(d) }
+        offset += d.count
+    }
+
+    /// 目錄結尾
+    private func trailer() throws -> Data {
+        guard count < 0xFFFF, offset < 0xFFFF_FFFF else { throw ZipError.unsupported("zip") }
+        var d = central
         Self.u32(0x0605_4b50, &d)
         for v: UInt16 in [0, 0, UInt16(count), UInt16(count)] { Self.u16(v, &d) }
         Self.u32(UInt32(central.count), &d)
-        Self.u32(cdOffset, &d)
+        Self.u32(UInt32(offset), &d)
         Self.u16(0, &d)
         return d
+    }
+
+    /// 寫完的 zip（寫在記憶體裡的）
+    func finish() throws -> Data {
+        try out + trailer()
+    }
+
+    /// 寫進檔案的：補上目錄後關檔
+    mutating func close() throws {
+        guard let file else { return }
+        try file.write(contentsOf: trailer())
+        try file.close()
+    }
+
+    /// zip 用的 raw deflate；沒有變小就回傳 nil（原樣放）
+    private static func deflate(_ data: Data) -> Data? {
+        guard data.count > 64 else { return nil }
+        var out = Data(count: data.count)
+        let n = out.withUnsafeMutableBytes { dst in
+            data.withUnsafeBytes { src in
+                compression_encode_buffer(dst.bindMemory(to: UInt8.self).baseAddress!, data.count,
+                                          src.bindMemory(to: UInt8.self).baseAddress!, data.count,
+                                          nil, COMPRESSION_ZLIB)
+            }
+        }
+        guard n > 0, n < data.count else { return nil }
+        out.count = n
+        return out
     }
 
     private static func u16(_ v: UInt16, _ d: inout Data) {

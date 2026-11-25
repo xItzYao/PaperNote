@@ -1,4 +1,5 @@
 import SwiftUI
+import StoreKit
 import UIKit
 import UniformTypeIdentifiers
 
@@ -27,6 +28,7 @@ struct OpenRequest: Identifiable {
 
 struct RootView: View {
     @EnvironmentObject var store: LibraryStore
+    @Environment(\.requestReview) private var requestReview
     @State private var path: [FolderRoute] = []
     @State private var showEditor = false
     @State private var importError: String?
@@ -53,6 +55,25 @@ struct RootView: View {
         }
         .onAppear {
             BackupManager.shared.start()
+            if !ReviewPrompt.isTestRun, ReviewPrompt.recordLaunch() {
+                // 等資料庫畫面出來一下再問
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(2))
+                    requestReview()
+                }
+            }
+            #if DEBUG
+            // App Store 截圖：清空資料庫、放示範筆記，打開要截的那一頁（書櫃那張不打開）
+            if ScreenshotDemo.isOn {
+                if let target = ScreenshotDemo.build(store: store) {
+                    for id in target.otherTabs { TabStore.shared.open(id, page: nil) }
+                    open(target.notebook, target.page)
+                } else {
+                    ScreenshotDemo.markReady(in: nil, after: 4)
+                }
+                return
+            }
+            #endif
             // UI 測試：直接打開一本有好幾頁的新筆記本
             if ProcessInfo.processInfo.arguments.contains("-uiTestNotebook") {
                 let meta = store.createNotebook(title: "UI Test", folder: nil, paper: .blank, landscape: false)

@@ -1,0 +1,103 @@
+name: App Store screenshots
+
+# 13 吋 iPad 模擬器上截 App Store 的圖（示範筆記，見 PaperNote/Util/ScreenshotDemo.swift）。
+# 推到 app-store-screenshots 分支就會跑；結果在這次執行的 Artifacts「app-store-screenshots」
+on:
+  push:
+    branches: [app-store-screenshots]
+  workflow_dispatch:
+    inputs:
+      scenes:
+        description: '只截這些場景（逗號分開：notes,pdf,circuit,pin,extend,table,library）；空白＝全部'
+        required: false
+        type: string
+        default: ''
+      langs:
+        description: '語言（zh-Hant,en）；空白＝兩種'
+        required: false
+        type: string
+        default: ''
+
+concurrency:
+  group: screenshots-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  screenshots:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app || sudo xcode-select -s "$(ls -d /Applications/Xcode_16*.app | sort -V | tail -1)"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: Boot the 13-inch iPad simulator
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys, re
+          devs = json.load(sys.stdin)["devices"]
+          def ver(k):
+              m = re.search(r"iOS-(\d+)-(\d+)", k)
+              return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+          for k in sorted((k for k in devs if "iOS" in k), key=ver, reverse=True):
+              for d in devs[k]:
+                  if d["name"].startswith("iPad Pro 13-inch"):
+                      print(d["udid"]); sys.exit()
+          sys.exit("沒有 13 吋 iPad 模擬器")
+          ')
+          xcrun simctl list devices | grep "$UDID"
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b > /dev/null
+          # App Store 截圖慣例：9:41、滿格電量
+          xcrun simctl status_bar "$UDID" override --time "9:41" --dataNetwork wifi --wifiMode active --wifiBars 3 \
+            --cellularMode notSupported --batteryState charged --batteryLevel 100
+
+      - name: Take the screenshots
+        env:
+          TEST_RUNNER_PAPERNOTE_SCREENSHOTS: '1'
+          TEST_RUNNER_SCREENSHOT_SCENES: ${{ inputs.scenes }}
+          TEST_RUNNER_SCREENSHOT_LANGS: ${{ inputs.langs }}
+        run: |
+          set -o pipefail
+          export TEST_RUNNER_SCREENSHOT_DIR="$PWD/shots"
+          mkdir -p shots
+          FILTER="error:|Test Case .* (passed|failed|skipped)|XCTAssert|Executed|TEST (BUILD |EXECUTE )?(SUCCEEDED|FAILED)"
+          xcodebuild build-for-testing -project PaperNote.xcodeproj -scheme PaperNoteUITests \
+            -destination "id=$UDID" -derivedDataPath build CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO ONLY_ACTIVE_ARCH=YES \
+            2>&1 | tee test.log | grep -E "$FILTER" || true
+          grep -q "TEST BUILD SUCCEEDED" test.log
+          xcodebuild test-without-building -project PaperNote.xcodeproj -scheme PaperNoteUITests \
+            -destination "id=$UDID" -derivedDataPath build -parallel-testing-enabled NO -collect-test-diagnostics never \
+            -only-testing:PaperNoteUITests/AppStoreScreenshotUITests -resultBundlePath shots.xcresult CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee -a test.log | grep -E "$FILTER" || true
+
+      - name: Collect the images
+        if: ${{ !cancelled() }}
+        run: |
+          # 測試直接寫到 shots/；寫不進去的話從測試結果裡拿附件
+          if ! ls shots/*.png > /dev/null 2>&1 && [ -d shots.xcresult ]; then
+            xcrun xcresulttool export attachments --path shots.xcresult --output-path shots || true
+          fi
+          ls -la shots
+          for f in shots/*.png; do [ -e "$f" ] && echo "$f $(sips -g pixelWidth -g pixelHeight "$f" | awk '/pixel/ {printf "%s ", $2}')"; done
+          grep -qE "TEST (EXECUTE )?SUCCEEDED" test.log
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-store-screenshots
+          path: |
+            shots
+            test.log
+          if-no-files-found: warn

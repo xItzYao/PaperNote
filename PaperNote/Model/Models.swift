@@ -282,6 +282,8 @@ extension JSONEncoder {
     static var app: JSONEncoder {
         let e = JSONEncoder()
         e.dateEncodingStrategy = .iso8601
+        // 一樣的內容每次都寫出一樣的字（字典的順序每次開 App 都不同）
+        e.outputFormatting = [.sortedKeys]
         return e
     }
 }

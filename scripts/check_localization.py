@@ -17,7 +17,8 @@ IDEO = re.compile(r"[㐀-鿿]")
 PH = re.compile(r"%(?:\d+\$)?@")
 # 這些行的字串不給使用者看
 SKIP_LINE = re.compile(r"DebugLog\.|uiTestTrace|\bprint\(|fatalError\(|assert\(|assertionFailure\(|precondition\(|NSLog\(")
-SKIP_FILES = {"PaperNote/Util/DebugLog.swift"}
+# ScreenshotDemo：App Store 截圖的示範筆記（只在 Debug 版），中英文在裡面各寫一份
+SKIP_FILES = {"PaperNote/Util/DebugLog.swift", "PaperNote/Util/ScreenshotDemo.swift"}
 # 刻意不翻譯：字體範例、語言名稱本身
 SKIP_TEXT = {"永字八法 Aa 123", "語言 Language", "繁體中文"}
 

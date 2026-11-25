@@ -24,6 +24,13 @@ final class PinStore {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         dir = support.appendingPathComponent("Pins", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        reload()
+    }
+
+    /// 從雲端還原（合併進磁碟上的檔案）之後重新讀
+    func reload() {
+        cache.removeAllObjects()
+        pins = []
         if let data = try? Data(contentsOf: indexURL), let saved = try? JSONDecoder().decode([PinRecord].self, from: data) {
             pins = saved.filter { FileManager.default.fileExists(atPath: dir.appendingPathComponent($0.file).path) }
         }

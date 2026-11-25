@@ -34,6 +34,43 @@ struct PaperNoteManifest: Codable {
     var coverHex: String
 }
 
+/// .papernote 檔：papernote.json，加上 notebook/ 底下筆記本資料夾的內容。匯出、匯入、雲端備份都用這個
+enum PaperNoteFile {
+    static let manifestName = "papernote.json"
+    static let notebookPrefix = "notebook/"
+
+    /// files：筆記本資料夾裡的檔案和路徑，照這個順序寫（順序一樣、內容一樣，檔案就一模一樣）
+    static func write(_ manifest: PaperNoteManifest, files: [(url: URL, path: String)], to url: URL) throws {
+        var zip = try ZipWriter(writingTo: url)
+        try zip.add(manifestName, JSONEncoder.app.encode(manifest))
+        for f in files {
+            try zip.add(notebookPrefix + f.path, Data(contentsOf: f.url, options: .alwaysMapped))
+        }
+        try zip.close()
+    }
+
+    static func manifest(in archive: ZipArchive) -> PaperNoteManifest? {
+        guard let m = archive.entries.first(where: { $0.path == manifestName }) else { return nil }
+        return try? JSONDecoder.app.decode(PaperNoteManifest.self, from: archive.contents(of: m))
+    }
+
+    /// 解出 notebook/ 底下的檔案到 dir。路徑跑出 dir 的（../、空的）當成壞掉
+    static func extract(_ archive: ZipArchive, into dir: URL) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        for e in archive.entries where e.path.hasPrefix(notebookPrefix) && !e.isDirectory {
+            let rel = String(e.path.dropFirst(notebookPrefix.count))
+            let comps = rel.split(separator: "/", omittingEmptySubsequences: false)
+            guard !comps.isEmpty, !comps.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) else {
+                throw ZipError.corrupt(e.path)
+            }
+            let dest = dir.appendingPathComponent(rel)
+            try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try archive.extract(e, to: dest)
+        }
+    }
+}
+
 extension Notification.Name {
     /// 筆記本改名了（object：筆記本的 UUID）
     static let notebookRenamed = Notification.Name("PaperNote.notebookRenamed")
@@ -415,25 +452,14 @@ final class LibraryStore: ObservableObject {
 
         let archive: ZipArchive
         do { archive = try ZipArchive(url: url) } catch { throw LibraryError.notPaperNote }
-        guard let m = archive.entries.first(where: { $0.path == "papernote.json" }),
-              let manifest = try? JSONDecoder.app.decode(PaperNoteManifest.self, from: archive.contents(of: m))
-        else { throw LibraryError.notPaperNote }
+        guard let manifest = PaperNoteFile.manifest(in: archive) else { throw LibraryError.notPaperNote }
         guard manifest.format <= PaperNoteManifest.currentFormat else { throw LibraryError.newerPaperNote }
 
         var meta = NotebookMeta(title: availableName(manifest.title, forFolder: false, in: folder), folderId: folder, coverHex: manifest.coverHex)
         let dir = notebookURL(meta.id)
         do {
-            for e in archive.entries where e.path.hasPrefix("notebook/") && !e.isDirectory {
-                // 只解到這本筆記本的資料夾裡（擋掉「..」這種會跑到外面的路徑）
-                let rel = String(e.path.dropFirst("notebook/".count))
-                let comps = rel.split(separator: "/", omittingEmptySubsequences: false)
-                guard !comps.isEmpty, !comps.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) else {
-                    throw LibraryError.notPaperNote
-                }
-                let dest = dir.appendingPathComponent(rel)
-                try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try archive.extract(e, to: dest)
-            }
+            // 只解到這本筆記本的資料夾裡（擋掉「..」這種會跑到外面的路徑）
+            try PaperNoteFile.extract(archive, into: dir)
             let doc = try JSONDecoder.app.decode(NotebookDocument.self,
                                                  from: Data(contentsOf: NotebookSession.documentURL(in: dir)))
             meta.pageCount = doc.pages.count
@@ -556,9 +582,13 @@ final class LibraryStore: ObservableObject {
         save()
     }
 
+    /// 真的有改才存（library.json 和雲端清單沒變，備份就不用傳）
     func updateMeta(_ id: UUID, _ change: (inout NotebookMeta) -> Void) {
         guard let i = index.notebooks.firstIndex(where: { $0.id == id }) else { return }
-        change(&index.notebooks[i])
+        var meta = index.notebooks[i]
+        change(&meta)
+        guard meta != index.notebooks[i] else { return }
+        index.notebooks[i] = meta
         save()
     }
 

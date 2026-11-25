@@ -147,9 +147,26 @@ final class DriveClient: DriveAPI {
 
     func download(_ fileID: String, to destination: URL) async throws {
         let url = URL(string: "https://www.googleapis.com/drive/v3/files/\(fileID)?alt=media")!
-        let (data, _) = try await send { self.request(url, "GET", $0) }
-        try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: destination, options: .atomic)
+        // 直接下載成檔案：還原時同時下載好幾個大 PDF，不用整個放進記憶體
+        let fm = FileManager.default
+        for attempt in 0..<2 {
+            let token = try await accessToken()
+            let (tmp, resp) = try await URLSession.shared.download(for: request(url, "GET", token))
+            defer { try? fm.removeItem(at: tmp) }
+            guard let http = resp as? HTTPURLResponse else { throw BackupError.http(0, "") }
+            if http.statusCode == 401 && attempt == 0 {
+                auth.invalidateAccessToken()
+                continue
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                throw BackupError.http(http.statusCode, (try? String(contentsOf: tmp, encoding: .utf8)) ?? "")
+            }
+            try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? fm.removeItem(at: destination)
+            try fm.moveItem(at: tmp, to: destination)
+            return
+        }
+        throw BackupError.http(401, "")
     }
 
     /// 資料夾要走 trashFolder，不會誤丟整個資料夾

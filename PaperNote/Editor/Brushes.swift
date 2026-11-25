@@ -215,6 +215,17 @@ final class BrushStore {
     }
 
     private init() {
+        allPresets = []
+        load()
+    }
+
+    /// 從雲端還原（合併進偏好設定）之後重新讀
+    func reload() {
+        load()
+    }
+
+    private func load() {
+        currentIDs = [:]
         if let data = UserDefaults.standard.data(forKey: key),
            let saved = try? JSONDecoder().decode([BrushPreset].self, from: data), !saved.isEmpty {
             allPresets = saved
