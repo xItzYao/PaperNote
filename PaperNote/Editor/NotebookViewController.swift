@@ -214,6 +214,9 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var didInitialLayout = false
     var lastLayoutWidth: CGFloat = 0
     var isApplyingDrawing = false
+    /// 畫布上次從各頁組起來、或拆回各頁時的筆跡內容。沒變就不重拆：
+    /// 拆的時候座標要減回去，小數可能差一點點，存檔就會以為每一頁都改過
+    var committedCanvasData: Data?
     var saveWorkItem: DispatchWorkItem?
     var keyboardInset: CGFloat = 0
 
@@ -477,9 +480,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         DebugLog.watchMainThread()
 
         computeLayout()
-        isApplyingDrawing = true
-        canvas.drawing = assembleDrawing()
-        isApplyingDrawing = false
+        loadCanvasFromPages()
         applyTool()
 
         let nc = NotificationCenter.default
@@ -982,9 +983,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         commitDrawing()
         change()
         computeLayout()
-        isApplyingDrawing = true
-        canvas.drawing = assembleDrawing()
-        isApplyingDrawing = false
+        loadCanvasFromPages()
         history.removeAll()
         for v in pageViews.values {
             v.removeFromSuperview()
@@ -1013,8 +1012,20 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: w)
     }
 
+    /// 各頁的筆跡組到畫布上
+    func loadCanvasFromPages() {
+        isApplyingDrawing = true
+        canvas.drawing = assembleDrawing()
+        isApplyingDrawing = false
+        committedCanvasData = canvas.drawing.dataRepresentation()
+    }
+
+    /// 畫布的筆跡拆回各頁（畫布沒變就不拆，各頁維持原本的資料）
     func commitDrawing() {
+        let data = canvas.drawing.dataRepresentation()
+        guard data != committedCanvasData else { return }
         session.drawings = splitDrawing(canvas.drawing)
+        committedCanvasData = data
     }
 
     func saveNow() {

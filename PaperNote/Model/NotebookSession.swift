@@ -11,6 +11,10 @@ final class NotebookSession {
     var drawings: [UUID: PKDrawing] = [:]
 
     private var savedDrawingData: [UUID: Data] = [:]
+    /// 上次存的（或打開時的）document.json 內容：一樣就不重寫
+    private var savedDocumentData: Data?
+    /// 上次畫縮圖之後有存過改動
+    private(set) var needsThumbnails = false
     private var pdfCache: [String: PDFDocument] = [:]
     private let imageCache = NSCache<NSString, UIImage>()
     private let fm = FileManager.default
@@ -35,6 +39,7 @@ final class NotebookSession {
         directory = LibraryStore.shared.notebookURL(id)
         let data = try Data(contentsOf: Self.documentURL(in: directory))
         document = try JSONDecoder.app.decode(NotebookDocument.self, from: data)
+        savedDocumentData = try? JSONEncoder.app.encode(document)
         for dir in [filesURL, drawingsURL, thumbsURL] {
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
@@ -213,9 +218,18 @@ final class NotebookSession {
 
     // MARK: Save
 
+    /// 只寫有改的檔案；什麼都沒改（只是打開看、螢幕變暗）就不動任何檔案，修改日期也不變，
+    /// 雲端備份才不會以為有改
     func save() {
+        var changed = false
         do {
-            try Self.writeDocument(document, to: directory)
+            let data = try JSONEncoder.app.encode(document)
+            if data != savedDocumentData {
+                try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+                try data.write(to: Self.documentURL(in: directory), options: .atomic)
+                savedDocumentData = data
+                changed = true
+            }
         } catch {
             print("Save document failed: \(error)")
         }
@@ -227,13 +241,16 @@ final class NotebookSession {
             if data != savedDrawingData[page.id] {
                 try? data.write(to: drawingURL(page.id), options: .atomic)
                 savedDrawingData[page.id] = data
+                changed = true
             }
         }
         for pid in Array(savedDrawingData.keys) where !ids.contains(pid) {
             try? fm.removeItem(at: drawingURL(pid))
             savedDrawingData[pid] = nil
             drawings[pid] = nil
+            changed = true
         }
+        if changed { needsThumbnails = true }
         let trashedCount = trashedPages.count
         let favorites = document.pages.enumerated().compactMap { i, p -> FavoriteRef? in
             p.favorite ? FavoriteRef(pageId: p.id, pageNumber: i + 1, note: p.note) : nil
@@ -241,7 +258,7 @@ final class NotebookSession {
         let count = document.pages.count
         LibraryStore.shared.updateMeta(id) { meta in
             meta.pageCount = count
-            meta.modified = Date()
+            if changed { meta.modified = Date() }
             meta.favorites = favorites
             meta.trashedPageCount = trashedCount
         }
@@ -284,13 +301,19 @@ final class NotebookSession {
         try? data.write(to: thumbsURL.appendingPathComponent("\(page.id.uuidString).jpg"), options: .atomic)
     }
 
-    /// 封面＋所有我的最愛頁面的縮圖
+    /// 封面＋所有我的最愛頁面的縮圖。上次畫完之後沒改過就只補缺的（重畫會改到檔案，備份又要重傳）
     func writeLibraryThumbnails() {
-        if let img = renderThumbnail(pageIndex: 0, width: 320), let data = img.jpegData(compressionQuality: 0.75) {
-            try? data.write(to: thumbsURL.appendingPathComponent("cover.jpg"), options: .atomic)
+        let redraw = needsThumbnails
+        needsThumbnails = false
+        let cover = thumbsURL.appendingPathComponent("cover.jpg")
+        if redraw || !fm.fileExists(atPath: cover.path),
+           let img = renderThumbnail(pageIndex: 0, width: 320), let data = img.jpegData(compressionQuality: 0.75) {
+            try? data.write(to: cover, options: .atomic)
         }
         for (i, p) in document.pages.enumerated() where p.favorite {
-            writeThumbnail(pageIndex: i)
+            if redraw || !fm.fileExists(atPath: thumbsURL.appendingPathComponent("\(p.id.uuidString).jpg").path) {
+                writeThumbnail(pageIndex: i)
+            }
         }
     }
 }

@@ -349,9 +349,11 @@ enum NotebookExporter {
     static func exportPaperNote(session: NotebookSession, pages: [Int]? = nil) throws -> URL {
         session.save()
         let meta = LibraryStore.shared.notebook(session.id)
-        var zip = ZipWriter()
+        let safe = session.title.replacingOccurrences(of: "/", with: "-")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(safe).papernote")
+        var zip = try ZipWriter(writingTo: url)
         let manifest = PaperNoteManifest(title: session.title, coverHex: meta?.coverHex ?? "#2654A0FF")
-        try zip.add("papernote.json", JSONEncoder.app.encode(manifest))
+        try zip.add(PaperNoteFile.manifestName, JSONEncoder.app.encode(manifest))
         // 只匯出部分頁面：document.json 換成只有這幾頁的，其他頁（和最近刪除的頁）的筆跡不帶
         var subset: NotebookDocument?
         var skipped: Set<String> = []
@@ -368,21 +370,18 @@ enum NotebookExporter {
         }
         let base = session.directory.resolvingSymlinksInPath().path + "/"
         let files = FileManager.default.enumerator(at: session.directory, includingPropertiesForKeys: [.isRegularFileKey])
-        while let url = files?.nextObject() as? URL {
-            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
-            let rel = String(url.resolvingSymlinksInPath().path.dropFirst(base.count))
+        while let file = files?.nextObject() as? URL {
+            guard (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+            let rel = String(file.resolvingSymlinksInPath().path.dropFirst(base.count))
             // 縮圖打開時會重畫，不用帶
             guard !rel.hasPrefix("thumbs/"), !skipped.contains(rel) else { continue }
             if let subset, rel == NotebookSession.documentURL(in: session.directory).lastPathComponent {
-                try zip.add("notebook/" + rel, JSONEncoder.app.encode(subset))
+                try zip.add(PaperNoteFile.notebookPrefix + rel, JSONEncoder.app.encode(subset))
                 continue
             }
-            try zip.add("notebook/" + rel, Data(contentsOf: url, options: .alwaysMapped))
+            try zip.add(PaperNoteFile.notebookPrefix + rel, Data(contentsOf: file, options: .alwaysMapped))
         }
-        let safe = session.title.replacingOccurrences(of: "/", with: "-")
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(safe).papernote")
-        try? FileManager.default.removeItem(at: url)
-        try zip.finish().write(to: url)
+        try zip.close()
         return url
     }
 
