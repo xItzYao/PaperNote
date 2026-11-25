@@ -179,7 +179,7 @@ private final class Device {
     let store: LibraryStore
     let backup: BackupManager
 
-    init(drive: FakeDrive) throws {
+    init(drive: DriveAPI) throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("BackupTests-\(UUID().uuidString)", isDirectory: true)
         let docs = dir.appendingPathComponent("Documents", isDirectory: true)
         try FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
@@ -478,6 +478,45 @@ final class BackupTests: XCTestCase {
     }
 
     // MARK: 還原照清單
+
+    /// 回報的問題：還原到一半斷線（螢幕暗掉、切出 App），下載好的筆記本在重開 App 後
+    /// 變成最外層的「復原的筆記本」；再還原一次只補回空的資料夾
+    func testInterruptedRestoreKeepsNamesAndFolders() async throws {
+        let a = try device()
+        let folder = a.store.createFolder(name: "課程", parent: nil)
+        let first = notebook("第一本", on: a, folder: folder.id)
+        let second = notebook("第二本", on: a, folder: folder.id)
+        _ = try await a.backup.syncWithRetry()
+        let titles = [first.id: "第一本", second.id: "第二本"]
+
+        // 第一本下載好之後斷線
+        let notebooks = try XCTUnwrap(drive.folder(path: [BackupManager.rootFolderName, "Notebooks"]))
+        let order = try await drive.children(of: notebooks.id)
+        XCTAssertEqual(order.count, 2)
+        let done = try XCTUnwrap(UUID(uuidString: order[0].name))
+        let b = try Device(drive: FailingDeleteDrive(drive, failingFolder: order[1].id))
+        devices.append(b)
+        do {
+            _ = try await b.backup.restore()
+            XCTFail("第二本應該斷線")
+        } catch {}
+
+        let nb = try XCTUnwrap(b.store.notebook(done), "下載好的筆記本要馬上記進資料庫")
+        XCTAssertEqual(nb.title, titles[done])
+        XCTAssertEqual(nb.folderId, folder.id)
+        XCTAssertNotNil(b.store.folder(folder.id))
+
+        // 重開 App 不能多出「復原的筆記本」
+        let relaunched = LibraryStore(documentsURL: b.store.documentsURL)
+        XCTAssertEqual(relaunched.index.notebooks.map(\.title), [titles[done]])
+
+        // 網路恢復後再還原：剩下的回到原本的資料夾
+        let again = BackupManager(drive: drive, library: b.store, stateURL: b.dir.appendingPathComponent("state-again.json"))
+        let result = try await again.restore()
+        XCTAssertEqual(result, RestoreResult(notebooks: 1, trashed: 0))
+        XCTAssertEqual(Set(b.store.notebooks(in: folder.id).map(\.title)), ["第一本", "第二本"])
+        XCTAssertTrue(b.store.notebooks(in: nil).isEmpty)
+    }
 
     /// 需求：在垃圾桶的還原後還在垃圾桶（刪除時間也一樣），永久刪除的不還原，一般的正常回來
     func testRestoreFollowsTheManifest() async throws {
@@ -846,20 +885,25 @@ final class BackupTests: XCTestCase {
     }
 }
 
-/// 刪除時會失敗的 Drive（例如網路斷了）
+/// 刪除時會失敗的 Drive（例如網路斷了）；也可以在讀某個資料夾時斷線
 private final class FailingDeleteDrive: DriveAPI {
     private let base: FakeDrive
     private var uploadsLeft: Int
+    private let failingFolder: String?
 
-    init(_ base: FakeDrive, uploadsBeforeFailure: Int = .max) {
+    init(_ base: FakeDrive, uploadsBeforeFailure: Int = .max, failingFolder: String? = nil) {
         self.base = base
         uploadsLeft = uploadsBeforeFailure
+        self.failingFolder = failingFolder
     }
 
     func findFolder(named name: String, in parent: String) async throws -> String? { try await base.findFolder(named: name, in: parent) }
     func findFile(named name: String, in parent: String) async throws -> DriveFile? { try await base.findFile(named: name, in: parent) }
     func createFolder(named name: String, in parent: String) async throws -> String { try await base.createFolder(named: name, in: parent) }
-    func children(of folder: String) async throws -> [DriveFile] { try await base.children(of: folder) }
+    func children(of folder: String) async throws -> [DriveFile] {
+        if folder == failingFolder { throw BackupError.http(500, "斷線") }
+        return try await base.children(of: folder)
+    }
     func upload(_ fileURL: URL, name: String, parent: String, existingID: String?) async throws -> String {
         guard uploadsLeft > 0 else { throw BackupError.http(500, "斷線") }
         uploadsLeft -= 1

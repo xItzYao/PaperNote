@@ -389,6 +389,10 @@ final class BackupManager: ObservableObject {
         } else {
             remoteNotebooks = []
         }
+        // 資料夾先建好、每本下載好就記進資料庫：還原隨時可能中斷（螢幕暗掉、切出 App、斷線），
+        // 已經放進 Notebooks 的筆記本一定要有名稱和位置，不然重開 App 會被當成遺失的「復原的筆記本」
+        let folders = manifest.folders.compactMap { $0.status == .deleted || purgedFolders.contains($0.id) ? nil : $0.folder }
+        await MainActor.run { self.library.mergeRestored(folders: folders, notebooks: []) }
         let fm = FileManager.default
         var restored: [NotebookMeta] = []
         for (i, f) in remoteNotebooks.enumerated() {
@@ -402,12 +406,14 @@ final class BackupManager: ObservableObject {
             try await downloadTree(f.id, to: tmp)
             guard let data = try? Data(contentsOf: NotebookSession.documentURL(in: tmp)),
                   let doc = try? JSONDecoder.app.decode(NotebookDocument.self, from: data) else { continue }
-            try fm.moveItem(at: tmp, to: dest)
-            restored.append(Self.restoredMeta(id: id, entry: entries[id], document: doc))
+            let meta = Self.restoredMeta(id: id, entry: entries[id], document: doc)
+            try await MainActor.run {
+                try FileManager.default.moveItem(at: tmp, to: dest)
+                self.library.mergeRestored(folders: [], notebooks: [meta])
+            }
+            restored.append(meta)
         }
-        let folders = manifest.folders.compactMap { $0.status == .deleted || purgedFolders.contains($0.id) ? nil : $0.folder }
         let result = await MainActor.run { () -> RestoreResult in
-            self.library.mergeRestored(folders: folders, notebooks: restored)
             let kept = restored.compactMap { self.library.notebook($0.id) }
             let result = RestoreResult(notebooks: kept.count, trashed: kept.filter(self.library.isHidden).count)
             self.status = result.notebooks == 0 ? L("本機已經有全部的筆記本") : L("已還原 \(result.notebooks) 本筆記本")
