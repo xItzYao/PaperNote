@@ -11,7 +11,9 @@ struct RestoreResult: Equatable {
 /// 備份到 Google Drive 的「PaperNoteBackup」資料夾。
 /// 備份的是 App 內的原始檔（library.json、每本筆記本的 document.json、筆跡、PDF、圖片），
 /// 還原後筆跡、表格、螢光標示都能繼續編輯。
-/// 只上傳內容有變的檔案：大小和修改時間沒變就不看；變了再比 MD5（重畫一樣的縮圖不用重傳）；
+/// 每本筆記本在雲端是 Notebooks/<id>/notebook.zip（document.json、筆跡、縮圖這些常改的小檔案），
+/// PDF 和圖片（files/）又大又幾乎不變，各自一個檔案：還原只要下載幾個檔案，改一筆也不用重傳 PDF。
+/// 只上傳內容有變的：大小和修改時間沒變就不看；變了再比 MD5（重畫一樣的縮圖不用重傳）；
 /// 本機沒有紀錄時（重新安裝、還原、重新連結）和雲端的 MD5 比，一樣就不傳。
 ///
 /// 雲端的刪除只有兩種來源，都是使用者在 App 裡的動作：永久刪除筆記本、永久刪除頁面留下的舊檔案。
@@ -21,6 +23,9 @@ final class BackupManager: ObservableObject {
     static let shared = BackupManager(drive: DriveClient(), library: .shared)
     static let rootFolderName = "PaperNoteBackup"
     private static let notebooksFolderName = "Notebooks"
+    static let archiveName = "notebook.zip"
+    /// 筆記本裡不打包、各自上傳的資料夾（PDF、圖片）
+    private static let attachmentsFolderName = "files"
 
     @Published private(set) var isRunning = false
     @Published private(set) var status = ""
@@ -40,10 +45,19 @@ final class BackupManager: ObservableObject {
         var md5: String?
     }
 
+    /// 一本筆記本的 notebook.zip。fingerprint：裡面每個檔案的路徑、大小、修改時間，沒變就不用重新打包
+    private struct ArchiveRecord: Codable {
+        var id: String
+        var fingerprint: String
+        var md5: String
+    }
+
     private struct BackupState: Codable {
         var rootID: String?
         var folders: [String: String] = [:]
         var files: [String: FileRecord] = [:]
+        /// key：筆記本 ID。舊版的紀錄沒有
+        var archives: [String: ArchiveRecord]?
     }
 
     private let drive: DriveAPI
@@ -152,24 +166,8 @@ final class BackupManager: ObservableObject {
         // 中途失敗或被系統暫停也要記下傳好的，下次才不用重新比對
         defer { saveState() }
         let root = try await rootFolder()
-        let docs = library.documentsURL
-        var files: [(url: URL, rel: String)] = []
-        let libraryFile = docs.appendingPathComponent("library.json")
-        if FileManager.default.fileExists(atPath: libraryFile.path) { files.append((libraryFile, "library.json")) }
-        let notebooks = library.notebooksURL
-        let keys: [URLResourceKey] = [.isDirectoryKey]
-        if let en = FileManager.default.enumerator(at: notebooks, includingPropertiesForKeys: keys) {
-            for case let url as URL in en {
-                guard (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == false else { continue }
-                // 用 /Documents/Notebooks/ 之後的路徑（避免 /private/var 與 /var 的差異）
-                guard let r = url.path.range(of: "/Documents/Notebooks/") else { continue }
-                files.append((url, "Notebooks/" + url.path[r.upperBound...]))
-            }
-        }
-
         let snapshot = await MainActor.run { library.index }
-        let purged = Set(snapshot.purgedNotebooks.map(\.id))
-        files.removeAll { f in Self.notebookID(of: f.rel).map { purged.contains($0) } == true }
+        let (files, archives) = collectFiles(skipping: Set(snapshot.purgedNotebooks.map(\.id)))
 
         // 清單最先傳：之後就算中斷，雲端也已經記下誰被刪了，還原不會把它們帶回來。
         // 也要在 library.json 之前：新 iPad 還沒還原就連結時，library.json 會被蓋掉
@@ -188,7 +186,7 @@ final class BackupManager: ObservableObject {
         }
 
         // 先挑出內容真的變了的，進度才會是「要傳幾個」，不是全部幾個
-        var changed: [(url: URL, rel: String, size: Int, mtime: Double, md5: String?)] = []
+        var changed: [Pending] = []
         for f in files {
             let values = try? f.url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
             let size = values?.fileSize ?? 0
@@ -200,7 +198,25 @@ final class BackupManager: ObservableObject {
                 state.files[f.rel] = FileRecord(id: rec.id, size: size, mtime: mtime, md5: md5)
                 continue
             }
-            changed.append((f.url, f.rel, size, mtime, md5))
+            changed.append(Pending(url: f.url, rel: f.rel, md5: md5, kind: .file(size: size, mtime: mtime)))
+        }
+        // 打包好的 zip 先放在暫存，傳完就刪
+        let work = FileManager.default.temporaryDirectory.appendingPathComponent("backup-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: work) }
+        for a in archives {
+            let key = a.id.uuidString
+            let rec = state.archives?[key]
+            if let rec, rec.fingerprint == a.fingerprint { continue }
+            let url = work.appendingPathComponent("\(key).zip")
+            try Self.pack(a.files).write(to: url)
+            let md5 = try Self.md5(of: url)
+            if let rec, rec.md5 == md5 {
+                setArchive(key, ArchiveRecord(id: rec.id, fingerprint: a.fingerprint, md5: md5))
+                continue
+            }
+            let rel = "\(Self.notebooksFolderName)/\(key)/\(Self.archiveName)"
+            changed.append(Pending(url: url, rel: rel, md5: md5, kind: .archive(notebook: key, fingerprint: a.fingerprint)))
         }
 
         var uploaded = 0
@@ -218,7 +234,12 @@ final class BackupManager: ObservableObject {
                 id = try await drive.upload(f.url, name: name, parent: parent, existingID: remote?.id)
                 uploaded += 1
             }
-            state.files[f.rel] = FileRecord(id: id, size: f.size, mtime: f.mtime, md5: f.md5)
+            switch f.kind {
+            case let .file(size, mtime):
+                state.files[f.rel] = FileRecord(id: id, size: size, mtime: mtime, md5: f.md5)
+            case let .archive(notebook, fingerprint):
+                setArchive(notebook, ArchiveRecord(id: id, fingerprint: fingerprint, md5: f.md5 ?? ""))
+            }
             if (i + 1) % 10 == 0 { saveState() }
         }
         saveState()
@@ -230,6 +251,85 @@ final class BackupManager: ObservableObject {
             library.clearPurged(notebooks: snapshot.purgedNotebooks.map(\.id), folders: snapshot.purgedFolders.map(\.id))
         }
         return uploaded + removed
+    }
+
+    /// 要上傳的一個檔案：一般檔案，或一本筆記本打包好的 notebook.zip
+    private struct Pending {
+        enum Kind {
+            case file(size: Int, mtime: Double)
+            case archive(notebook: String, fingerprint: String)
+        }
+        let url: URL
+        let rel: String
+        let md5: String?
+        let kind: Kind
+    }
+
+    /// 一本筆記本要打包的檔案（files/ 以外的全部），照路徑排好：內容一樣，zip 就一模一樣
+    private struct Archive {
+        let id: UUID
+        /// path：筆記本資料夾裡的路徑
+        let files: [(url: URL, path: String)]
+        let fingerprint: String
+    }
+
+    private func setArchive(_ notebook: String, _ record: ArchiveRecord?) {
+        var archives = state.archives ?? [:]
+        archives[notebook] = record
+        state.archives = archives
+    }
+
+    /// library.json 和每本筆記本 files/ 裡的附件各自上傳；筆記本其他的檔案打包成 notebook.zip。
+    /// 永久刪除的筆記本不傳
+    private func collectFiles(skipping purged: Set<UUID>) -> (files: [(url: URL, rel: String)], archives: [Archive]) {
+        let fm = FileManager.default
+        var files: [(url: URL, rel: String)] = []
+        let libraryFile = library.documentsURL.appendingPathComponent("library.json")
+        if fm.fileExists(atPath: libraryFile.path) { files.append((libraryFile, "library.json")) }
+        var archives: [Archive] = []
+        let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey]
+        let dirs = (try? fm.contentsOfDirectory(at: library.notebooksURL, includingPropertiesForKeys: nil)) ?? []
+        for dir in dirs.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            guard let id = UUID(uuidString: dir.lastPathComponent), !purged.contains(id),
+                  let en = fm.enumerator(at: dir, includingPropertiesForKeys: keys) else { continue }
+            let prefix = "\(Self.notebooksFolderName)/\(id.uuidString)/"
+            var packed: [(url: URL, path: String, size: Int, mtime: Double)] = []
+            for case let url as URL in en {
+                guard let values = try? url.resourceValues(forKeys: Set(keys)), values.isDirectory == false,
+                      // 用 /Documents/Notebooks/ 之後的路徑（避免 /private/var 與 /var 的差異）
+                      let r = url.path.range(of: "/Documents/" + prefix) else { continue }
+                let path = String(url.path[r.upperBound...])
+                if path.hasPrefix(Self.attachmentsFolderName + "/") {
+                    files.append((url, prefix + path))
+                } else {
+                    packed.append((url, path, values.fileSize ?? 0, values.contentModificationDate?.timeIntervalSince1970 ?? 0))
+                }
+            }
+            guard !packed.isEmpty else { continue }
+            packed.sort { $0.path < $1.path }
+            let lines = packed.map { "\($0.path)\t\($0.size)\t\($0.mtime)" }.joined(separator: "\n")
+            let fingerprint = SHA256.hash(data: Data(lines.utf8)).map { String(format: "%02x", $0) }.joined()
+            archives.append(Archive(id: id, files: packed.map { ($0.url, $0.path) }, fingerprint: fingerprint))
+        }
+        return (files, archives)
+    }
+
+    static func pack(_ files: [(url: URL, path: String)]) throws -> Data {
+        var zip = ZipWriter()
+        for f in files { try zip.add(f.path, Data(contentsOf: f.url)) }
+        return try zip.finish()
+    }
+
+    /// 解開 notebook.zip。路徑跑出筆記本資料夾的（../、絕對路徑）當成壞掉
+    static func unpack(_ zipURL: URL, into dir: URL) throws {
+        let zip = try ZipArchive(url: zipURL)
+        for e in zip.entries where !e.isDirectory {
+            let parts = e.path.split(separator: "/", omittingEmptySubsequences: false)
+            guard !parts.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) else { throw ZipError.corrupt(e.path) }
+            let target = dir.appendingPathComponent(e.path)
+            try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try zip.extract(e, to: target)
+        }
     }
 
     /// 和 Google Drive 的 md5Checksum 一樣的格式。分段讀，大 PDF 不會整個載入記憶體
@@ -295,6 +395,7 @@ final class BackupManager: ObservableObject {
             let prefix = "\(Self.notebooksFolderName)/\(id.uuidString)"
             state.files = state.files.filter { !($0.key == prefix || $0.key.hasPrefix(prefix + "/")) }
             state.folders = state.folders.filter { !($0.key == prefix || $0.key.hasPrefix(prefix + "/")) }
+            setArchive(id.uuidString, nil)
         }
         return removed
     }
@@ -403,7 +504,7 @@ final class BackupManager: ObservableObject {
             // 先下載到暫存：中途失敗不會留下半本筆記本
             let tmp = fm.temporaryDirectory.appendingPathComponent("restore-\(UUID().uuidString)", isDirectory: true)
             defer { try? fm.removeItem(at: tmp) }
-            try await downloadTree(f.id, to: tmp)
+            try await downloadNotebook(f.id, to: tmp)
             guard let data = try? Data(contentsOf: NotebookSession.documentURL(in: tmp)),
                   let doc = try? JSONDecoder.app.decode(NotebookDocument.self, from: data) else { continue }
             let meta = Self.restoredMeta(id: id, entry: entries[id], document: doc)
@@ -433,6 +534,24 @@ final class BackupManager: ObservableObject {
         }
         meta.deletedAt = entry.status == .trashed ? (meta.deletedAt ?? Date()) : nil
         return meta
+    }
+
+    /// notebook.zip 解開、files/ 的附件照檔案下載。有 notebook.zip 時旁邊的散檔是更新前留下的，不下載；
+    /// 沒有的是更新前的備份（全部是散檔），照舊一個一個下載
+    private func downloadNotebook(_ folderID: String, to dir: URL) async throws {
+        let children = try await drive.children(of: folderID)
+        guard let archive = children.first(where: { !$0.isFolder && $0.name == Self.archiveName }) else {
+            return try await downloadTree(folderID, to: dir)
+        }
+        let fm = FileManager.default
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let zipURL = fm.temporaryDirectory.appendingPathComponent("restore-\(UUID().uuidString).zip")
+        defer { try? fm.removeItem(at: zipURL) }
+        try await drive.download(archive.id, to: zipURL)
+        try Self.unpack(zipURL, into: dir)
+        if let files = children.first(where: { $0.isFolder && $0.name == Self.attachmentsFolderName }) {
+            try await downloadTree(files.id, to: dir.appendingPathComponent(Self.attachmentsFolderName, isDirectory: true))
+        }
     }
 
     /// 同名的檔案（舊版重新安裝後會重複上傳）只拿最新的：children 由新到舊排
