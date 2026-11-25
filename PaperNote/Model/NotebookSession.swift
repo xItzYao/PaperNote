@@ -10,7 +10,8 @@ final class NotebookSession {
     /// 每頁筆跡，座標為頁面內容座標（原始頁面左上角為原點，擴展區為負值或超出原尺寸）
     var drawings: [UUID: PKDrawing] = [:]
 
-    private var savedDrawingData: [UUID: Data] = [:]
+    /// 每頁上次存的（或打開時的）筆跡指紋：一樣就不重寫（見 PKDrawing.contentSignature）
+    private var savedInk: [UUID: Data] = [:]
     /// 上次存的（或打開時的）document.json 內容：一樣就不重寫
     private var savedDocumentData: Data?
     /// 上次畫縮圖之後有存過改動
@@ -47,12 +48,14 @@ final class NotebookSession {
             let url = drawingURL(page.id)
             if let d = try? Data(contentsOf: url), let drawing = try? PKDrawing(data: d) {
                 drawings[page.id] = drawing
-                savedDrawingData[page.id] = d
+                savedInk[page.id] = drawing.contentSignature
             }
         }
         // 垃圾桶裡頁面的筆跡留在磁碟上；記錄起來，存檔時才不會被當成孤兒刪掉
         for t in document.trash ?? [] {
-            if let d = try? Data(contentsOf: drawingURL(t.page.id)) { savedDrawingData[t.page.id] = d }
+            if let d = try? Data(contentsOf: drawingURL(t.page.id)) {
+                savedInk[t.page.id] = (try? PKDrawing(data: d))?.contentSignature ?? Data()
+            }
         }
         purgeExpiredPages()
     }
@@ -66,9 +69,8 @@ final class NotebookSession {
         guard document.pages.indices.contains(index) else { return }
         let page = document.pages.remove(at: index)
         if let d = drawings[page.id], !d.strokes.isEmpty {
-            let data = d.dataRepresentation()
-            try? data.write(to: drawingURL(page.id), options: .atomic)
-            savedDrawingData[page.id] = data
+            try? d.dataRepresentation().write(to: drawingURL(page.id), options: .atomic)
+            savedInk[page.id] = d.contentSignature
         }
         var trash = document.trash ?? []
         trash.insert(TrashedPage(page: page, deletedAt: Date(), originalIndex: index), at: 0)
@@ -236,17 +238,17 @@ final class NotebookSession {
         let ids = Set(document.pages.map(\.id) + trashedPages.map(\.page.id))
         for page in document.pages {
             let d = drawings[page.id] ?? PKDrawing()
-            if d.strokes.isEmpty && savedDrawingData[page.id] == nil { continue }
-            let data = d.dataRepresentation()
-            if data != savedDrawingData[page.id] {
-                try? data.write(to: drawingURL(page.id), options: .atomic)
-                savedDrawingData[page.id] = data
+            if d.strokes.isEmpty && savedInk[page.id] == nil { continue }
+            let ink = d.contentSignature
+            if ink != savedInk[page.id] {
+                try? d.dataRepresentation().write(to: drawingURL(page.id), options: .atomic)
+                savedInk[page.id] = ink
                 changed = true
             }
         }
-        for pid in Array(savedDrawingData.keys) where !ids.contains(pid) {
+        for pid in Array(savedInk.keys) where !ids.contains(pid) {
             try? fm.removeItem(at: drawingURL(pid))
-            savedDrawingData[pid] = nil
+            savedInk[pid] = nil
             drawings[pid] = nil
             changed = true
         }

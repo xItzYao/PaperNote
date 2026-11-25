@@ -214,9 +214,9 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var didInitialLayout = false
     var lastLayoutWidth: CGFloat = 0
     var isApplyingDrawing = false
-    /// 畫布上次從各頁組起來、或拆回各頁時的筆跡內容。沒變就不重拆：
+    /// 畫布上次從各頁組起來、或拆回各頁時，每頁（畫布座標）的筆跡指紋。沒變的頁不重拆：
     /// 拆的時候座標要減回去，小數可能差一點點，存檔就會以為每一頁都改過
-    var committedCanvasData: Data?
+    var committedInk: [UUID: Data] = [:]
     var saveWorkItem: DispatchWorkItem?
     var keyboardInset: CGFloat = 0
 
@@ -905,20 +905,6 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         return PKDrawing(strokes: strokes)
     }
 
-    func splitDrawing(_ drawing: PKDrawing) -> [UUID: PKDrawing] {
-        var buckets: [Int: [PKStroke]] = [:]
-        for s in drawing.strokes {
-            let i = nearestPageIndex(to: s.renderBounds.center)
-            buckets[i, default: []].append(s)
-        }
-        var result: [UUID: PKDrawing] = [:]
-        for (i, strokes) in buckets where pages.indices.contains(i) {
-            let o = contentOrigin(i)
-            result[pages[i].id] = PKDrawing(strokes: strokes).transformed(using: CGAffineTransform(translationX: -o.x, y: -o.y))
-        }
-        return result
-    }
-
     /// 用程式加進去的新筆跡 PencilKit 不一定會重畫：先放不含最後 n 筆的版本，下一刻再補上
     func setDrawingAddingStrokes(_ d: PKDrawing, added n: Int, then done: (() -> Void)? = nil) {
         var without = d
@@ -1017,15 +1003,40 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         isApplyingDrawing = true
         canvas.drawing = assembleDrawing()
         isApplyingDrawing = false
-        committedCanvasData = canvas.drawing.dataRepresentation()
+        committedInk = pageBuckets(canvas.drawing).mapValues { PKDrawing(strokes: $0).contentSignature }
     }
 
-    /// 畫布的筆跡拆回各頁（畫布沒變就不拆，各頁維持原本的資料）
+    /// 畫布的筆跡拆回各頁。筆跡沒變的頁維持原本的資料，不重算座標
     func commitDrawing() {
-        let data = canvas.drawing.dataRepresentation()
-        guard data != committedCanvasData else { return }
-        session.drawings = splitDrawing(canvas.drawing)
-        committedCanvasData = data
+        var next: [UUID: PKDrawing] = [:]
+        var ink: [UUID: Data] = [:]
+        var indices: [UUID: Int] = [:]
+        for (i, p) in pages.enumerated() { indices[p.id] = i }
+        for (id, strokes) in pageBuckets(canvas.drawing) {
+            guard let i = indices[id] else { continue }
+            let onCanvas = PKDrawing(strokes: strokes)
+            let signature = onCanvas.contentSignature
+            ink[id] = signature
+            if signature == committedInk[id], let kept = session.drawings[id] {
+                next[id] = kept
+                continue
+            }
+            let o = contentOrigin(i)
+            next[id] = onCanvas.transformed(using: CGAffineTransform(translationX: -o.x, y: -o.y))
+        }
+        session.drawings = next
+        committedInk = ink
+    }
+
+    /// 畫布上的筆跡依所在的頁分開（還是畫布座標）
+    func pageBuckets(_ drawing: PKDrawing) -> [UUID: [PKStroke]] {
+        var buckets: [UUID: [PKStroke]] = [:]
+        for s in drawing.strokes {
+            let i = nearestPageIndex(to: s.renderBounds.center)
+            guard pages.indices.contains(i) else { continue }
+            buckets[pages[i].id, default: []].append(s)
+        }
+        return buckets
     }
 
     func saveNow() {
