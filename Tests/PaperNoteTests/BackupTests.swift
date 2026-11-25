@@ -281,9 +281,11 @@ final class BackupTests: XCTestCase {
         _ = try await a.backup.syncWithRetry()
 
         let folder = try XCTUnwrap(drive.notebookFolder(nb.id))
-        XCTAssertEqual(Set(try await drive.children(of: folder.id).map(\.name)), ["notebook.zip", "files"])
+        let inFolder = try await drive.children(of: folder.id).map(\.name)
+        XCTAssertEqual(Set(inFolder), ["notebook.zip", "files"])
         let files = try XCTUnwrap(drive.folder(path: [BackupManager.rootFolderName, "Notebooks", nb.id.uuidString, "files"]))
-        XCTAssertEqual(try await drive.children(of: files.id).map(\.name), ["handout.pdf"])
+        let attachments = try await drive.children(of: files.id).map(\.name)
+        XCTAssertEqual(attachments, ["handout.pdf"])
         XCTAssertEqual(Set(try zipEntries(nb.id)),
                        ["document.json", "drawings/p1.drawing", "drawings/p2.drawing", "drawings/p3.drawing", "thumbs/cover.jpg"])
 
