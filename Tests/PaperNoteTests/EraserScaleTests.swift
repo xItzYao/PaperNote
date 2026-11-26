@@ -123,6 +123,39 @@ final class EraserScaleTests: XCTestCase {
         return (worst, total)
     }
 
+    /// 擦一下除了算擦哪裡，其他時間花在哪：讀畫布的筆跡、換上新的筆跡（PencilKit 重畫）、擦自製筆刷的字
+    func testWhereTheRestOfAnEraseStepGoes() {
+        EditorSettings.shared.pixelEraser = true
+        editor.setTool(.eraser)
+        func ms(_ n: Int = 20, _ body: () -> Void) -> Double {
+            let t = CACurrentMediaTime()
+            for _ in 0..<n { body() }
+            return (CACurrentMediaTime() - t) / Double(n) * 1000
+        }
+        let read = ms { _ = editor.canvas.drawing.strokes.count }
+        var flip = false
+        let set = ms {
+            var s = editor.canvas.drawing.strokes
+            flip.toggle()
+            s[s.count - 1].transform = CGAffineTransform(translationX: flip ? 1 : 0, y: 0)
+            editor.setDrawing(PKDrawing(strokes: s))
+        }
+        let setAndRender = ms(10) {
+            var s = editor.canvas.drawing.strokes
+            flip.toggle()
+            s[s.count - 1].transform = CGAffineTransform(translationX: flip ? 1 : 0, y: 0)
+            editor.setDrawing(PKDrawing(strokes: s))
+            CATransaction.flush()
+            RunLoop.main.run(until: Date())
+        }
+        let ink = editor.pages[9].ink
+        let inkErase = ms { _ = InkGeometry.erase(ink, at: CGPoint(x: 300, y: 300), radius: 10, partial: true) }
+        let o = editor.contentOrigin(9)
+        let step = ms(10) { editor.erase(along: [CGPoint(x: o.x + 300, y: o.y + 200), CGPoint(x: o.x + 306, y: o.y + 200)]) }
+        print(String(format: "ERASEPARTS read=%.1fms set=%.1fms set+render=%.1fms inkErase=%.1fms eraseStep=%.1fms strokes=%d",
+                     read, set, setAndRender, inkErase, step, editor.canvas.drawing.strokes.count))
+    }
+
     func testPartialErasingHighlightsInABigNotebookStaysFast() {
         let r = eraseAcrossTheHighlights(partial: true)
         XCTAssertLessThan(r.worst, 0.1, "每移動一下不超過 100ms")

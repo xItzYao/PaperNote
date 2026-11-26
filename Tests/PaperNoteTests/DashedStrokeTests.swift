@@ -62,7 +62,7 @@ final class DashedStrokeTests: XCTestCase {
         }
         let old = stroke(t0), hand = stroke(t0.addingTimeInterval(10))
         let dashes = [stroke(t0.addingTimeInterval(20)), stroke(t0.addingTimeInterval(20))]
-        let result = HoldToShape.replacingHandStroke(in: [old, hand], countBefore: 1, with: dashes)
+        let result = HoldToShape.replacingHandStroke(in: [old, hand], existing: [t0], with: dashes)
         XCTAssertEqual(result.count, 3)
         XCTAssertEqual(result.first?.path.creationDate, t0)
     }

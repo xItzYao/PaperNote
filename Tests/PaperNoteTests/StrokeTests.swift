@@ -107,15 +107,31 @@ final class HoldToShapeTests: XCTestCase {
         let line = stroke(at: t0.addingTimeInterval(20))
         let later = stroke(at: t0.addingTimeInterval(30))
         let strokes = [old, hand, later]
-        XCTAssertEqual(HoldToShape.handStrokeIndex(in: strokes, countBefore: 1, lineDate: line.path.creationDate), 1)
-        let result = HoldToShape.replacingHandStroke(in: strokes, countBefore: 1, with: line)
+        let existing: Set = [old.path.creationDate]
+        XCTAssertEqual(HoldToShape.handStrokeIndex(in: strokes, existing: existing, lineDate: line.path.creationDate), 1)
+        let result = HoldToShape.replacingHandStroke(in: strokes, existing: existing, with: line)
         XCTAssertEqual(result.map(\.path.creationDate), [old, later, line].map(\.path.creationDate))
+    }
+
+    /// 螢光筆排到最底下之後，原本的字排在最後面：還是認得出手繪的是哪一筆，原本的字不動
+    func testHandStrokeIsFoundByWhatWasThereNotByPosition() {
+        let t0 = Date(timeIntervalSince1970: 1000)
+        let word = stroke(at: t0)
+        let earlierLine = stroke(at: t0.addingTimeInterval(5))
+        let hand = stroke(at: t0.addingTimeInterval(10))
+        let line = stroke(at: t0.addingTimeInterval(20))
+        let strokes = [earlierLine, hand, word]
+        let existing: Set = [word.path.creationDate, earlierLine.path.creationDate]
+        XCTAssertEqual(HoldToShape.handStrokeIndex(in: strokes, existing: existing, lineDate: line.path.creationDate), 1)
+        XCTAssertNil(HoldToShape.handStrokeIndex(in: [earlierLine, word], existing: existing, lineDate: line.path.creationDate))
+        let result = HoldToShape.replacingHandStroke(in: strokes + [line], existing: existing, with: line)
+        XCTAssertEqual(result.map(\.path.creationDate), [earlierLine, word, line].map(\.path.creationDate))
     }
 
     func testNoHandStrokeWhenNothingNewWasDrawn() {
         let t0 = Date(timeIntervalSince1970: 1000)
         let strokes = [stroke(at: t0)]
-        XCTAssertNil(HoldToShape.handStrokeIndex(in: strokes, countBefore: 1, lineDate: t0.addingTimeInterval(5)))
+        XCTAssertNil(HoldToShape.handStrokeIndex(in: strokes, existing: [t0], lineDate: t0.addingTimeInterval(5)))
     }
 
     func testAnchorIsTheFarthestCorner() {

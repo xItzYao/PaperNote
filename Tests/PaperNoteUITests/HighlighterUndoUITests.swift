@@ -52,6 +52,31 @@ final class HighlighterUndoUITests: XCTestCase {
         XCTAssertTrue(waitForStrokes(0), "\(name)之後清掉：\(strokes)｜\(log)")
     }
 
+    /// 停住變圖形時，PencilKit 正在畫的那一筆取消掉（拖動時不畫出軌跡，和自製筆刷一樣）。
+    /// 以前關掉再打開 PencilKit 的書寫手勢曾經讓它卡住：之後還要能繼續寫、換工具、上一步
+    func testHoldCancelsTheHandStrokeAndWritingGoesOn() {
+        launch()
+        draw(y: 0.3, hold: 1)
+        XCTAssertTrue(waitForStrokes(1), "留下一條直線：\(strokes)｜\(log)")
+        XCTAssertTrue(log.contains("hand stroke cancelled"), "停住時手繪那一筆就取消了：\(log)")
+        sleep(2)
+        XCTAssertEqual(strokes, "1", "手繪那一筆沒有跑回來｜\(log)")
+
+        draw(y: 0.4)
+        XCTAssertTrue(waitForStrokes(2), "取消之後照樣寫得出來：\(strokes)｜\(log)")
+        draw(y: 0.5, hold: 1)
+        XCTAssertTrue(waitForStrokes(3), "再停住一次：\(strokes)｜\(log)")
+
+        app.buttons["筆"].tap()
+        app.buttons["螢光筆"].tap()
+        draw(y: 0.6)
+        XCTAssertTrue(waitForStrokes(4), "換過工具還寫得出來：\(strokes)｜\(log)")
+        app.buttons["上一步"].tap()
+        XCTAssertTrue(waitForStrokes(3), "上一步：\(strokes)｜\(log)")
+        app.buttons["上一步"].tap()
+        XCTAssertTrue(waitForStrokes(2), "停住變的直線一步拿掉：\(strokes)｜\(log)")
+    }
+
     func testPlainStroke() {
         launch(["-shapeSnap", "<false/>", "-smartHighlight", "<false/>"])
         check("一般的一筆", hold: 0, waitBeforeUndo: 1)

@@ -7,7 +7,8 @@ struct LiveShape {
     var end: CGPoint
     var shapePoints: [CGPoint]?   // 有值＝圖形（圓弧、圓、矩形、曲線…）；nil＝直線
     var preset: BrushPreset
-    var countBefore: Int
+    /// 下筆前就有的筆跡（建立時間）：手繪那一筆、換上去的圖形以外都不能動
+    var existing: Set<Date>
     /// 認出來的圖形（筆不放開繼續移動時用它調整）；nil＝直線
     var shape: InkShape? = nil
 
@@ -17,7 +18,8 @@ struct LiveShape {
 /// 剛放開的直線／圖形，等 PencilKit 收尾手繪的那一筆
 struct PendingLiveStroke {
     var stroke: PKStroke
-    var countBefore: Int
+    /// 下筆前就有的筆跡（建立時間）
+    var existing: Set<Date>
     var until: CFTimeInterval
     /// 筆離開螢幕的時間
     var endedAt: CFTimeInterval
@@ -69,35 +71,36 @@ enum HoldToShape {
         return base.map { CGPoint(x: a.x + ($0.x - a.x) * sx, y: a.y + ($0.y - a.y) * sy) }
     }
 
-    /// 手繪的那一筆：在原本筆跡之後、又比直線早建立的最後一筆
-    static func handStrokeIndex(in strokes: [PKStroke], countBefore: Int, lineDate: Date) -> Int? {
-        strokes.indices.last { $0 >= countBefore && strokes[$0].path.creationDate < lineDate }
+    /// 手繪的那一筆：下筆前沒有、又比直線早建立的那一筆。
+    /// 不能看排在第幾筆：螢光筆會被排到最底下（keepHighlightsBelowInk），排在後面的可能是原本就有的字
+    static func handStrokeIndex(in strokes: [PKStroke], existing: Set<Date>, lineDate: Date) -> Int? {
+        strokes.indices.last {
+            let date = strokes[$0].path.creationDate
+            return date < lineDate && !existing.contains(date)
+        }
     }
 
-    /// 把手繪那一筆換成直線：原本的筆跡、之後才畫的新筆跡保留，直線放最後
-    static func replacingHandStroke(in strokes: [PKStroke], countBefore: Int, with line: PKStroke) -> [PKStroke] {
-        replacingHandStroke(in: strokes, countBefore: countBefore, with: [line])
+    /// 把手繪那一筆（和之前放上去的同一條直線）換成直線：原本的筆跡、之後才畫的新筆跡照原本的順序保留，直線放最後
+    static func replacingHandStroke(in strokes: [PKStroke], existing: Set<Date>, with line: PKStroke) -> [PKStroke] {
+        replacingHandStroke(in: strokes, existing: existing, with: [line])
     }
 
     /// 同上，直線可以是好幾段（虛線）；每一段的建立時間都和直線一樣
-    static func replacingHandStroke(in strokes: [PKStroke], countBefore: Int, with lines: [PKStroke]) -> [PKStroke] {
+    static func replacingHandStroke(in strokes: [PKStroke], existing: Set<Date>, with lines: [PKStroke]) -> [PKStroke] {
         guard let date = lines.first?.path.creationDate else { return strokes }
-        var kept = Array(strokes.prefix(countBefore))
-        kept += strokes.dropFirst(countBefore).filter { $0.path.creationDate > date }
-        kept += lines
-        return kept
+        return strokes.filter { existing.contains($0.path.creationDate) || $0.path.creationDate > date } + lines
     }
 }
 
-/// 停住變直線／圖形的完整流程：停住 → 預覽 → 放開 → 等 PencilKit 收尾手繪那一筆 → 換成直線 → 登記上一步。
-/// 從頭到尾不碰 PencilKit 的書寫手勢：手繪那一筆照常畫完，預覽線疊在上面，PencilKit 收尾後才換成直線。
+/// 停住變直線／圖形的完整流程：停住 → 取消 PencilKit 正在畫的手繪那一筆 → 預覽 → 放開 → 換成直線 → 登記上一步。
+/// 和自製筆刷一樣：認出來之後只看得到圖形，筆不放開繼續拖也不會畫出軌跡。
+/// PencilKit 沒取消成功、還是把手繪那一筆放進筆跡的話，放開後照樣換掉（見 ensureLine）。
 /// 狀態都在這裡，編輯器只把事件轉過來。
 final class HoldToShapeController {
     private weak var editor: NotebookViewController?
-    /// 預覽：疊在畫布最上層（手繪那一筆的上面）。淡藍色外框讓人一眼看出最後會留下哪條線
+    /// 預覽：疊在畫布最上層，畫得和放開後留下的圖形一樣（同一支筆的顏色、粗細）
     let previewLayer = CALayer()
     private let lineLayer = CAShapeLayer()
-    private let haloLayer = CAShapeLayer()
 
     private(set) var live: LiveShape?
     private var pending: PendingLiveStroke?
@@ -110,13 +113,10 @@ final class HoldToShapeController {
     init(editor: NotebookViewController) {
         self.editor = editor
         previewLayer.zPosition = 1000
-        for l in [haloLayer, lineLayer] {
-            l.fillColor = UIColor.clear.cgColor
-            l.lineCap = .round
-            l.lineJoin = .round
-            previewLayer.addSublayer(l)
-        }
-        haloLayer.strokeColor = UIColor.systemBlue.withAlphaComponent(0.25).cgColor
+        lineLayer.fillColor = UIColor.clear.cgColor
+        lineLayer.lineCap = .round
+        lineLayer.lineJoin = .round
+        previewLayer.addSublayer(lineLayer)
     }
 
     var isActive: Bool { live != nil }
@@ -130,12 +130,24 @@ final class HoldToShapeController {
         let recognized = InkShapes.recognize(pts)
         let shape = recognized?.kind == .line ? nil : recognized
         var ls = LiveShape(start: start, end: recognized?.kind == .line ? recognized!.end : ShapeRecognizer.snappedLineEnd(from: start, to: last),
-                           shapePoints: shape?.points, preset: preset, countBefore: editor.strokeCountAtBegin)
+                           shapePoints: shape?.points, preset: preset,
+                           existing: Set(editor.canvas.drawing.strokes.map(\.path.creationDate)))
         ls.shape = shape
         live = ls
-        DebugLog.add("hold countBefore=\(ls.countBefore) strokes=\(editor.canvas.drawing.strokes.count) shape=\(String(describing: shape?.kind)) pkDrawing=\(pencilKitDrawing)")
+        DebugLog.add("hold existing=\(ls.existing.count) strokes=\(editor.canvas.drawing.strokes.count) shape=\(String(describing: shape?.kind)) pkDrawing=\(pencilKitDrawing)")
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        cancelHandStroke()
         showPreview()
+    }
+
+    /// PencilKit 正在畫的手繪那一筆取消掉（不會進筆跡，畫面上也消失）。
+    /// 停住是 PencilHoldRecognizer 的計時器觸發的，不在 PencilKit 自己的 callback 裡，關掉再打開書寫手勢不會讓它卡住
+    private func cancelHandStroke() {
+        guard pencilKitDrawing, let editor else { return }
+        let g = editor.canvas.drawingGestureRecognizer
+        g.isEnabled = false
+        g.isEnabled = true
+        DebugLog.add("hold: hand stroke cancelled pkDrawing=\(pencilKitDrawing) strokes=\(editor.canvas.drawing.strokes.count)")
     }
 
     func move(_ p: CGPoint) {
@@ -166,8 +178,8 @@ final class HoldToShapeController {
         let stroke = ShapeRecognizer.makeStroke(points: ls.points, preset: ls.preset, sample: samples[ls.preset.id])
         let now = CACurrentMediaTime()
         pendingPresetID = ls.preset.id
-        let before = PKDrawing(strokes: Array(editor.canvas.drawing.strokes.prefix(ls.countBefore)))
-        pending = PendingLiveStroke(stroke: stroke, countBefore: ls.countBefore, until: now + 1.5, endedAt: now,
+        let before = PKDrawing(strokes: editor.canvas.drawing.strokes.filter { ls.existing.contains($0.path.creationDate) })
+        pending = PendingLiveStroke(stroke: stroke, existing: ls.existing, until: now + 1.5, endedAt: now,
                                     before: before, dashed: ls.preset.isDashed, preset: ls.preset,
                                     gesture: editor.strokeGesture ?? StrokeGesture(before: before, mark: editor.history.recordCount))
         ensureLine()
@@ -242,8 +254,8 @@ final class HoldToShapeController {
         let date = line.path.creationDate
         var d = editor.canvas.drawing
         let hasLine = d.strokes.contains { $0.path.creationDate == date }
-        let handIndex = HoldToShape.handStrokeIndex(in: d.strokes, countBefore: p.countBefore, lineDate: date)
-        DebugLog.add("ensure strokes=\(d.strokes.count) countBefore=\(p.countBefore) hasLine=\(hasLine) hand=\(handIndex.map(String.init) ?? "nil")")
+        let handIndex = HoldToShape.handStrokeIndex(in: d.strokes, existing: p.existing, lineDate: date)
+        DebugLog.add("ensure strokes=\(d.strokes.count) existing=\(p.existing.count) hasLine=\(hasLine) hand=\(handIndex.map(String.init) ?? "nil")")
         if let hi = handIndex, let s = ShapeRecognizer.samplePoint(of: d.strokes[hi]) {
             // 直線改用手寫那一筆的墨水與粗細，和 PencilKit 畫出來的完全一樣
             line = ShapeRecognizer.makeStroke(points: line.path.map(\.location), ink: d.strokes[hi].ink,
@@ -254,7 +266,7 @@ final class HoldToShapeController {
         }
         if !hasLine || handIndex != nil {
             let lines = DashedStroke.apply(line, dashed: p.dashed, lineWidth: line.path.first?.size.width ?? 3, preset: p.preset)
-            d.strokes = HoldToShape.replacingHandStroke(in: d.strokes, countBefore: p.countBefore, with: lines)
+            d.strokes = HoldToShape.replacingHandStroke(in: d.strokes, existing: p.existing, with: lines)
             let w = line.path.first?.size.width ?? -1
             DebugLog.add("replace lines=\(lines.count) newStrokes=\(d.strokes.count) width=\(String(format: "%.2f", w)) ink=\(line.ink.inkType.rawValue)")
             editor.setDrawingAddingStrokes(d, added: lines.count) { [weak self, weak editor] in
@@ -300,8 +312,6 @@ final class HoldToShapeController {
             lineLayer.path = path.cgPath
             lineLayer.strokeColor = ls.preset.inkColor.cgColor
             lineLayer.lineWidth = width * z
-            haloLayer.path = path.cgPath
-            haloLayer.lineWidth = width * z + 8
             if ls.preset.isDashed {
                 // 和虛線樣式的預覽、放開後切出來的虛線一樣：dash 長、gap 空
                 let pattern = ls.preset.dashPattern(lineWidth: width)
@@ -317,7 +327,6 @@ final class HoldToShapeController {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         lineLayer.path = nil
-        haloLayer.path = nil
         CATransaction.commit()
     }
 }
