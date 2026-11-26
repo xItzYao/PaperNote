@@ -161,25 +161,18 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
 
     /// 這個手指觸碰是不是手掌（寫字時壓在螢幕上的手）。together：連這個在內，螢幕上同時按著幾個手指觸碰。
     /// 觸碰半徑是一格一格的（31.3、41.7、52.1、62.6、73.0…）。實機紀錄：手指（含用指腹滑）最大 52.1；
-    /// 手掌常常只回報 31～62，一個觸碰分不出來，但手掌放下去是好幾個觸碰一起出現
+    /// 手掌常常只回報 31～62，一個觸碰分不出來，但手掌放下去是好幾個觸碰一起出現。
+    /// 不看筆離開多久：筆離開螢幕之後才放下的一兩根手指，一律可以捲動、縮放（常常手一拿開就縮放剛寫的字）。
+    /// 寫字時就壓著的手，PalmBlocker 會一直把它當手掌到它離開為止
     func isPalmTouch(_ t: UITouch, together: Int = 1) -> Bool {
         let mode = settings.palmRejection
         guard mode != "off", t.type == .direct else { return false }
         // 比手指大一格以上：手掌（手指壓得再用力也沒超過 52.1）
         if t.majorRadius >= 60 { return true }
-        let now = CACurrentMediaTime()
         // 筆尖正在接觸螢幕（超過 3 秒沒收到筆尖移動就不算「正在寫字」，避免狀態卡住讓頁面一直沒反應）
-        if pencilDown && now - lastPencilTime < 3 { return true }
-        // 單一個手指：剛寫完也要能馬上捲動頁面
-        guard together >= 2 else { return false }
+        if pencilDown && CACurrentMediaTime() - lastPencilTime < 3 { return true }
         // 三個以上一起按下：整個手放上去（畫布沒有三指的手勢）
-        if together >= 3 { return true }
-        // 兩個一起按下：剛寫完 1.5 秒內、在寫字那一側（筆尖旁邊、下方）的是手掌
-        guard now - lastPencilTime < 1.5, let pp = lastPencilPoint else { return false }
-        let p = t.location(in: view)
-        guard p.y > pp.y - 40, p.y < pp.y + 320 else { return false }
-        if mode == "left" { return p.x < pp.x + 40 && p.x > pp.x - 450 }
-        return p.x > pp.x - 40 && p.x < pp.x + 450
+        return together >= 3
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {

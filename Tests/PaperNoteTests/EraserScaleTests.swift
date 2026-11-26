@@ -93,13 +93,18 @@ final class EraserScaleTests: XCTestCase {
 
     /// 在第 10 頁來回擦過螢光筆，回傳每移動一下最久多久、全部多久；印出時間花在哪
     private func eraseAcrossTheHighlights(partial: Bool) -> (worst: Double, total: Double) {
-        EditorSettings.shared.pixelEraser = partial
-        editor.setTool(.eraser)
-        XCTAssertEqual(editor.canvas.drawing.strokes.count, 2505, "測試的前提：整本的 PencilKit 筆跡都在畫布上")
         let o = editor.contentOrigin(9)
         var path: [CGPoint] = []
         for k in 0..<80 { path.append(CGPoint(x: o.x + 140 + CGFloat(k) * 4, y: o.y + 160 + sin(CGFloat(k) / 5) * 90)) }
         for k in 0..<80 { path.append(CGPoint(x: o.x + 460 - CGFloat(k) * 4, y: o.y + 330 + CGFloat(k % 9) * 30)) }
+        return erase(along: path, partial: partial, label: "ERASESCALE")
+    }
+
+    /// 沿著 path 擦（每個點是一次移動），回傳每移動一下最久多久、全部多久
+    private func erase(along path: [CGPoint], partial: Bool, label: String) -> (worst: Double, total: Double) {
+        EditorSettings.shared.pixelEraser = partial
+        editor.setTool(.eraser)
+        XCTAssertEqual(editor.canvas.drawing.strokes.count, 2505, "測試的前提：整本的 PencilKit 筆跡都在畫布上")
         StrokeEraser.counts = .init()
         var worst = 0.0, worstLine = ""
         let start = CACurrentMediaTime()
@@ -118,9 +123,37 @@ final class EraserScaleTests: XCTestCase {
         editor.eraserEnded()
         let total = CACurrentMediaTime() - start
         let c = StrokeEraser.counts
-        print(String(format: "ERASESCALE partial=%d total=%.0fms worst=%@ strokeEraser=%.0fms samples=%d inside=%d derived=%d",
-                     partial ? 1 : 0, total * 1000, worstLine, c.seconds * 1000, c.samples, c.inside, c.derived))
+        print(String(format: "%@ partial=%d moves=%d total=%.0fms worst=%@ strokeEraser=%.0fms samples=%d inside=%d derived=%d strokes=%d",
+                     label, partial ? 1 : 0, path.count - 1, total * 1000, worstLine, c.seconds * 1000, c.samples, c.inside, c.derived,
+                     editor.canvas.drawing.strokes.count))
         return (worst, total)
+    }
+
+    /// 回報的問題（11/26）：快速來回擦一大片原子筆的字，擦掉的地方跟不上筆。
+    /// 第 7 頁寫滿 PencilKit 的字；iPad 每一格畫面（1/60 秒）送一次位置，快速擦時一格走 20～30pt
+    private func scrubAcrossPage7() -> [CGPoint] {
+        editor.scrollToPage(6, animated: false)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        let o = editor.contentOrigin(6)
+        var path: [CGPoint] = []
+        for pass in 0..<6 {
+            for k in 0...20 {
+                let t = CGFloat(k) / 20
+                let x = pass % 2 == 0 ? 40 + t * 500 : 540 - t * 500
+                path.append(CGPoint(x: o.x + x, y: o.y + 60 + CGFloat(pass) * 40 + t * 30))
+            }
+        }
+        return path
+    }
+
+    func testFastScrubbingAcrossPenWritingKeepsUp() {
+        let r = erase(along: scrubAcrossPage7(), partial: true, label: "ERASEPEN")
+        XCTAssertLessThan(r.worst, 1.0 / 30, "快速擦的時候每移動一下不超過兩格畫面，擦掉的地方跟得上筆")
+    }
+
+    func testFastWholeStrokeScrubbingAcrossPenWritingKeepsUp() {
+        let r = erase(along: scrubAcrossPage7(), partial: false, label: "ERASEPENWHOLE")
+        XCTAssertLessThan(r.worst, 1.0 / 30, "快速擦的時候每移動一下不超過兩格畫面，擦掉的地方跟得上筆")
     }
 
     /// 擦一下除了算擦哪裡，其他時間花在哪：讀畫布的筆跡、換上新的筆跡（PencilKit 重畫）、擦自製筆刷的字
