@@ -649,6 +649,65 @@ final class BackupTests: XCTestCase {
         XCTAssertEqual(drive.uploads, [])
     }
 
+    /// 從 App Store 的 1.0.0 更新：那時候每個檔案分開傳（散檔），根目錄還有 library.json，
+    /// 備份紀錄只有 rootID／folders／files，沒有 archives。
+    /// 第一次備份換成 .papernote、舊資料夾整個移到 Drive 垃圾桶；之後不再重傳；別台還原得到一樣的內容
+    func testUpdatingFrom100() async throws {
+        let a = try device()
+        let nb = notebook("1.0.0 的筆記", on: a)
+        let dir = a.store.notebookURL(nb.id)
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("drawings"), withIntermediateDirectories: true)
+        try Data("筆跡".utf8).write(to: dir.appendingPathComponent("drawings/p.drawing"))
+        try Data("講義".utf8).write(to: dir.appendingPathComponent("handout.pdf"))
+        _ = try await a.backup.syncWithRetry()
+        try await makeOldFormat(nb.id)
+        let root = try XCTUnwrap(drive.folder(path: [BackupManager.rootFolderName]))
+        let notebooksFolder = try XCTUnwrap(drive.folder(path: [BackupManager.rootFolderName, "Notebooks"]))
+        let old = try XCTUnwrap(drive.notebookFolder(nb.id))
+        let drawings = try XCTUnwrap(drive.folder(path: [BackupManager.rootFolderName, "Notebooks", nb.id.uuidString, "drawings"]))
+        let lib = FileManager.default.temporaryDirectory.appendingPathComponent("library-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: lib) }
+        try JSONEncoder.app.encode(a.store.index).write(to: lib)
+        let libID = try await drive.upload(lib, name: "library.json", parent: root.id, existingID: nil)
+
+        // 1.0.0 留下的備份紀錄：每個檔案一筆，沒有 archives
+        let prefix = "Notebooks/\(nb.id.uuidString)"
+        var files: [String: Any] = ["library.json": ["id": libID, "size": 1, "mtime": 1]]
+        for rel in contents(of: dir).keys {
+            files["\(prefix)/\(rel)"] = ["id": "舊的", "size": 1, "mtime": 1, "md5": "舊的"]
+        }
+        let stateURL = a.dir.appendingPathComponent("state.json")
+        let state: [String: Any] = [
+            "rootID": root.id,
+            "folders": ["Notebooks": notebooksFolder.id, prefix: old.id, "\(prefix)/drawings": drawings.id],
+            "files": files,
+        ]
+        try JSONSerialization.data(withJSONObject: state).write(to: stateURL)
+        resetCounters()
+
+        _ = try await relaunched(a).syncWithRetry()
+
+        XCTAssertEqual(drive.uploads.filter { $0 != BackupManifest.fileName }, ["\(nb.id.uuidString).papernote"])
+        XCTAssertNotNil(drive.papernote(nb.id))
+        XCTAssertNil(drive.notebookFolder(nb.id), "舊資料夾移到 Drive 垃圾桶")
+        XCTAssertNotNil(drive.trash[old.id])
+        XCTAssertTrue(drive.trash.values.contains { $0.name == "p.drawing" })
+        XCTAssertTrue(drive.trash.values.contains { $0.name == "handout.pdf" })
+        XCTAssertEqual(drive.violations, [])
+
+        resetCounters()
+        let trashedBefore = drive.trashed.count
+        _ = try await relaunched(a).syncWithRetry()
+        XCTAssertEqual(drive.uploads, [])
+        XCTAssertEqual(drive.trashed.count, trashedBefore)
+
+        let b = try device()
+        let result = try await b.backup.restore()
+        XCTAssertEqual(result.notebooks, 1)
+        XCTAssertEqual(b.store.notebook(nb.id)?.title, "1.0.0 的筆記")
+        XCTAssertEqual(contents(of: b.store.notebookURL(nb.id)), contents(of: dir))
+    }
+
     /// 雲端只有舊格式、這台沒有的筆記本（還沒還原）：舊資料夾不能動
     func testOldFolderOfANotebookNotOnThisIPadStays() async throws {
         let a = try device()
