@@ -106,6 +106,15 @@ final class PinOverlayView: UIView {
         let w = min(max(rect.width, 120), maxW)
         var c = CGPoint(x: rect.maxX + w / 2 + 16, y: rect.midY)
         if c.x + w / 2 > bounds.width - 8 { c.x = bounds.width - w / 2 - 16 }
+        addPin(image: image, center: c, width: w)
+    }
+
+    /// 釘在畫面中間（照片列表長按「釘選在畫面上」）
+    func addPinInMiddle(image: UIImage) {
+        addPin(image: image, center: CGPoint(x: bounds.midX, y: bounds.midY * 0.9), width: min(360, bounds.width * 0.4))
+    }
+
+    private func addPin(image: UIImage, center c: CGPoint, width w: CGFloat) {
         // 新釘選的圖片一律先在所有分頁顯示，需要時再用圖片上的按鈕切換
         guard let pin = PinStore.shared.add(image: image, center: c, width: w, notebookID: nil) else { return }
         addView(for: pin)

@@ -67,6 +67,24 @@ final class ImageToolTests: XCTestCase {
         XCTAssertTrue(editor.photoStrip.isHidden)
     }
 
+    /// 回報的需求：照片列表長按，可以選要不要浮動（釘選在畫面上）
+    func testLongPressingAPhotoOffersToPinItOnScreen() throws {
+        let actions = PhotoStripView.menuActions(place: {}, pin: {})
+        XCTAssertEqual(actions.map(\.title), ["放到這一頁", "釘選在畫面上"])
+
+        // 選了「釘選在畫面上」：圖浮在畫面上（不是加到頁面）
+        editor.setTool(.image)
+        let before = Set(PinStore.shared.pins.map(\.id))
+        let onPin = try XCTUnwrap(editor.photoStrip.onPin)
+        onPin(photo(.red))
+        let added = PinStore.shared.pins.filter { !before.contains($0.id) }
+        defer { for p in added { PinStore.shared.remove(p.id) } }
+        XCTAssertEqual(added.count, 1, "多一張浮動的圖")
+        XCTAssertTrue(editor.pinOverlay.subviews.contains { ($0 as? PinView)?.pin.id == added.first?.id }, "畫面上看得到")
+        XCTAssertTrue(images(onPage: 0).isEmpty, "不會放到頁面上")
+        XCTAssertEqual(editor.tool, .image, "還在圖片工具")
+    }
+
     func testPickingPhotosKeepsTheToolAndAddsToTheCurrentPage() throws {
         editor.setTool(.image)
         editor.insertPhotoFromStrip(photo(.red))

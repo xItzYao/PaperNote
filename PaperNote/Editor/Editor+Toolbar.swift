@@ -68,6 +68,7 @@ extension NotebookViewController {
         ])
         photoStrip.presenter = self
         photoStrip.onPick = { [weak self] img in self?.insertPhotoFromStrip(img) }
+        photoStrip.onPin = { [weak self] img in self?.pinOverlay.addPinInMiddle(image: img) }
         photoStrip.onBrowse = { [weak self] in self?.presentPhotoPicker() }
         setupStickerStrip()
         circuitLibrary.onDrop = { [weak self] part, p in self?.dropCircuitPart(part, at: p) }
@@ -483,7 +484,7 @@ extension NotebookViewController {
 
         case .image:
             let hint = UILabel()
-            hint.text = L("點下面的照片，放到目前這一頁；捲到別頁可以接著加")
+            hint.text = L("點下面的照片，放到目前這一頁；捲到別頁可以接著加；長按可以釘選在畫面上")
             hint.font = .systemFont(ofSize: 13)
             hint.textColor = .secondaryLabel
             subBarStack.addArrangedSubview(hint)

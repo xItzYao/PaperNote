@@ -1,10 +1,13 @@
 import UIKit
 import Photos
 
-/// 插入圖片工具：畫面下方一排最近的照片，點一下就放到目前這頁（工具不關，可以接著捲到別頁再加）
+/// 插入圖片工具：畫面下方一排最近的照片，點一下就放到目前這頁（工具不關，可以接著捲到別頁再加）。
+/// 長按跳出選單：放到這一頁，或釘選在畫面上（浮動在最上層，換頁也留著）
 final class PhotoStripView: UIView, UICollectionViewDataSource, UICollectionViewDelegate, PHPhotoLibraryChangeObserver {
     /// 點了一張照片（已載入完整的圖）
     var onPick: ((UIImage) -> Void)?
+    /// 長按選「釘選在畫面上」（已載入的圖）
+    var onPin: ((UIImage) -> Void)?
     /// 「全部照片…」：用系統的照片選擇器
     var onBrowse: (() -> Void)?
     /// 只開放部分照片時，讓使用者再多選幾張（需要一個 view controller 來顯示）
@@ -159,21 +162,41 @@ final class PhotoStripView: UIView, UICollectionViewDataSource, UICollectionView
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         collectionView.deselectItem(at: indexPath, animated: false)
+        load(indexPath, side: 2400) { [weak self] in self?.onPick?($0) }
+    }
+
+    func collectionView(_ collectionView: UICollectionView, contextMenuConfigurationForItemsAt indexPaths: [IndexPath],
+                        point: CGPoint) -> UIContextMenuConfiguration? {
+        guard let indexPath = indexPaths.first, indexPaths.count == 1 else { return nil }
+        return UIContextMenuConfiguration(actionProvider: { [weak self] _ in
+            UIMenu(children: PhotoStripView.menuActions(place: { self?.load(indexPath, side: 2400) { self?.onPick?($0) } },
+                                              pin: { self?.load(indexPath, side: 1400) { self?.onPin?($0) } }))
+        })
+    }
+
+    /// 長按的選單
+    static func menuActions(place: @escaping () -> Void, pin: @escaping () -> Void) -> [UIAction] {
+        [UIAction(title: L("放到這一頁"), image: UIImage(systemName: "photo.badge.plus")) { _ in place() },
+         UIAction(title: L("釘選在畫面上"), image: UIImage(systemName: "pin")) { _ in pin() }]
+    }
+
+    /// 載入這張照片（最長邊 side 像素），好了在主執行緒交給 done
+    private func load(_ indexPath: IndexPath, side: CGFloat, done: @escaping (UIImage) -> Void) {
         guard let asset = assets?.object(at: indexPath.item), loading.insert(asset.localIdentifier).inserted else { return }
-        let cell = collectionView.cellForItem(at: indexPath) as? PhotoCell
+        let cell = collection.cellForItem(at: indexPath) as? PhotoCell
         cell?.setLoading(true)
         let options = PHImageRequestOptions()
         options.deliveryMode = .highQualityFormat
         options.isNetworkAccessAllowed = true
         options.resizeMode = .fast
-        // 放到頁面上的圖最多 2400 像素（insertImage 也會再縮）
-        PHImageManager.default().requestImage(for: asset, targetSize: CGSize(width: 2400, height: 2400),
+        // 放到頁面上的圖最多 2400 像素（insertImage 也會再縮）；釘選的存成 PNG，不用那麼大
+        PHImageManager.default().requestImage(for: asset, targetSize: CGSize(width: side, height: side),
                                               contentMode: .aspectFit, options: options) { [weak self] img, _ in
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.loading.remove(asset.localIdentifier)
                 cell?.setLoading(false)
-                if let img { self.onPick?(img) }
+                if let img { done(img) }
             }
         }
     }
