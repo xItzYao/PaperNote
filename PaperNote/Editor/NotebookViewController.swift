@@ -265,6 +265,9 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     /// UI 測試讀得到的除錯資訊（手指按下時卡住的手勢、畫布捲到哪裡）
     var uiTestDump: UILabel?
     var uiTestOffset: UILabel?
+    /// UI 測試：手指放開之後每次捲動的位置（看放開後有沒有來回跳）
+    var uiTestScrollTrace: UILabel?
+    var scrollTrace: [String]?
     /// UI 測試：PencilKit 筆跡的數量、最近的除錯紀錄、最後一筆 PencilKit 筆跡的墨水
     var uiTestStrokes: UILabel?
     var uiTestLog: UILabel?
@@ -463,6 +466,12 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             o.isAccessibilityElement = true
             view.addSubview(o)
             uiTestOffset = o
+            let st = UILabel(frame: CGRect(x: 2, y: 2, width: 2, height: 2))
+            st.accessibilityIdentifier = "scrollTrace"
+            st.accessibilityLabel = "-"
+            st.isAccessibilityElement = true
+            view.addSubview(st)
+            uiTestScrollTrace = st
             for (i, id) in ["pkStrokes", "debugTail", "pkInk", "tablePoint"].enumerated() {
                 let l = UILabel(frame: CGRect(x: 0, y: 4 + 2 * CGFloat(i), width: 2, height: 2))
                 l.accessibilityIdentifier = id
@@ -858,6 +867,11 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         uiTestOffset?.accessibilityLabel = "\(Int(scrollView.contentOffset.y))"
+        if var t = scrollTrace, t.count < 400 {
+            t.append("\(Int(scrollView.contentOffset.y))")
+            scrollTrace = t
+            uiTestScrollTrace?.accessibilityLabel = t.joined(separator: ",")
+        }
         zoomTrace.note("didScroll")
         updateVisiblePages(removeHidden: UIView.inheritedAnimationDuration == 0)
         updatePageIndicator()
@@ -865,7 +879,15 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     }
 
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        if uiTestScrollTrace != nil {
+            scrollTrace = ["release \(addPagePull.isHidden ? "hidden" : "\(addPagePull.stage)") decel=\(decelerate) max=\(Int(canvas.contentSize.height + canvas.adjustedContentInset.bottom - canvas.bounds.height))", "\(Int(scrollView.contentOffset.y))"]
+        }
         addPagePullEnded()
+        if uiTestScrollTrace != nil, var t = scrollTrace {
+            t.append("after \(Int(scrollView.contentOffset.y)) pages=\(pages.count)")
+            scrollTrace = t
+            uiTestScrollTrace?.accessibilityLabel = t.joined(separator: ",")
+        }
     }
 
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
