@@ -85,6 +85,74 @@ final class InkShapeTests: XCTestCase {
         XCTAssertEqual(s.kind, .triangle)
     }
 
+    // MARK: 直角（回報的需求：完美圖形要優先認直角，不然畫不出直角）
+
+    /// 轉角的兩邊的夾角（度）
+    private func cornerAngle(_ s: InkShape) -> CGFloat {
+        let v = CGPoint(x: s.start.x - s.anchor.x, y: s.start.y - s.anchor.y), w = CGPoint(x: s.end.x - s.anchor.x, y: s.end.y - s.anchor.y)
+        return abs(atan2(v.x * w.y - v.y * w.x, v.x * w.x + v.y * w.y)) * 180 / .pi
+    }
+
+    func testAnLShapeBecomesAnExactRightAngle() throws {
+        // 由下往上、再往右；兩邊都有點歪（夾角約 86°）
+        let pts = line(CGPoint(x: 103, y: 300), CGPoint(x: 100, y: 100)) + line(CGPoint(x: 100, y: 100), CGPoint(x: 300, y: 112))
+        let s = try XCTUnwrap(InkShapes.recognize(pts))
+        XCTAssertEqual(s.kind, .rightAngle, "L 形不能修成圓滑的曲線")
+        XCTAssertEqual(cornerAngle(s), 90, accuracy: 0.01, "正好 90°")
+        XCTAssertEqual(s.anchor.distance(to: CGPoint(x: 100, y: 100)), 0, accuracy: 4, "轉角在手畫的角上")
+        XCTAssertEqual(s.start.x, s.anchor.x, accuracy: 0.01, "接近垂直、水平就轉正")
+        XCTAssertEqual(s.end.y, s.anchor.y, accuracy: 0.01)
+        XCTAssertEqual(s.points.first!, s.start)
+        XCTAssertEqual(s.points.last!.distance(to: s.end), 0, accuracy: 0.01)
+        XCTAssertLessThan(InkShapes.fitError(pts, s.points), 4)
+    }
+
+    func testATiltedLWithARoundedCornerIsStillARightAngle() throws {
+        // 斜 30°、夾角 80°、角畫成圓的
+        let c = CGPoint(x: 300, y: 300)
+        let a1: CGFloat = 30 * .pi / 180, a2 = a1 + 80 * .pi / 180
+        let u1 = CGPoint(x: cos(a1), y: sin(a1)), u2 = CGPoint(x: cos(a2), y: sin(a2))
+        func at(_ u: CGPoint, _ d: CGFloat) -> CGPoint { CGPoint(x: c.x + u.x * d, y: c.y + u.y * d) }
+        var pts = line(at(u1, 180), at(u1, 18), n: 50)
+        for i in 1..<12 {
+            // 二次貝茲：從第一邊進來、繞過角、到第二邊
+            let t = CGFloat(i) / 12, p0 = at(u1, 18), p2 = at(u2, 18)
+            pts.append(CGPoint(x: (1 - t) * (1 - t) * p0.x + 2 * (1 - t) * t * c.x + t * t * p2.x,
+                               y: (1 - t) * (1 - t) * p0.y + 2 * (1 - t) * t * c.y + t * t * p2.y))
+        }
+        pts += line(at(u2, 18), at(u2, 160), n: 45)
+        let s = try XCTUnwrap(InkShapes.recognize(pts))
+        XCTAssertEqual(s.kind, .rightAngle)
+        XCTAssertEqual(cornerAngle(s), 90, accuracy: 0.01)
+        XCTAssertEqual(s.anchor.distance(to: c), 0, accuracy: 4, "圓角不算，轉角是兩邊延長的交點")
+        XCTAssertEqual(atan2(s.start.y - s.anchor.y, s.start.x - s.anchor.x) * 180 / .pi, 25, accuracy: 2, "斜的就照斜的（兩邊各轉 5°）")
+    }
+
+    func testTheRightAngleSecondSideFollowsThePen() throws {
+        let pts = line(CGPoint(x: 100, y: 300), CGPoint(x: 100, y: 100)) + line(CGPoint(x: 100, y: 100), CGPoint(x: 300, y: 100))
+        let s = try XCTUnwrap(InkShapes.recognize(pts))
+        XCTAssertEqual(s.kind, .rightAngle)
+        let m = InkShapes.moved(s, to: CGPoint(x: s.grab.x + 80, y: s.grab.y + 30))
+        XCTAssertEqual(m.start, s.start, "第一邊不動")
+        XCTAssertEqual(m.anchor, s.anchor, "轉角不動")
+        XCTAssertEqual(m.end.x, s.end.x + 80, accuracy: 0.01, "第二邊跟著筆尖變長")
+        XCTAssertEqual(cornerAngle(m), 90, accuracy: 0.01, "還是直角")
+        XCTAssertEqual(m.points.last!.distance(to: m.end), 0, accuracy: 0.01)
+    }
+
+    func testARightTriangleStartedMidSideHasAnExactRightAngle() throws {
+        // 從斜邊的中間開始畫；直角在左下，差 1.4°
+        let a = CGPoint(x: 100, y: 100), b = CGPoint(x: 100, y: 260), c = CGPoint(x: 300, y: 255)
+        let m = CGPoint(x: (a.x + c.x) / 2, y: (a.y + c.y) / 2)
+        let s = try XCTUnwrap(InkShapes.recognize(line(m, a, n: 30) + line(a, b) + line(b, c) + line(c, m, n: 30)))
+        XCTAssertEqual(s.kind, .triangle, "起點在邊的中間不算一個角，不能被當成四邊形")
+        // 直角的兩邊正好垂直、水平：直角的頂點和最上面那一點同一個 x、和最右邊那一點同一個 y
+        let top = s.points.min { $0.y < $1.y }!, right = s.points.max { $0.x < $1.x }!
+        let corner = CGPoint(x: top.x, y: right.y)
+        XCTAssertEqual(corner.distance(to: b), 0, accuracy: 4)
+        XCTAssertTrue(s.points.contains { $0.distance(to: corner) < 0.5 }, "\(s.points.prefix(5))")
+    }
+
     func testWobblyLineIsAStraightLine() throws {
         let s = try XCTUnwrap(InkShapes.recognize(line(CGPoint(x: 0, y: 0), CGPoint(x: 300, y: 80))))
         XCTAssertEqual(s.kind, .line)

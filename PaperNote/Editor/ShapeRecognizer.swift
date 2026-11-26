@@ -97,6 +97,14 @@ enum ShapeRecognizer {
         if merged.count > 2, let f = merged.first, let l = merged.last, f.distance(to: l) < epsilon * 1.5 {
             merged.removeLast()
         }
+        // 起點一定會被當成角：從邊的中間開始畫的話，那一點其實是直的（轉不到 25°），拿掉，
+        // 不然從斜邊中間開始畫的三角形會有四個角、被認成矩形
+        if merged.count > 3, let c = merged.first, let p = merged.last {
+            let n = merged[1]
+            let turn = abs(atan2((c.x - p.x) * (n.y - c.y) - (c.y - p.y) * (n.x - c.x),
+                                 (c.x - p.x) * (n.x - c.x) + (c.y - p.y) * (n.y - c.y)))
+            if turn < 25 * .pi / 180 { merged.removeFirst() }
+        }
         return merged
     }
 

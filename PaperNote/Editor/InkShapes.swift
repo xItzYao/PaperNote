@@ -1,9 +1,9 @@
 import CoreGraphics
 
-/// 自製筆刷停住變圖形：手寫的路徑認成直線、圓弧、圓、橢圓、矩形或三角形，筆不放開繼續移動可以調整大小
+/// 自製筆刷停住變圖形：手寫的路徑認成直線、直角、圓弧、圓、橢圓、矩形或三角形，筆不放開繼續移動可以調整大小
 struct InkShape: Equatable {
-    /// curve：不是基本圖形，照手畫的修成平滑的曲線
-    enum Kind: Equatable { case line, arc, circle, ellipse, rectangle, triangle, curve }
+    /// rightAngle：L 形的兩邊，正好垂直。curve：不是基本圖形，照手畫的修成平滑的曲線
+    enum Kind: Equatable { case line, rightAngle, arc, circle, ellipse, rectangle, triangle, curve }
 
     var kind: Kind
     /// 直線、圓弧的起點與終點（終點跟著筆尖）
@@ -11,7 +11,7 @@ struct InkShape: Equatable {
     var end: CGPoint = .zero
     /// 圓弧的拱高 ÷ 弦長（有正負，決定往哪邊拱）
     var bulge: CGFloat = 0
-    /// 封閉圖形剛認出來的外框點、停住時筆尖的位置、調整大小時固定不動的角
+    /// 封閉圖形剛認出來的外框點、停住時筆尖的位置、調整大小時固定不動的角（直角：轉角）
     var base: [CGPoint] = []
     var grab: CGPoint = .zero
     var anchor: CGPoint = .zero
@@ -54,6 +54,15 @@ enum InkShapes {
             s.points = s.base.map { CGPoint(x: s.anchor.x + ($0.x - s.anchor.x) * k, y: s.anchor.y + ($0.y - s.anchor.y) * k) }
         case .ellipse, .rectangle, .triangle:
             s.points = HoldToShape.scaled(s.base, grab: s.grab, anchor: s.anchor, to: p)
+        case .rightAngle:
+            // 轉角和第一邊不動；第二邊照筆尖沿著它移動多少變長變短，還是垂直
+            let c = s.anchor, e0 = s.base.last ?? s.end
+            let len0 = c.distance(to: e0)
+            guard len0 > 0 else { break }
+            let u = CGPoint(x: (e0.x - c.x) / len0, y: (e0.y - c.y) / len0)
+            let len = max(4, len0 + (p.x - s.grab.x) * u.x + (p.y - s.grab.y) * u.y)
+            s.end = CGPoint(x: c.x + u.x * len, y: c.y + u.y * len)
+            s.points = corner(s.start, c, s.end)
         case .curve where s.closed:
             s.points = HoldToShape.scaled(s.base, grab: s.grab, anchor: s.anchor, to: p)
         case .curve:
@@ -91,7 +100,7 @@ enum InkShapes {
             candidates.append((.ellipse, ellipse(in: box), 1))
         }
         let corners = ShapeRecognizer.closedCorners(pts, box: box)
-        if corners.count == 3 { candidates.append((.triangle, polygon(corners), 0.9)) }
+        if corners.count == 3 { candidates.append((.triangle, polygon(squaredTriangle(corners)), 0.9)) }
 
         let scored = candidates.map { ($0, fitError(pts, $0.1)) }
         let best = scored.min { $0.1 * $0.0.2 < $1.1 * $1.0.2 }!
@@ -109,23 +118,26 @@ enum InkShapes {
         return CGRect(x: box.midX - side / 2, y: box.midY - side / 2, width: side, height: side)
     }
 
-    // MARK: 直線、圓弧
+    // MARK: 直線、直角、圓弧
 
     private static func open(_ pts: [CGPoint]) -> InkShape {
         let a = pts[0], b = pts[pts.count - 1]
         let chord = a.distance(to: b)
-        // 離弦最遠的點（圓弧的話就是弧的中點）
-        var far = a
+        // 離弦最遠的點（圓弧的話就是弧的中點，L 形就是轉角）
+        var farIndex = 0
         var farDev: CGFloat = 0
-        for p in pts {
+        for (i, p) in pts.enumerated() {
             let d = abs(signedDistance(p, a, b))
-            if d > farDev { farDev = d; far = p }
+            if d > farDev { farDev = d; farIndex = i }
         }
+        let far = pts[farIndex]
         // 偏離不大就是直線（手畫的直線常常有點彎）
         if chord <= 20 || farDev <= max(8, chord * 0.12) {
             let e = ShapeRecognizer.snappedLineEnd(from: a, to: b)
             return InkShape(kind: .line, start: a, end: e, points: ShapeRecognizer.segment(a, e))
         }
+        // 直角比圓弧先認：L 形和半圓一樣，轉角都差不多 90°（圓周角），只是兩邊是直的
+        if let l = rightAngle(pts, cornerAt: farIndex) { return l }
         let h = signedDistance(far, a, b)
         if let c = circleCenter(a, far, b) {
             let r = c.distance(to: a)
@@ -138,6 +150,96 @@ enum InkShapes {
         // 其他的（波浪、S 形、勾…）：照手畫的修成平滑的曲線，頭尾不動
         let curve = smoothCurve(pts, closed: false)
         return InkShape(kind: .curve, start: a, end: b, base: curve, grab: b, anchor: a, points: curve)
+    }
+
+    /// 兩邊的夾角和 90° 差這麼多（度）以內就是直角，拉成正好垂直
+    static let rightAngleTolerance: CGFloat = 15
+
+    /// 一個轉角、兩邊都是直的、夾角差不多 90°：L 形。角常常畫成圓的，所以靠近角的那段不算，
+    /// 兩邊各自擬合一條直線，交點才是轉角
+    private static func rightAngle(_ pts: [CGPoint], cornerAt k: Int) -> InkShape? {
+        guard k > 0, k < pts.count - 1 else { return nil }
+        let a = pts[0], b = pts[pts.count - 1], far = pts[k]
+        let l1 = a.distance(to: far), l2 = b.distance(to: far)
+        guard min(l1, l2) >= 15 else { return nil }
+        func leg(_ part: ArraySlice<CGPoint>, _ len: CGFloat) -> (CGPoint, CGPoint)? {
+            let kept = part.filter { $0.distance(to: far) >= len * 0.25 }
+            return fitLine(kept.count >= 3 ? kept : Array(part))
+        }
+        guard let leg1 = leg(pts[...k], l1), let leg2 = leg(pts[k...], l2),
+              let c = intersection(leg1.0, leg1.1, leg2.0, leg2.1), c.distance(to: far) < min(l1, l2) * 0.5,
+              let legs = squaredLegs(corner: c, a, b) else { return nil }
+        let u1 = legs.0, u2 = legs.1
+        let len1 = max(1, (a.x - c.x) * u1.x + (a.y - c.y) * u1.y)
+        let len2 = max(1, (b.x - c.x) * u2.x + (b.y - c.y) * u2.y)
+        let start = CGPoint(x: c.x + u1.x * len1, y: c.y + u1.y * len1)
+        let end = CGPoint(x: c.x + u2.x * len2, y: c.y + u2.y * len2)
+        let outline = corner(start, c, end)
+        // 兩邊要是直的：和手畫的平均差不到長邊的 5%（最少 4pt）。半圓、圓弧差很多
+        guard fitError(pts, outline) <= max(4, max(l1, l2) * 0.05) else { return nil }
+        return InkShape(kind: .rightAngle, start: start, end: end, base: outline, grab: b, anchor: c, points: outline)
+    }
+
+    /// 從轉角 c 往 a、往 b 的兩邊夾角差不多 90°：回傳拉成正好垂直的兩個方向（單位向量）。
+    /// 兩邊對稱地轉（角平分線不動）；接近水平、垂直時整個轉正（和直線一樣 6° 以內）。不是直角回傳 nil
+    static func squaredLegs(corner c: CGPoint, _ a: CGPoint, _ b: CGPoint) -> (CGPoint, CGPoint)? {
+        let a0 = atan2(a.y - c.y, a.x - c.x), b0 = atan2(b.y - c.y, b.x - c.x)
+        var d = b0 - a0
+        while d > .pi { d -= 2 * .pi }
+        while d <= -.pi { d += 2 * .pi }
+        guard abs(abs(d) - .pi / 2) <= rightAngleTolerance * .pi / 180 else { return nil }
+        let turn: CGFloat = d > 0 ? 1 : -1
+        var first = a0 + d / 2 - turn * .pi / 4
+        let toAxis = (first / (.pi / 2)).rounded() * (.pi / 2) - first
+        if abs(toAxis) < 6 * .pi / 180 { first += toAxis }
+        let second = first + turn * .pi / 2
+        return (CGPoint(x: cos(first), y: sin(first)), CGPoint(x: cos(second), y: sin(second)))
+    }
+
+    /// 三角形有一個角差不多 90°：拉成正好的直角（那個角不動，兩邊長度不變）
+    private static func squaredTriangle(_ t: [CGPoint]) -> [CGPoint] {
+        func angle(_ i: Int) -> CGFloat {
+            let c = t[i], p = t[(i + 2) % 3], n = t[(i + 1) % 3]
+            let v = CGPoint(x: p.x - c.x, y: p.y - c.y), w = CGPoint(x: n.x - c.x, y: n.y - c.y)
+            return abs(atan2(v.x * w.y - v.y * w.x, v.x * w.x + v.y * w.y))
+        }
+        guard let i = (0..<3).min(by: { abs(angle($0) - .pi / 2) < abs(angle($1) - .pi / 2) }) else { return t }
+        let c = t[i], p = t[(i + 2) % 3], n = t[(i + 1) % 3]
+        guard let legs = squaredLegs(corner: c, p, n) else { return t }
+        let u1 = legs.0, u2 = legs.1
+        var out = t
+        out[(i + 2) % 3] = CGPoint(x: c.x + u1.x * c.distance(to: p), y: c.y + u1.y * c.distance(to: p))
+        out[(i + 1) % 3] = CGPoint(x: c.x + u2.x * c.distance(to: n), y: c.y + u2.y * c.distance(to: n))
+        return out
+    }
+
+    /// start → 轉角 c → end 的折線
+    static func corner(_ start: CGPoint, _ c: CGPoint, _ end: CGPoint) -> [CGPoint] {
+        ShapeRecognizer.segment(start, c) + ShapeRecognizer.segment(c, end).dropFirst()
+    }
+
+    /// 最小平方法的直線（主軸）：線上一點和方向
+    private static func fitLine(_ pts: [CGPoint]) -> (CGPoint, CGPoint)? {
+        guard pts.count >= 2 else { return nil }
+        let n = CGFloat(pts.count)
+        let mx = pts.reduce(0) { $0 + $1.x } / n, my = pts.reduce(0) { $0 + $1.y } / n
+        var sxx: CGFloat = 0, syy: CGFloat = 0, sxy: CGFloat = 0
+        for p in pts {
+            sxx += (p.x - mx) * (p.x - mx)
+            syy += (p.y - my) * (p.y - my)
+            sxy += (p.x - mx) * (p.y - my)
+        }
+        guard sxx + syy > 0 else { return nil }
+        let t = atan2(2 * sxy, sxx - syy) / 2
+        return (CGPoint(x: mx, y: my), CGPoint(x: cos(t), y: sin(t)))
+    }
+
+    /// 兩條直線（點 + 單位方向）的交點；幾乎平行回傳 nil
+    private static func intersection(_ p1: CGPoint, _ d1: CGPoint, _ p2: CGPoint, _ d2: CGPoint) -> CGPoint? {
+        let cross = d1.x * d2.y - d1.y * d2.x
+        guard abs(cross) > 0.1 else { return nil }
+        let t = ((p2.x - p1.x) * d2.y - (p2.y - p1.y) * d2.x) / cross
+        return CGPoint(x: p1.x + d1.x * t, y: p1.y + d1.y * t)
     }
 
     /// 圓弧和手畫的平均差多少以內算圓弧：拱高的 8%（最少 4pt），也不超過半徑的 14%。
