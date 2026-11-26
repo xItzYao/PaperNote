@@ -53,8 +53,12 @@ final class PageBoundsTests: XCTestCase {
         editor.scrollViewDidScroll(canvas)
     }
 
-    private func release() {
-        editor.scrollViewDidEndDragging(canvas, willDecelerate: false)
+    /// 手指放開：捲動畫面問 willEndDragging 放開後要停在哪（拉過頭的話本來是彈回最底下）
+    @discardableResult
+    private func release() -> CGPoint {
+        var target = CGPoint(x: canvas.contentOffset.x, y: maxOffsetY)
+        editor.scrollViewWillEndDragging(canvas, withVelocity: .zero, targetContentOffset: &target)
+        return target
     }
 
     // MARK: 最後一頁
@@ -83,10 +87,14 @@ final class PageBoundsTests: XCTestCase {
         pull(by: NotebookViewController.addPagePullThreshold + 20)
         XCTAssertFalse(editor.addPagePull.isHidden, "拉過頭要出現＋")
         XCTAssertEqual(editor.addPagePull.stage, .blankPage)
-        release()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        let offset = canvas.contentOffset.y
+        let target = release()
+        XCTAssertEqual(target.y, offset, accuracy: 0.5, "放開時不彈回舊的底部（新的一頁已經加在那裡），停在原地")
+        XCTAssertEqual(canvas.contentOffset.y, offset, accuracy: 0.5, "加頁的時候畫面不跳")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.6))
         XCTAssertNil(picker, "還沒拉到選單的距離，不跳小視窗")
         XCTAssertEqual(editor.pages.count, n + 1, "放開就多一頁")
+        XCTAssertEqual(editor.currentPageIndex, n, "接著捲到新的一頁")
         guard case let .paper(w, h, style) = try XCTUnwrap(editor.pages.last).background else { return XCTFail("要是紙張") }
         XCTAssertEqual(CGSize(width: w, height: h), size, "和上一頁一樣大")
         XCTAssertEqual(style, .blank, "是空白紙，不照抄上一頁的格線")

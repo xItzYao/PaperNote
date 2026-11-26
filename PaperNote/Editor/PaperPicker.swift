@@ -152,7 +152,7 @@ extension NotebookViewController {
     }
 
     /// 在 index 插入一頁：大小照選的（沒指定就和參考頁一樣），方向照選的（直式＝窄邊在上）
-    func insertPage(at index: Int, style: PaperStyle, landscape: Bool, size paper: PaperSize? = nil) {
+    func insertPage(at index: Int, style: PaperStyle, landscape: Bool, size paper: PaperSize? = nil, scroll: Bool = true) {
         guard !pages.isEmpty else { return }
         let ref = pages[min(max(0, index - 1), pages.count - 1)]
         let s = PaperSize.oriented(paper?.size ?? session.baseSize(of: ref), landscape: landscape)
@@ -161,6 +161,6 @@ extension NotebookViewController {
         performLayoutChange {
             session.document.pages.insert(newPage, at: at)
         }
-        scrollToPage(at, animated: true)
+        if scroll { scrollToPage(at, animated: true) }
     }
 }

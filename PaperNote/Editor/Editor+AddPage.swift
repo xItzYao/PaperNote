@@ -81,22 +81,31 @@ extension NotebookViewController {
         addPagePull.center = CGPoint(x: canvas.contentOffset.x + canvas.bounds.width / 2, y: bottom - over / 2)
     }
 
-    /// 手指放開：看拉多遠，加一張空白紙或問要新增哪種頁面
-    func addPagePullEnded() {
+    /// 手指放開：看拉多遠，加一張空白紙或問要新增哪種頁面。
+    /// 在 scrollViewWillEndDragging 裡呼叫（target 是放開後捲動畫面要停的位置）：這時候捲動畫面還沒決定怎麼動。
+    /// 拉過頭放開，捲動畫面本來會彈回舊的底部；到 didEndDragging 才加頁、開始捲到新頁的話，
+    /// 回彈也已經排好了，兩段動畫一起跑，畫面會先往下、跳回來、再往下捲。
+    /// 所以加完頁先叫它停在原地（不回彈），等放開的處理都做完了才捲到新的一頁：只有一段捲動
+    func addPagePullEnded(target: UnsafeMutablePointer<CGPoint>?) {
         let stage = addPagePull.isHidden ? .none : addPagePull.stage
         addPagePull.update(over: 0)
         switch stage {
         case .none: break
-        case .blankPage: addBlankPageAtEnd()
+        case .blankPage:
+            guard let i = addBlankPageAtEnd(scroll: false) else { break }
+            target?.pointee = canvas.contentOffset
+            DispatchQueue.main.async { [weak self] in self?.scrollToPage(i, animated: true) }
         case .paperPicker: presentAddPageMenu()
         }
     }
 
-    /// 加在最後面：大小、方向和最後一頁一樣的空白紙
-    func addBlankPageAtEnd() {
-        guard let last = pages.last else { return }
+    /// 加在最後面：大小、方向和最後一頁一樣的空白紙。回傳新的那一頁
+    @discardableResult
+    func addBlankPageAtEnd(scroll: Bool = true) -> Int? {
+        guard let last = pages.last else { return nil }
         let size = session.baseSize(of: last)
-        insertPage(at: pages.count, style: .blank, landscape: size.width > size.height)
+        insertPage(at: pages.count, style: .blank, landscape: size.width > size.height, scroll: scroll)
+        return pages.count - 1
     }
 
     /// 拉過最後一頁放開：中間跳出選紙張的小視窗，選好加在最後面

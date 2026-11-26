@@ -878,13 +878,14 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         updateAddPagePull()
     }
 
-    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+    func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint,
+                                   targetContentOffset: UnsafeMutablePointer<CGPoint>) {
         if uiTestScrollTrace != nil {
-            scrollTrace = ["release \(addPagePull.isHidden ? "hidden" : "\(addPagePull.stage)") decel=\(decelerate) max=\(Int(canvas.contentSize.height + canvas.adjustedContentInset.bottom - canvas.bounds.height))", "\(Int(scrollView.contentOffset.y))"]
+            scrollTrace = ["release \(addPagePull.isHidden ? "hidden" : "\(addPagePull.stage)") v=\(Int(velocity.y * 1000)) target=\(Int(targetContentOffset.pointee.y))", "\(Int(scrollView.contentOffset.y))"]
         }
-        addPagePullEnded()
+        addPagePullEnded(target: targetContentOffset)
         if uiTestScrollTrace != nil, var t = scrollTrace {
-            t.append("after \(Int(scrollView.contentOffset.y)) pages=\(pages.count)")
+            t.append("after \(Int(scrollView.contentOffset.y)) target=\(Int(targetContentOffset.pointee.y)) pages=\(pages.count)")
             scrollTrace = t
             uiTestScrollTrace?.accessibilityLabel = t.joined(separator: ",")
         }
