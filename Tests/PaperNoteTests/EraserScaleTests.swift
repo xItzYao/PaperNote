@@ -148,6 +148,28 @@ final class EraserScaleTests: XCTestCase {
             CATransaction.flush()
             RunLoop.main.run(until: Date())
         }
+        // set 再拆開：組 PKDrawing、交給 PencilKit、編輯器其他的事
+        var strokes = editor.canvas.drawing.strokes
+        let build = ms {
+            flip.toggle()
+            strokes[strokes.count - 1].transform = CGAffineTransform(translationX: flip ? 1 : 0, y: 0)
+            _ = PKDrawing(strokes: strokes)
+        }
+        let rawSet = ms {
+            flip.toggle()
+            strokes[strokes.count - 1].transform = CGAffineTransform(translationX: flip ? 1 : 0, y: 0)
+            let d = PKDrawing(strokes: strokes)
+            editor.isApplyingDrawing = true
+            editor.canvas.drawing = d
+            editor.isApplyingDrawing = false
+        }
+        let sameSet = ms {
+            let d = editor.canvas.drawing
+            editor.isApplyingDrawing = true
+            editor.canvas.drawing = d
+            editor.isApplyingDrawing = false
+        }
+        print(String(format: "ERASESET build=%.1fms canvasSet=%.1fms (incl. build) sameDrawingSet=%.1fms", build, rawSet, sameSet))
         let ink = editor.pages[9].ink
         let inkErase = ms { _ = InkGeometry.erase(ink, at: CGPoint(x: 300, y: 300), radius: 10, partial: true) }
         let o = editor.contentOrigin(9)

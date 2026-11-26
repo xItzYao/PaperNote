@@ -824,6 +824,12 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             }
             i += 1
         }
+        // 放很大時筆跡只把看得到的地方畫清楚（見 PageInkView）
+        for v in pageViews.values {
+            let f = v.inkView.frame
+            let r = visible.intersection(f)
+            v.inkView.setVisibleRect(r.isNull || r.isEmpty ? nil : r.offsetBy(dx: -f.minX, dy: -f.minY))
+        }
         guard removeHidden else { return }
         for (id, v) in pageViews where !keep.contains(id) {
             zoomTrace.note("page- \(pageIndex(of: id).map { $0 + 1 } ?? 0)")

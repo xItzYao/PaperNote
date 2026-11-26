@@ -486,25 +486,34 @@ final class LiveInkView: UIView {
     }
 }
 
-// MARK: - 頁面上的筆跡（CAShapeLayer）
+// MARK: - 頁面上的筆跡（點陣圖）
 
-/// 一頁的筆跡。平常整頁畫成一張點陣圖（在背景畫），捲動時只是搬圖，不用每格重畫向量；
-/// 寫一筆、擦掉只重畫改到的那一塊。放大到點陣圖會太大時改用向量（CAShapeLayer），放大也清楚
+/// 一頁的筆跡畫成點陣圖（在背景畫），捲動時只是搬圖；寫一筆、擦掉只重畫改到的那一塊。
+/// 放大到整頁的圖會太大時，整頁那張（底圖）的解析度停在上限，另外把看得到的範圍（多留一圈）用全解析度畫一張疊在上面。
+/// 以前放大很多時改用向量（CAShapeLayer）：筆跡多的頁面捲動時，系統每一格畫面都要重描全部的線段，會卡
 final class PageInkView: UIView {
     private var strokes: [InkStroke] = []
     private var offset: CGPoint = .zero
     private var hiddenIDs: Set<UUID> = []
 
-    /// 點陣圖的解析度（每點幾個像素）＝螢幕倍率 × 縮放
+    /// 要的解析度（每點幾個像素）＝螢幕倍率 × 縮放。底圖最多到 baseScale，超過的部分由清晰範圍那張補
     private(set) var renderScale: CGFloat = UIScreen.main.scale
-    /// 一頁點陣圖最多幾個像素（約 64MB）；超過就用向量。13 吋 iPad 頁面寬度填滿螢幕約 600 萬像素，放大到約 1.6 倍都還是點陣圖
+    /// 一張圖最多幾個像素（約 64MB）。13 吋 iPad 頁面寬度填滿螢幕約 600 萬像素，底圖放大到約 1.6 倍都還是全解析度
     static let maxBitmapPixels: CGFloat = 16_000_000
+    /// 看得到的範圍（這個 view 的座標）；nil＝不知道，只畫底圖
+    private var visibleRect: CGRect?
+
+    private lazy var base = InkBitmap(owner: self, keepsOldRegion: false) { [weak self] image, _ in self?.layer.contents = image }
+    private lazy var detail = InkBitmap(owner: self, keepsOldRegion: true) { [weak self] image, region in self?.showDetail(image, region) }
+    private let detailLayer = CALayer()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         isOpaque = false
         backgroundColor = .clear
         isUserInteractionEnabled = false
+        detailLayer.isHidden = true
+        layer.addSublayer(detailLayer)
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -529,6 +538,15 @@ final class PageInkView: UIView {
         guard ids != hiddenIDs else { return }
         hiddenIDs = ids
         update(atOnce: true)
+    }
+
+    /// 捲動、縮放時編輯器告訴我們看得到哪裡。清晰範圍還蓋得住就什麼都不做（捲動時每一格都會呼叫）
+    func setVisibleRect(_ r: CGRect?) {
+        visibleRect = r
+        guard !holding, bounds.width > 0, bounds.height > 0 else { return }
+        let want = detailTarget()
+        if want == detail.target || (want != nil && want == detail.building) { return }
+        updateDetail(visibleStrokes, want: want, atOnce: false)
     }
 
     private var holding = false
@@ -569,83 +587,110 @@ final class PageInkView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        layer.sublayers?.forEach { $0.frame = bounds }
-        if bounds.size != bitmapSize && !vectorShown { update() }
+        if base.target?.region != bounds { update() }
     }
 
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        let scale = window?.screen.scale ?? UIScreen.main.scale
-        layer.sublayers?.forEach { $0.contentsScale = scale }
+    fileprivate var visibleStrokes: [InkStroke] { hiddenIDs.isEmpty ? strokes : strokes.filter { !hiddenIDs.contains($0.id) } }
+
+    /// 底圖的解析度：整頁不超過 maxBitmapPixels
+    private var baseScale: CGFloat {
+        let area = bounds.width * bounds.height
+        guard area > 0 else { return renderScale }
+        return min(renderScale, (Self.maxBitmapPixels / area).squareRoot())
     }
 
-    private var visibleStrokes: [InkStroke] { hiddenIDs.isEmpty ? strokes : strokes.filter { !hiddenIDs.contains($0.id) } }
-
-    private var wantsBitmap: Bool { bounds.width * bounds.height * renderScale * renderScale <= Self.maxBitmapPixels }
+    /// 背景還在畫圖
+    var isBuilding: Bool { base.isBuilding || detail.isBuilding }
+    /// 整張重畫的次數（測試用：寫一筆不該整張重畫）
+    var fullRenders: Int { base.fullRenders + detail.fullRenders }
+    /// 畫面上是點陣圖
+    var showsBitmap: Bool { layer.contents != nil }
+    /// 清晰範圍那張蓋住的地方（這個 view 的座標）和圖；沒放大到需要時是 nil（測試用）
+    var detailRegion: CGRect? { detailLayer.isHidden ? nil : detailLayer.frame }
+    var detailImage: CGImage? { detailLayer.isHidden ? nil : detailLayer.contents.map { $0 as! CGImage } }
 
     /// atOnce：改再多筆也在這一次畫面更新裡畫好
-    private func update(atOnce: Bool = false) {
+    fileprivate func update(atOnce: Bool = false) {
         if holding {
             changedWhileHolding = true
             return
         }
         guard bounds.width > 0, bounds.height > 0 else { return }
-        guard wantsBitmap else { showVector(atOnce: atOnce); return }
         let visible = visibleStrokes
-        // 現有的圖（解析度舊了也一樣）先跟著改，畫面不用等；改動太多就整張在背景重畫
-        if let ctx = bitmap, bitmapOffset == offset, bitmapSize == bounds.size,
-           Self.applyChanges(from: bitmapContent, to: visible, in: ctx, limit: atOnce ? .max : Self.maxPatchStrokes) {
-            bitmapContent = visible
-            layer.contents = ctx.makeImage()
-            if bitmapScale == renderScale {
-                removeVector()
-                // 現在這張就是最新的：背景還在畫的是舊內容，畫好也不能換上
-                if isBuilding {
-                    _ = nextGeneration()
-                    isBuilding = false
-                    building = nil
-                }
-                return
-            }
-        }
-        // 空白頁：直接開一張空的圖，寫第一筆時馬上有地方畫
-        if visible.isEmpty, bitmap == nil, let ctx = Self.makeBitmap(size: bounds.size, scale: renderScale, offset: offset) {
-            _ = nextGeneration()
-            isBuilding = false
-            building = nil
-            adopt(ctx, content: [], scale: renderScale, offset: offset, size: bounds.size)
+        base.update(visible, want: .init(scale: baseScale, offset: offset, region: bounds), atOnce: atOnce)
+        updateDetail(visible, want: detailTarget(), atOnce: atOnce)
+    }
+
+    private func updateDetail(_ visible: [InkStroke], want: InkBitmap.Target?, atOnce: Bool) {
+        guard let want else {
+            detail.clear()
             return
         }
-        if isBuilding, building == Target(scale: renderScale, offset: offset, size: bounds.size) { return }
-        renderInBackground(visible)
+        detail.update(visible, want: want, atOnce: atOnce)
     }
 
-    // MARK: 點陣圖
+    /// 清晰範圍要畫哪裡：看得到的範圍外面多留一圈（長寬各多一半），總像素不超過上限。
+    /// 現在的（或正在畫的）還蓋得住看得到的範圍就照舊，捲一點點不用重畫
+    private func detailTarget() -> InkBitmap.Target? {
+        guard renderScale > baseScale + 0.01, let r = visibleRect?.intersection(bounds), !r.isNull, r.width > 0, r.height > 0 else { return nil }
+        for t in [detail.building, detail.target].compactMap({ $0 }) where t.scale == renderScale && t.offset == offset {
+            if t.region.contains(r) && bounds.contains(t.region) { return t }
+        }
+        let s2 = renderScale * renderScale
+        let grow = min(1.5, max(1, (Self.maxBitmapPixels / (r.width * r.height * s2)).squareRoot()))
+        let region = r.insetBy(dx: -r.width * (grow - 1) / 2, dy: -r.height * (grow - 1) / 2).integral.intersection(bounds)
+        return .init(scale: renderScale, offset: offset, region: region)
+    }
 
-    private var bitmap: CGContext?
-    /// 點陣圖裡現在畫的筆跡（已去掉藏起來的）
-    private var bitmapContent: [InkStroke] = []
-    private var bitmapScale: CGFloat = 0
-    private var bitmapOffset: CGPoint = .zero
-    private var bitmapSize: CGSize = .zero
+    private func showDetail(_ image: CGImage?, _ region: CGRect) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        detailLayer.contents = image
+        detailLayer.frame = region
+        detailLayer.isHidden = image == nil
+        CATransaction.commit()
+    }
 
-    private struct Target: Equatable {
+    /// 一次最多直接改幾筆；更多（例如剛打開的頁面、整頁貼上）就整張在背景重畫
+    static let maxPatchStrokes = 64
+    /// 好幾頁可以同時畫（多核心）
+    fileprivate static let renderQueue = DispatchQueue(label: "PageInkView.render", qos: .userInitiated, attributes: .concurrent)
+}
+
+/// 一張筆跡的點陣圖：蓋住 region（頁面 view 的座標）、解析度 scale。在背景畫；改了幾筆就直接補在現在這張上
+private final class InkBitmap {
+    struct Target: Equatable {
         var scale: CGFloat
         var offset: CGPoint
-        var size: CGSize
+        var region: CGRect
     }
 
-    /// 背景還在畫整頁的圖
-    private(set) var isBuilding = false
-    /// 整頁重畫的次數（測試用：寫一筆不該整頁重畫）
+    private unowned let owner: PageInkView
+    /// 範圍換了，新的還沒畫好前舊的照樣補（清晰範圍：舊的那張還在原本的位置顯示）。
+    /// 底圖不行：範圍是整頁，頁面大小變了舊的圖會被拉長
+    private let keepsOldRegion: Bool
+    /// 換上新的圖（nil＝不畫）
+    private let show: (CGImage?, CGRect) -> Void
+    private var ctx: CGContext?
+    /// 現在這張圖畫的範圍、解析度
+    private(set) var target: Target?
+    /// 圖裡現在畫的筆跡（已去掉藏起來的）
+    private var content: [InkStroke] = []
+    /// 背景正在畫的
+    private(set) var building: Target?
+    var isBuilding: Bool { building != nil }
     private(set) var fullRenders = 0
-    /// 畫面上是一張點陣圖（不是一堆向量層）
-    var showsBitmap: Bool { layer.contents != nil && !vectorShown }
-    private var building: Target?
     /// 每次換一個要畫的目標就加一；背景畫好時目標已經換了就丟掉
     private var generation = 0
-    /// 好幾頁可以同時畫（多核心）
-    private static let renderQueue = DispatchQueue(label: "PageInkView.render", qos: .userInitiated, attributes: .concurrent)
+    private var cancel = Cancel()
+
+    init(owner: PageInkView, keepsOldRegion: Bool, show: @escaping (CGImage?, CGRect) -> Void) {
+        self.owner = owner
+        self.keepsOldRegion = keepsOldRegion
+        self.show = show
+    }
+
+    deinit { cancel.cancelled = true }
 
     /// 背景畫到一半，頁面已經捲走或內容換了：讓它提早停
     private final class Cancel: @unchecked Sendable {
@@ -656,72 +701,96 @@ final class PageInkView: UIView {
             set { lock.lock(); flag = newValue; lock.unlock() }
         }
     }
-    private var cancel = Cancel()
 
     /// 換一個新的目標：背景還在畫的舊目標作廢
     private func nextGeneration() -> Int {
         cancel.cancelled = true
         cancel = Cancel()
         generation += 1
+        building = nil
         return generation
     }
 
-    deinit { cancel.cancelled = true }
+    func clear() {
+        guard ctx != nil || building != nil else { return }
+        _ = nextGeneration()
+        ctx = nil
+        target = nil
+        content = []
+        show(nil, .zero)
+    }
 
-    private func renderInBackground(_ content: [InkStroke]) {
+    func update(_ visible: [InkStroke], want: Target, atOnce: Bool) {
+        // 現有的圖（解析度舊了也一樣）先跟著改，畫面不用等；改動太多就整張在背景重畫
+        if let ctx, let t = target, t.offset == want.offset, t.region == want.region || keepsOldRegion,
+           Self.applyChanges(from: content, to: visible, in: ctx, limit: atOnce ? .max : PageInkView.maxPatchStrokes) {
+            content = visible
+            show(ctx.makeImage(), t.region)
+            if t == want {
+                // 現在這張就是最新的：背景還在畫的是舊內容，畫好也不能換上
+                if building != nil { _ = nextGeneration() }
+                return
+            }
+        }
+        // 空白頁：直接開一張空的圖，寫第一筆時馬上有地方畫
+        if visible.isEmpty, ctx == nil, let c = Self.makeBitmap(want) {
+            _ = nextGeneration()
+            adopt(c, content: [], target: want)
+            return
+        }
+        if building == want { return }
+        renderInBackground(visible, want)
+    }
+
+    private func renderInBackground(_ content: [InkStroke], _ target: Target) {
         let gen = nextGeneration()
         let token = cancel
-        let target = Target(scale: renderScale, offset: offset, size: bounds.size)
         building = target
-        isBuilding = true
-        Self.renderQueue.async {
+        // 只畫範圍裡的筆跡（clip 是筆跡的座標）
+        let clip = target.region.offsetBy(dx: -target.offset.x, dy: -target.offset.y).insetBy(dx: -1, dy: -1)
+        PageInkView.renderQueue.async {
             guard !token.cancelled else { return }
-            var ctx = Self.makeBitmap(size: target.size, scale: target.scale, offset: target.offset)
-            if let c = ctx, !InkRenderer.drawBatched(content, in: c, shouldStop: { token.cancelled }) { ctx = nil }
+            var ctx = Self.makeBitmap(target)
+            if let c = ctx, !InkRenderer.drawBatched(content, in: c, clip: clip, shouldStop: { token.cancelled }) { ctx = nil }
             guard !token.cancelled else { return }
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.generation == gen else { return }
-                self.isBuilding = false
                 self.building = nil
                 guard let ctx else { return }
                 self.fullRenders += 1
-                self.adopt(ctx, content: content, scale: target.scale, offset: target.offset, size: target.size)
+                self.adopt(ctx, content: content, target: target)
             }
         }
     }
 
     /// 換上畫好的圖；畫的期間有改過的筆跡先補上才換。補不上（改太多）就不換、照現在的重畫：
     /// 先換上再重畫的話，畫面會先回到舊的樣子（例如剛移走的字跳回原位）
-    private func adopt(_ ctx: CGContext, content: [InkStroke], scale: CGFloat, offset: CGPoint, size: CGSize) {
-        let visible = visibleStrokes
-        if content != visible, !Self.applyChanges(from: content, to: visible, in: ctx, limit: Self.maxPatchStrokes) {
-            update()
+    private func adopt(_ ctx: CGContext, content: [InkStroke], target: Target) {
+        let visible = owner.visibleStrokes
+        if content != visible, !Self.applyChanges(from: content, to: visible, in: ctx, limit: PageInkView.maxPatchStrokes) {
+            owner.update()
             return
         }
-        bitmap = ctx
-        bitmapContent = visible
-        bitmapScale = scale
-        bitmapOffset = offset
-        bitmapSize = size
-        layer.contents = ctx.makeImage()
-        update()
+        self.ctx = ctx
+        self.target = target
+        self.content = visible
+        show(ctx.makeImage(), target.region)
+        owner.update()
     }
 
-    /// 透明的點陣圖，座標同頁面（左上角原點、已平移 offset）
-    private static func makeBitmap(size: CGSize, scale: CGFloat, offset: CGPoint) -> CGContext? {
-        let w = Int((size.width * scale).rounded(.up)), h = Int((size.height * scale).rounded(.up))
+    /// 透明的點陣圖，座標同頁面筆跡（範圍的左上角對到圖的左上角、已平移 offset）
+    private static func makeBitmap(_ t: Target) -> CGContext? {
+        let r = t.region
+        let w = Int((r.width * t.scale).rounded(.up)), h = Int((r.height * t.scale).rounded(.up))
         guard w > 0, h > 0, let space = CGColorSpace(name: CGColorSpace.sRGB),
               let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: space,
                                   bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
         else { return nil }
         ctx.translateBy(x: 0, y: CGFloat(h))
-        ctx.scaleBy(x: CGFloat(w) / size.width, y: -CGFloat(h) / size.height)
-        ctx.translateBy(x: offset.x, y: offset.y)
+        ctx.scaleBy(x: CGFloat(w) / r.width, y: -CGFloat(h) / r.height)
+        ctx.translateBy(x: t.offset.x - r.minX, y: t.offset.y - r.minY)
         return ctx
     }
-
-    /// 一次最多直接改幾筆；更多（例如剛打開的頁面、整頁貼上）就整張在背景重畫
-    static let maxPatchStrokes = 64
 
     /// 只重畫改到的地方：只是多寫了幾筆就直接畫上去；其他改動（擦掉、改顏色、移動）清掉那一塊再重畫。
     /// 改動太多回傳 false、不畫
@@ -760,168 +829,6 @@ final class PageInkView: UIView {
         InkRenderer.drawBatched(new, in: ctx, clip: dirty)
         ctx.restoreGState()
         return true
-    }
-
-    // MARK: 向量（放大很多時）
-
-    /// 一層（一個 CAShapeLayer）最多畫幾筆。整頁合成一層的話，每寫一筆整頁都要重畫
-    static let strokesPerLayer = 64
-
-    private var vectorShown: Bool { !(layer.sublayers ?? []).isEmpty }
-
-    private func showVector(atOnce: Bool) {
-        if bitmap != nil || building != nil {
-            // 從點陣圖換成向量：背景還沒畫好的圖不要了
-            _ = nextGeneration()
-            isBuilding = false
-            building = nil
-            bitmap = nil
-            bitmapContent = []
-            bitmapSize = .zero
-            // 舊的圖先留著顯示，向量好了才拿掉
-        }
-        if isBuilding {
-            // 向量還在背景算：算好會自己補上最新的筆跡
-            guard atOnce else { return }
-            _ = nextGeneration()
-            isBuilding = false
-        }
-        rebuildVector(atOnce: atOnce)
-    }
-
-    private func removeVector() {
-        guard vectorShown else { return }
-        layer.sublayers?.forEach { $0.removeFromSuperlayer() }
-        chunks = []
-        builtOffset = nil
-    }
-
-    /// 一層要畫的筆跡：同顏色、同粗細、連續寫的幾筆
-    private struct Chunk: Equatable {
-        var color: String
-        var width: CGFloat
-        /// 粗細會變的筆（毛筆）：這一層只畫線寬是 width 的那幾段
-        var variable: Bool
-        var strokes: [InkStroke]
-        /// 有質感的筆：放大時只有透明度，沒有顆粒
-        var opacity: CGFloat = 1
-    }
-
-    private var chunks: [Chunk] = []
-    private var builtOffset: CGPoint?
-
-    /// 毛筆一段的線寬（取到 0.05pt，同樣粗細的段才能畫在同一層）
-    private static func segmentWidth(_ a: InkPoint, _ b: InkPoint) -> CGFloat {
-        (((a.width + b.width) / 2) * 20).rounded() / 20
-    }
-
-    private static func makeChunks(_ strokes: [InkStroke]) -> [Chunk] {
-        var out: [Chunk] = []
-        func add(_ s: InkStroke, width: CGFloat, variable: Bool) {
-            let opacity = s.style?.look?.flatOpacity ?? 1
-            if let last = out.last, last.color == s.colorHex, last.width == width, last.variable == variable,
-               last.opacity == opacity, last.strokes.count < strokesPerLayer {
-                out[out.count - 1].strokes.append(s)
-            } else {
-                out.append(Chunk(color: s.colorHex, width: width, variable: variable, strokes: [s], opacity: opacity))
-            }
-        }
-        for s in strokes {
-            guard let first = s.points.first else { continue }
-            if s.points.allSatisfy({ $0.w == first.w }) {
-                add(s, width: first.width, variable: false)
-            } else {
-                var widths: [CGFloat] = []
-                for (a, b) in zip(s.points, s.points.dropFirst()) {
-                    let w = segmentWidth(a, b)
-                    if !widths.contains(w) { widths.append(w) }
-                }
-                for w in widths { add(s, width: w, variable: true) }
-            }
-        }
-        return out
-    }
-
-    private static func path(_ c: Chunk, offset o: CGPoint) -> CGPath {
-        let p = CGMutablePath()
-        func pt(_ q: InkPoint) -> CGPoint { CGPoint(x: q.point.x + o.x, y: q.point.y + o.y) }
-        for s in c.strokes {
-            guard let first = s.points.first else { continue }
-            if c.variable {
-                for (a, b) in zip(s.points, s.points.dropFirst()) where segmentWidth(a, b) == c.width {
-                    p.move(to: pt(a))
-                    p.addLine(to: pt(b))
-                }
-            } else {
-                p.move(to: pt(first))
-                // 只有一點：長度 0 的線段加圓頭＝一個點
-                if s.points.count == 1 { p.addLine(to: pt(first)) }
-                for q in s.points.dropFirst() { p.addLine(to: pt(q)) }
-            }
-        }
-        return p
-    }
-
-    /// 前後疊放順序不變；只重畫內容有變的那幾層（寫一筆通常只動到最後一層）。
-    /// 第一次建（剛換成向量、或剛進來的頁面）在背景算路徑
-    private func rebuildVector(atOnce: Bool = false) {
-        let visible = visibleStrokes
-        if !atOnce && chunks.isEmpty && !visible.isEmpty {
-            let gen = generation
-            let offset = self.offset
-            isBuilding = true
-            Self.renderQueue.async {
-                let new = Self.makeChunks(visible)
-                let paths: [CGPath?] = new.map { Self.path($0, offset: offset) }
-                DispatchQueue.main.async { [weak self] in
-                    guard let self, self.generation == gen else { return }
-                    self.isBuilding = false
-                    // 算的期間改過的筆跡一起補上：算好的舊樣子不能自己先送上畫面
-                    CATransaction.begin()
-                    self.applyVector(new, paths: paths, offset: offset)
-                    if self.visibleStrokes != visible { self.rebuildVector(atOnce: true) }
-                    CATransaction.commit()
-                }
-            }
-            return
-        }
-        let new = Self.makeChunks(visible)
-        let all = builtOffset != offset
-        let paths: [CGPath?] = new.indices.map { i in
-            all || i >= chunks.count || chunks[i] != new[i] ? Self.path(new[i], offset: offset) : nil
-        }
-        applyVector(new, paths: paths, offset: offset)
-    }
-
-    /// paths[i] 是 nil 的那層內容沒變，不用重畫
-    private func applyVector(_ new: [Chunk], paths: [CGPath?], offset: CGPoint) {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        layer.contents = nil
-        var layers = (layer.sublayers ?? []).compactMap { $0 as? CAShapeLayer }
-        let scale = window?.screen.scale ?? UIScreen.main.scale
-        while layers.count < new.count {
-            let l = CAShapeLayer()
-            l.fillColor = nil
-            l.lineCap = .round
-            l.lineJoin = .round
-            l.contentsScale = scale
-            l.frame = bounds
-            layer.addSublayer(l)
-            layers.append(l)
-        }
-        for (i, c) in new.enumerated() {
-            guard let p = paths[i] else { continue }
-            let l = layers[i]
-            l.path = p
-            l.lineWidth = c.width
-            l.strokeColor = UIColor(hex: c.color).cgColor
-            l.opacity = Float(c.opacity)
-        }
-        for l in layers.dropFirst(new.count) { l.removeFromSuperlayer() }
-        CATransaction.commit()
-        chunks = new
-        builtOffset = offset
     }
 }
 

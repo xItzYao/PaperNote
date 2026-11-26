@@ -71,7 +71,7 @@ final class InkEngineTests: XCTestCase {
         print("INKDIAG full page bitmap \(Int((CACurrentMediaTime() - t) * 1000))ms")
         XCTAssertLessThan(CACurrentMediaTime() - t, 1.5)
         XCTAssertTrue(v.showsBitmap, "整頁是一張圖")
-        XCTAssertEqual(v.layer.sublayers?.count ?? 0, 0, "不能是一堆向量層")
+        XCTAssertFalse(v.layer.sublayers?.contains { $0 is CAShapeLayer } ?? false, "不能是一堆向量層")
         XCTAssertGreaterThan(inkAlpha(v, 20, 16), 0, "筆跡要畫在圖上")
     }
 
@@ -156,32 +156,125 @@ final class InkEngineTests: XCTestCase {
         XCTAssertFalse(v.isBuilding)
     }
 
-    /// 放很大（向量）時把整頁都藏起來再放回來：也要在同一次畫面更新裡好
-    func testHiddenVectorInkComesBackRightAway() {
+    /// 圖片 (x, y)（像素）的 alpha
+    private func pixelAlpha(_ cg: CGImage?, _ x: Int, _ y: Int) -> UInt8 {
+        guard let cg else { return 0 }
+        return alpha(UIImage(cgImage: cg), x, y)
+    }
+
+    /// 清晰範圍那張圖上，頁面 (x, y)（點）的墨水
+    private func detailAlpha(_ v: PageInkView, _ x: CGFloat, _ y: CGFloat) -> UInt8 {
+        guard let r = v.detailRegion else { return 0 }
+        return pixelAlpha(v.detailImage, Int((x - r.minX) * v.renderScale), Int((y - r.minY) * v.renderScale))
+    }
+
+    /// 放很大時把整頁都藏起來再放回來：底圖、清晰範圍都要在同一次畫面更新裡好
+    func testHiddenInkComesBackRightAwayWhenZoomedIn() {
         let v = PageInkView(frame: CGRect(x: 0, y: 0, width: 600, height: 850))
         let a = stroke([(100, 100), (200, 100)], width: 4)
         v.set(strokes: [a], offset: .zero)
         v.setRenderScale(12, immediately: true)
+        v.setVisibleRect(CGRect(x: 50, y: 50, width: 200, height: 150))
         waitUntilBuilt(v)
+        XCTAssertGreaterThan(detailAlpha(v, 150, 100), 200, "測試的前提：清晰範圍畫好了")
         v.setHidden([a.id])
-        XCTAssertEqual(v.layer.sublayers?.count ?? 0, 0)
+        XCTAssertFalse(v.isBuilding, "不能等背景算")
+        XCTAssertEqual(detailAlpha(v, 150, 100), 0)
         v.setHidden([])
         XCTAssertFalse(v.isBuilding, "不能等背景算")
-        XCTAssertEqual(v.layer.sublayers?.count ?? 0, 1)
+        XCTAssertGreaterThan(detailAlpha(v, 150, 100), 200)
     }
 
-    /// 放大很多時點陣圖會太大：改用向量，放大也清楚
-    func testZoomedFarInUsesVector() {
+    /// 回報的問題（11/26）：筆跡很多的頁面放很大，捲動卡。以前放大到整頁的圖太大時改用向量（CAShapeLayer），
+    /// 捲動時系統每一格都要重描整頁的線段。現在整頁一張解析度有上限的底圖，看得到的地方另外畫一張清晰的
+    func testZoomedFarInIsABaseImageAndASharpVisibleArea() throws {
         let v = PageInkView(frame: CGRect(x: 0, y: 0, width: 600, height: 850))
-        v.set(strokes: fullPage(), offset: .zero)
+        let page = fullPage()
+        v.set(strokes: page, offset: .zero)
         v.setRenderScale(12, immediately: true)
+        let visible = CGRect(x: 120, y: 160, width: 150, height: 200)
+        v.setVisibleRect(visible)
         waitUntilBuilt(v)
-        XCTAssertFalse(v.showsBitmap)
-        XCTAssertGreaterThan(v.layer.sublayers?.count ?? 0, 0)
-        XCTAssertLessThanOrEqual(v.layer.sublayers?.count ?? 0, 1500 / PageInkView.strokesPerLayer + 1, "連續寫的筆跡合成幾塊，不是一筆一層")
+        XCTAssertFalse(v.layer.sublayers?.contains { $0 is CAShapeLayer } ?? false, "沒有向量層")
+        let base = v.layer.contents as! CGImage
+        XCTAssertLessThanOrEqual(CGFloat(base.width * base.height), PageInkView.maxBitmapPixels * 1.01, "底圖的像素有上限")
+        let r = try XCTUnwrap(v.detailRegion)
+        XCTAssertTrue(r.contains(visible), "清晰範圍蓋住看得到的地方")
+        let img = try XCTUnwrap(v.detailImage)
+        XCTAssertEqual(CGFloat(img.width), r.width * 12, accuracy: 2, "清晰範圍是全解析度")
+        XCTAssertLessThanOrEqual(CGFloat(img.width * img.height), PageInkView.maxBitmapPixels * 1.01)
+        // 和直接用全解析度畫的一樣：看得到的範圍裡每 7pt 取一點比墨水
+        let fmt = UIGraphicsImageRendererFormat()
+        fmt.scale = 12
+        fmt.opaque = false
+        let want = UIGraphicsImageRenderer(bounds: visible, format: fmt).image { rc in
+            InkRenderer.drawBatched(page, in: rc.cgContext, clip: visible)
+        }.cgImage
+        var compared = 0, inked = 0
+        for x in stride(from: visible.minX + 1, to: visible.maxX, by: 7) {
+            for y in stride(from: visible.minY + 1, to: visible.maxY, by: 7) {
+                let a = Int(detailAlpha(v, x, y)), b = Int(pixelAlpha(want, Int((x - visible.minX) * 12), Int((y - visible.minY) * 12)))
+                XCTAssertLessThan(abs(a - b), 40, "(\(x), \(y))")
+                compared += 1
+                if b > 200 { inked += 1 }
+            }
+        }
+        XCTAssertGreaterThan(inked, compared / 20, "測試的前提：取到的點有不少落在字上")
+        // 縮回來：只剩全解析度的底圖
         v.setRenderScale(2, immediately: true)
         waitUntilBuilt(v)
-        XCTAssertTrue(v.showsBitmap, "縮回來要換回點陣圖")
+        XCTAssertNil(v.detailRegion)
+        XCTAssertEqual((v.layer.contents as! CGImage).width, 1200)
+    }
+
+    /// 放很大時捲動：每一格只是告訴它看得到哪裡，主執行緒幾乎不用做事；停下來後清晰範圍跟上
+    func testScrollingWhileZoomedInIsCheapAndCatchesUp() throws {
+        let v = PageInkView(frame: CGRect(x: 0, y: 0, width: 595, height: 842))
+        // 和回報的那一頁一樣多：877 筆、每筆 42 點
+        let page = (0..<877).map { i -> InkStroke in
+            let left = 20 + CGFloat(i % 35) * 16, top = 20 + CGFloat(i / 35) * 32
+            return stroke((0..<42).map { k in (left + CGFloat(k) * 0.3, top + sin(CGFloat(k) / 3) * 6) }, width: 1.6)
+        }
+        v.set(strokes: page, offset: .zero)
+        v.setRenderScale(8, immediately: true)
+        var visible = CGRect(x: 40, y: 40, width: 130, height: 175)
+        v.setVisibleRect(visible)
+        waitUntilBuilt(v)
+        var worst = 0.0
+        for _ in 0..<240 {
+            visible = visible.offsetBy(dx: 1.2, dy: 2)
+            let t = CACurrentMediaTime()
+            v.setVisibleRect(visible)
+            worst = max(worst, CACurrentMediaTime() - t)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.002))
+        }
+        print(String(format: "INKZOOM worst setVisibleRect %.2fms renders=%d", worst * 1000, v.fullRenders))
+        XCTAssertLessThan(worst, 0.008, "捲動時每一格最多 8ms")
+        waitUntilBuilt(v)
+        XCTAssertTrue(try XCTUnwrap(v.detailRegion).contains(visible), "停下來後清晰範圍蓋住看得到的地方")
+        XCTAssertFalse(v.layer.sublayers?.contains { $0 is CAShapeLayer } ?? false)
+    }
+
+    /// 放很大時寫一筆、擦一筆：底圖和清晰範圍都當場補上，不整張重畫
+    func testWritingWhileZoomedInPatchesBothImages() {
+        let v = PageInkView(frame: CGRect(x: 0, y: 0, width: 600, height: 850))
+        var page = fullPage()
+        v.set(strokes: page, offset: .zero)
+        v.setRenderScale(12, immediately: true)
+        v.setVisibleRect(CGRect(x: 300, y: 600, width: 150, height: 200))
+        waitUntilBuilt(v)
+        let renders = v.fullRenders
+        let new = stroke([(320, 760), (420, 760)], width: 4)
+        page.append(new)
+        v.set(strokes: page, offset: .zero)
+        XCTAssertFalse(v.isBuilding)
+        XCTAssertEqual(v.fullRenders, renders, "寫一筆不能整張重畫")
+        XCTAssertGreaterThan(detailAlpha(v, 370, 760), 200, "清晰範圍馬上有新的這一筆")
+        page.removeLast()
+        v.set(strokes: page, offset: .zero)
+        XCTAssertFalse(v.isBuilding)
+        XCTAssertEqual(v.fullRenders, renders, "擦一筆不能整張重畫")
+        XCTAssertLessThan(detailAlpha(v, 370, 760), 20, "清晰範圍馬上擦掉")
     }
 
     func testSinglePointDrawsADot() {
