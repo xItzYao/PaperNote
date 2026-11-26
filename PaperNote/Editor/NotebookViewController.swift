@@ -518,12 +518,13 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         ])
 
         pagesContainer.backgroundColor = .clear
-        overlay.frame = .zero
-        pagesContainer.addSubview(overlay)
         canvas.insertSubview(pagesContainer, at: 0)
         inkContainer.backgroundColor = .clear
         inkContainer.isUserInteractionEnabled = false
         canvas.addSubview(inkContainer)
+        // 套索、選取框、橡皮擦的圓圈：放在自製筆刷的字上面（inkContainer 又在 PencilKit 的筆跡上面），不會被筆跡蓋住
+        overlay.frame = .zero
+        inkContainer.addSubview(overlay)
 
         editMenu = UIEditMenuInteraction(delegate: self)
         canvas.addInteraction(editMenu)
@@ -813,10 +814,10 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
                     let v = PageContainerView(pageID: page.id)
                     v.frame = pageFrames[i]
                     // 筆跡先放好、有大小，configure 才會在背景準備筆跡
-                    inkContainer.addSubview(v.inkView)
+                    inkContainer.insertSubview(v.inkView, belowSubview: overlay)
                     v.inkView.frame = v.frame
                     v.configure(page: page, session: session, contentScale: elementContentScale)
-                    pagesContainer.insertSubview(v, belowSubview: overlay)
+                    pagesContainer.addSubview(v)
                     pageViews[page.id] = v
                 }
                 zoomTrace.note("page+ \(i + 1)")
