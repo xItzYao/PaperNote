@@ -201,6 +201,53 @@ final class HoldToLineFlowTests: XCTestCase {
         }
     }
 
+    // MARK: 回報的問題：有原子筆字的筆記本，螢光筆停住變圖形會多一條藍線、吃掉原本的字、越畫越細
+
+    /// 螢光筆畫一個停住變的圓；handAdded：PencilKit 有沒有把手繪那一筆放進筆跡（實機的紀錄裡常常沒有）
+    private func drawHighlighterCircle(center: CGPoint, handAdded: Bool) {
+        let hand = roughCircle(center: center, radius: 60)
+        editor.canvasViewDidBeginUsingTool(editor.canvas)
+        editor.holdToShape.hold(hand)
+        if handAdded {
+            var d = editor.canvas.drawing
+            d.strokes.append(ShapeRecognizer.makeStroke(points: hand, preset: BrushStore.shared.current))
+            editor.canvas.drawing = d
+        }
+        editor.canvasViewDidEndUsingTool(editor.canvas)
+        editor.holdToShape.end(hand.last!, cancelled: false)
+        spin(2.0)
+    }
+
+    func testHighlighterShapesLeaveTheWritingAlone() throws {
+        // 頁面上已經有一筆原子筆字（PencilKit），排在螢光筆後面
+        let word = PKStroke(ink: PKInk(.pen, color: .systemBlue),
+                            path: PKStrokePath(controlPoints: (0...20).map {
+                                PKStrokePoint(location: docPoint(120 + CGFloat($0) * 8, 600), timeOffset: Double($0) * 0.01,
+                                              size: CGSize(width: 2.5, height: 2.5), opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2)
+                            }, creationDate: Date(timeIntervalSinceNow: -60)))
+        var d = editor.canvas.drawing
+        d.strokes = [word]
+        editor.canvas.drawing = d
+        editor.setTool(.highlighter)
+        let preset = BrushStore.shared.current
+        XCTAssertFalse(editor.customInkActive, "螢光筆是 PencilKit 畫的")
+        let wantSize = ShapeRecognizer.makeStroke(points: [docPoint(0, 0), docPoint(10, 0)], preset: preset).path[0].size.width
+
+        for (i, handAdded) in [false, true, false].enumerated() {
+            drawHighlighterCircle(center: docPoint(200 + CGFloat(i) * 120, 300), handAdded: handAdded)
+            let strokes = editor.canvas.drawing.strokes
+            let name = "第 \(i + 1) 個圓 handAdded=\(handAdded)"
+            XCTAssertEqual(strokes.filter { $0.path.creationDate == word.path.creationDate }.count, 1, "\(name)：原本的字不能被換掉")
+            XCTAssertEqual(strokes.filter { !NotebookViewController.isHighlighterStroke($0) }.count, 1,
+                           "\(name)：不能多出原子筆墨水的線")
+            let shapes = strokes.filter(NotebookViewController.isHighlighterStroke)
+            XCTAssertEqual(shapes.count, i + 1, "\(name)：每次多一個螢光筆圖形")
+            for s in shapes {
+                XCTAssertEqual(Double(s.path[0].size.width), Double(wantSize), accuracy: 0.01, "\(name)：圖形是這支螢光筆的粗細")
+            }
+        }
+    }
+
     func testLineIsPlacedWhenPenLiftsBeforePencilKitFinishes() {
         assertStraightLineReplacedHand(drawHoldLine(pencilKitEndsFirst: false))
     }
