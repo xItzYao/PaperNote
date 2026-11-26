@@ -475,23 +475,17 @@ extension NotebookViewController {
         eraseWorking = nil
         lastEraserPoint = p
         eraserPending = []
-        let started = CACurrentMediaTime()
         erase(along: [p])
         eraserErasedAt = CACurrentMediaTime()
-        eraserFlushCost = eraserErasedAt - started
     }
 
-    /// 擦過這幾個點：從上一次擦到的點連過來，中間經過的都算。
-    /// 上一次擦花多久，至少隔那麼久才再擦：整本的 PencilKit 筆跡很多時擦一次要好幾十 ms，
-    /// 每一格畫面都擦的話主執行緒做不完，筆的位置越積越多，擦掉的地方越來越跟不上筆。
-    /// 隔開的這段時間走過的點留著，下一次一起擦，一個都不漏
+    /// 擦過這幾個點：從上一次擦到的點連過來，中間經過的都算
     func eraserMoved(_ points: [CGPoint]) {
         guard let last = lastEraserPoint, let end = points.last else { return }
         eraserPending += points
         let route = [last] + eraserPending
         let travelled = zip(route, route.dropFirst()).reduce(CGFloat(0)) { $0 + hypot($1.1.x - $1.0.x, $1.1.y - $1.0.y) }
-        let since = CACurrentMediaTime() - eraserErasedAt
-        guard since >= eraserFlushCost, travelled >= Self.eraseEvery || since >= Self.eraseAtLeastEvery else {
+        guard travelled >= Self.eraseEvery || CACurrentMediaTime() - eraserErasedAt >= Self.eraseAtLeastEvery else {
             if tool == .eraser, settings.pixelEraser { overlay.showEraser(at: end, radius: eraserRadius) }
             return
         }
@@ -501,12 +495,10 @@ extension NotebookViewController {
     /// 還沒擦的那一段擦掉
     private func flushEraser() {
         guard let last = lastEraserPoint, let end = eraserPending.last else { return }
-        let started = CACurrentMediaTime()
         erase(along: [last] + eraserPending)
         lastEraserPoint = end
         eraserPending = []
         eraserErasedAt = CACurrentMediaTime()
-        eraserFlushCost = eraserErasedAt - started
     }
 
     func eraserEnded() {

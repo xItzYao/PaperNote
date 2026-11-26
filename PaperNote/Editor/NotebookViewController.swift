@@ -358,8 +358,6 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     /// 橡皮擦走過、還沒擦的點（見 eraseEvery）
     var eraserPending: [CGPoint] = []
     var eraserErasedAt: CFTimeInterval = 0
-    /// 上一次擦花了多久（見 eraserMoved）
-    var eraserFlushCost: CFTimeInterval = 0
     /// 這一次擦除的上一步（第一次擦到東西時登記，之後併進去）
     var eraseStep: Int?
     /// 套索改顏色時的自訂顏色選擇器
