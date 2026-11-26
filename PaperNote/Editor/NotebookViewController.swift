@@ -358,6 +358,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     /// 橡皮擦走過、還沒擦的點（見 eraseEvery）
     var eraserPending: [CGPoint] = []
     var eraserErasedAt: CFTimeInterval = 0
+    /// 上一次擦花了多久（見 eraserMoved）
+    var eraserFlushCost: CFTimeInterval = 0
     /// 這一次擦除的上一步（第一次擦到東西時登記，之後併進去）
     var eraseStep: Int?
     /// 套索改顏色時的自訂顏色選擇器
@@ -931,9 +933,15 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     /// PencilKit 留著它自己最後寫進去的那一版，下一筆收尾時和畫布的筆跡合併；
     /// 換上的是比較舊的一版（上一步、下一步記下的），合併就會把之後才拿掉的筆跡帶回來
     func setDrawing(_ d: PKDrawing, file: StaticString = #fileID, line: UInt = #line) {
-        uiTestTrace("set \(file):\(line)", d)
+        setStrokes(d.strokes, file: file, line: line)
+    }
+
+    /// 畫布換成這些筆跡。整本的 PencilKit 筆跡都在同一張畫布上，組一份 PKDrawing 要時間（2500 筆約 10ms）：
+    /// 手上已經是筆跡的話直接給這裡，不要先組一份 PKDrawing 再交給 setDrawing（會組兩次）
+    func setStrokes(_ strokes: [PKStroke], file: StaticString = #fileID, line: UInt = #line) {
+        uiTestTrace("set \(file):\(line)", strokes)
         var next = canvas.drawing
-        next.strokes = d.strokes
+        next.strokes = strokes
         isApplyingDrawing = true
         canvas.drawing = next
         isApplyingDrawing = false
@@ -942,10 +950,11 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     }
 
     /// UI 測試：記下筆跡的變化（每一筆用建立時間的尾數當代號）
-    func uiTestTrace(_ what: String, _ d: PKDrawing) {
+    func uiTestTrace(_ what: String, _ strokes: @autoclosure () -> [PKStroke]) {
         guard uiTestStrokes != nil else { return }
-        let ids = d.strokes.map { String(format: "%.2f", $0.path.creationDate.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 100)) }
-        DebugLog.add("\(what) n=\(d.strokes.count) [\(ids.joined(separator: ","))]")
+        let all = strokes()
+        let ids = all.map { String(format: "%.2f", $0.path.creationDate.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 100)) }
+        DebugLog.add("\(what) n=\(all.count) [\(ids.joined(separator: ","))]")
     }
 
     func updateUITestDump() {
@@ -1130,7 +1139,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
             return
         }
         let done = history.undo(capture: currentEditState, apply: restoreEditState)
-        uiTestTrace("undo done=\(done)", canvas.drawing)
+        uiTestTrace("undo done=\(done)", canvas.drawing.strokes)
     }
 
     @objc func redoTapped() {
@@ -1152,7 +1161,7 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     // MARK: - PKCanvasViewDelegate
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
-        uiTestTrace("pk changed applying=\(isApplyingDrawing)", canvas.drawing)
+        uiTestTrace("pk changed applying=\(isApplyingDrawing)", canvas.drawing.strokes)
         updateUITestDump()
         guard !isApplyingDrawing else { return }
         recordStrokeGesture(strokeGesture)

@@ -146,14 +146,42 @@ final class EraserScaleTests: XCTestCase {
         return path
     }
 
+    /// 照實際的速度擦：每 1/60 秒送一個位置（主執行緒忙不過來時，位置就排隊等著）。
+    /// 回傳筆停下來之後，還要多久才擦完（擦掉的地方落後筆多久）
+    private func scrubInRealTime(_ path: [CGPoint], partial: Bool, label: String) -> CFTimeInterval {
+        EditorSettings.shared.pixelEraser = partial
+        editor.setTool(.eraser)
+        XCTAssertEqual(editor.canvas.drawing.strokes.count, 2505, "測試的前提：整本的 PencilKit 筆跡都在畫布上")
+        let before = editor.canvas.drawing.strokes.count
+        let frame = 1.0 / 60
+        let start = CACurrentMediaTime()
+        var behind = 0.0
+        editor.eraserBegan(at: path[0])
+        for (i, p) in path.enumerated().dropFirst() {
+            let due = start + Double(i) * frame
+            while CACurrentMediaTime() < due { RunLoop.main.run(until: Date().addingTimeInterval(0.001)) }
+            behind = max(behind, CACurrentMediaTime() - due)
+            editor.eraserMoved([p])
+        }
+        editor.eraserEnded()
+        let lag = CACurrentMediaTime() - (start + Double(path.count - 1) * frame)
+        print(String(format: "%@ partial=%d moves=%d lag=%.0fms mostBehind=%.0fms flushCost=%.0fms strokes %d→%d",
+                     label, partial ? 1 : 0, path.count - 1, lag * 1000, behind * 1000, editor.eraserFlushCost * 1000,
+                     before, editor.canvas.drawing.strokes.count))
+        // 一個都不漏：沿著走過的路再擦一次（半徑小一點，避開剛好切在圓邊的地方），沒有東西可擦
+        XCTAssertNil(StrokeEraser.erase(editor.canvas.drawing.strokes, along: path, radius: editor.eraserRadius * 0.5, partial: partial),
+                     "走過的地方都擦掉了")
+        return lag
+    }
+
     func testFastScrubbingAcrossPenWritingKeepsUp() {
-        let r = erase(along: scrubAcrossPage7(), partial: true, label: "ERASEPEN")
-        XCTAssertLessThan(r.worst, 1.0 / 30, "快速擦的時候每移動一下不超過兩格畫面，擦掉的地方跟得上筆")
+        let lag = scrubInRealTime(scrubAcrossPage7(), partial: true, label: "ERASEPEN")
+        XCTAssertLessThan(lag, 0.1, "筆停下來之後 0.1 秒內就擦完：擦掉的地方跟得上筆")
     }
 
     func testFastWholeStrokeScrubbingAcrossPenWritingKeepsUp() {
-        let r = erase(along: scrubAcrossPage7(), partial: false, label: "ERASEPENWHOLE")
-        XCTAssertLessThan(r.worst, 1.0 / 30, "快速擦的時候每移動一下不超過兩格畫面，擦掉的地方跟得上筆")
+        let lag = scrubInRealTime(scrubAcrossPage7(), partial: false, label: "ERASEPENWHOLE")
+        XCTAssertLessThan(lag, 0.1, "筆停下來之後 0.1 秒內就擦完：擦掉的地方跟得上筆")
     }
 
     /// 擦一下除了算擦哪裡，其他時間花在哪：讀畫布的筆跡、換上新的筆跡（PencilKit 重畫）、擦自製筆刷的字
