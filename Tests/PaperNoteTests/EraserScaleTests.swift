@@ -155,7 +155,7 @@ final class EraserScaleTests: XCTestCase {
         let before = editor.canvas.drawing.strokes.count
         let frame = 1.0 / 60
         let start = CACurrentMediaTime()
-        var next = 1, worstStep = 0.0, worstDelay = 0.0, steps = 0
+        var next = 1, worstStep = 0.0, worstDelay = 0.0, steps = 0, worstParts = ""
         editor.eraserBegan(at: path[0])
         while next < path.count {
             let now = CACurrentMediaTime()
@@ -169,15 +169,17 @@ final class EraserScaleTests: XCTestCase {
                 RunLoop.main.run(until: Date().addingTimeInterval(0.001))
                 continue
             }
+            NotebookViewController.lastEraseStep = .init()
             editor.eraserMoved(batch)
             let done = CACurrentMediaTime()
+            if done - now > worstStep { worstParts = NotebookViewController.lastEraseStep.summary + " points=\(batch.count)" }
             worstStep = max(worstStep, done - now)
             worstDelay = max(worstDelay, done - oldest)
             steps += 1
         }
         editor.eraserEnded()
-        print(String(format: "%@ partial=%d moves=%d steps=%d worstStep=%.0fms worstDelay=%.0fms strokes %d→%d",
-                     label, partial ? 1 : 0, path.count - 1, steps, worstStep * 1000, worstDelay * 1000,
+        print(String(format: "%@ partial=%d moves=%d steps=%d worstStep=%.0fms (%@) worstDelay=%.0fms strokes %d→%d",
+                     label, partial ? 1 : 0, path.count - 1, steps, worstStep * 1000, worstParts, worstDelay * 1000,
                      before, editor.canvas.drawing.strokes.count))
         // 一個都不漏：沿著走過的路再擦一次（半徑小一點，避開剛好切在圓邊的地方），沒有東西可擦
         XCTAssertNil(StrokeEraser.erase(editor.canvas.drawing.strokes, along: path, radius: editor.eraserRadius * 0.5, partial: partial),

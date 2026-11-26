@@ -522,20 +522,43 @@ extension NotebookViewController {
         let radius = eraserRadius
         if settings.pixelEraser { overlay.showEraser(at: last, radius: radius) }
         let before = history.recordCount
+        var t = CACurrentMediaTime()
+        func lap(_ field: WritableKeyPath<EraseStepTiming, Double>) {
+            let now = CACurrentMediaTime()
+            Self.lastEraseStep[keyPath: field] += now - t
+            t = now
+        }
         history.merging(into: eraseStep) {
             for p in path {
                 eraseHighlights(at: p)
                 eraseInk(at: p)
             }
+            lap(\.highlightsAndInk)
             let current = eraseWorking ?? canvas.drawing.strokes
             if var strokes = StrokeEraser.erase(current, along: path, radius: radius, partial: settings.pixelEraser) {
+                lap(\.strokeEraser)
                 // 整筆擦除碰到虛線的其中一段：同一條的其他段也拿掉
                 if !settings.pixelEraser { strokes = DashedStroke.removingErasedDashes(from: strokes, before: current) }
+                lap(\.dashes)
                 history.record(.init(drawing: canvas.drawing, pages: [:]))
+                lap(\.record)
                 setStrokes(strokes)
+                lap(\.set)
                 eraseWorking = strokes
+            } else {
+                lap(\.strokeEraser)
             }
         }
         if eraseStep == nil, history.recordCount > before { eraseStep = history.topStepID }
     }
+
+    /// 擦一次各部分花多久（測試用來找擦一次慢在哪）
+    struct EraseStepTiming {
+        var highlightsAndInk = 0.0, strokeEraser = 0.0, dashes = 0.0, record = 0.0, set = 0.0
+        var summary: String {
+            String(format: "highlightsAndInk=%.0f strokeEraser=%.0f dashes=%.0f record=%.0f set=%.0f",
+                   highlightsAndInk * 1000, strokeEraser * 1000, dashes * 1000, record * 1000, set * 1000)
+        }
+    }
+    static var lastEraseStep = EraseStepTiming()
 }
