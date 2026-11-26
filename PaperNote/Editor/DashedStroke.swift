@@ -60,12 +60,19 @@ enum DashedStroke {
 
     /// 整筆擦除：PencilKit 的橡皮擦只會擦掉碰到的那幾段。
     /// 比對擦之前的筆跡：有一段不見了，就把同一條的其他段也拿掉
+    /// （after 只會比 before 少，不會多。）先用亂數種子找出少了的那幾條：讀種子很快，讀 path（建立時間）要複製整條，
+    /// 整本 2500 筆每擦一下都讀兩次要十幾 ms；只有種子對得上的才讀 path 比對
     static func removingErasedDashes(from after: [PKStroke], before: [PKStroke]) -> [PKStroke] {
+        var seeds: [UInt32: Int] = [:]
+        for s in before { seeds[s.randomSeed, default: 0] += 1 }
+        for s in after { seeds[s.randomSeed, default: 0] -= 1 }
+        let fewer = Set(seeds.filter { $0.value > 0 }.keys)
+        guard !fewer.isEmpty else { return after }
         var left: [Key: Int] = [:]
-        for s in before { left[key(s), default: 0] += 1 }
-        for s in after { left[key(s), default: 0] -= 1 }
+        for s in before where fewer.contains(s.randomSeed) { left[key(s), default: 0] += 1 }
+        for s in after where fewer.contains(s.randomSeed) { left[key(s), default: 0] -= 1 }
         let erased = Set(left.filter { $0.value > 0 }.keys)
-        return erased.isEmpty ? after : after.filter { !erased.contains(key($0)) }
+        return erased.isEmpty ? after : after.filter { !fewer.contains($0.randomSeed) || !erased.contains(key($0)) }
     }
 
     /// 依這支筆的設定切；不是虛線就原樣回傳

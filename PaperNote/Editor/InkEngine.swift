@@ -991,13 +991,32 @@ extension NotebookViewController {
     }
 
     /// 橡皮擦擦自製筆刷的筆跡；同一次擦除只登記一次上一步
-    func eraseInk(at p: CGPoint) {
-        guard tool == .eraser, let i = pageIndex(containing: p), !pages[i].ink.isEmpty else { return }
-        let o = contentOrigin(i)
-        let local = CGPoint(x: p.x - o.x, y: p.y - o.y)
-        guard let result = InkGeometry.erase(pages[i].ink, at: local, radius: eraserRadius, partial: settings.pixelEraser) else { return }
-        let undoable = !inkEraseUndoRegistered.contains(pages[i].id)
-        inkEraseUndoRegistered.insert(pages[i].id)
-        updatePage(i, undoable: undoable) { $0.ink = result }
+    func eraseInk(at p: CGPoint) { eraseInk(along: [p]) }
+
+    /// 橡皮擦走過這幾個點：每一頁的筆跡依序擦完才換上一次（換上整頁要重新設定那一頁，一個點換一次太慢）
+    func eraseInk(along path: [CGPoint]) {
+        guard tool == .eraser else { return }
+        var order: [Int] = []
+        var byPage: [Int: [CGPoint]] = [:]
+        for p in path {
+            guard let i = pageIndex(containing: p), !pages[i].ink.isEmpty else { continue }
+            if byPage[i] == nil { order.append(i) }
+            byPage[i, default: []].append(p)
+        }
+        let radius = eraserRadius, partial = settings.pixelEraser
+        for i in order {
+            let o = contentOrigin(i)
+            var ink = pages[i].ink, changed = false
+            for p in byPage[i] ?? [] {
+                if let r = InkGeometry.erase(ink, at: CGPoint(x: p.x - o.x, y: p.y - o.y), radius: radius, partial: partial) {
+                    ink = r
+                    changed = true
+                }
+            }
+            guard changed else { continue }
+            let undoable = !inkEraseUndoRegistered.contains(pages[i].id)
+            inkEraseUndoRegistered.insert(pages[i].id)
+            updatePage(i, undoable: undoable) { $0.ink = ink }
+        }
     }
 }

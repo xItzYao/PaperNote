@@ -529,10 +529,8 @@ extension NotebookViewController {
             t = now
         }
         history.merging(into: eraseStep) {
-            for p in path {
-                eraseHighlights(at: p)
-                eraseInk(at: p)
-            }
+            for p in path { eraseHighlights(at: p) }
+            eraseInk(along: path)
             lap(\.highlightsAndInk)
             let current = eraseWorking ?? canvas.drawing.strokes
             if var strokes = StrokeEraser.erase(current, along: path, radius: radius, partial: settings.pixelEraser) {
