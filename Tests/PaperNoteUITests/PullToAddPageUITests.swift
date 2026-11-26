@@ -7,7 +7,7 @@ final class PullToAddPageUITests: XCTestCase {
     override func setUp() {
         continueAfterFailure = false
         app = XCUIApplication()
-        app.launchArguments = ["-appLanguage", "zh-Hant", "-uiTestNotebook"]
+        app.launchArguments = ["-appLanguage", "zh-Hant", "-uiTestNotebook", "-uiTestOpenLastPage"]
         app.launch()
     }
 
@@ -17,14 +17,16 @@ final class PullToAddPageUITests: XCTestCase {
     func testAddingAPageByPullingScrollsStraightToIt() throws {
         XCTAssertTrue(app.descendants(matching: .any)["pageIndicator"].waitForExistence(timeout: 20), "要打開測試用的筆記本")
         let w = app.windows.firstMatch
-        // 捲到最後一頁的底
+        // 從最後一頁的頂端慢慢捲到底：每次只拖畫面的 1/10（拉過頭也不到新增頁面的距離），不能甩（會拉過頭加頁）
         var last = -1
         for _ in 0..<30 where offset != last {
             last = offset
-            w.swipeUp(velocity: .fast)
+            let from = w.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6))
+            from.press(forDuration: 0.05, thenDragTo: w.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)),
+                       withVelocity: .slow, thenHoldForDuration: 0.2)
             sleep(1)
         }
-        XCTAssertTrue(label("pageIndicator").hasSuffix("/ 10"), label("pageIndicator"))
+        XCTAssertEqual(label("pageIndicator"), "10 / 10", "要在最後一頁的底，還沒加頁")
         // 輕輕往上拉（慢慢拉、停一下再放開）：拉過＋出現、還沒到選紙張的距離
         let a = w.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
         let b = w.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55))

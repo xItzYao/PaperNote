@@ -77,6 +77,7 @@ struct RootView: View {
             // UI 測試：直接打開一本有好幾頁的新筆記本
             if ProcessInfo.processInfo.arguments.contains("-uiTestNotebook") {
                 let meta = store.createNotebook(title: "UI Test", folder: nil, paper: .blank, landscape: false)
+                var startPage: UUID?
                 if let s = try? NotebookSession(id: meta.id) {
                     for _ in 0..<9 { s.document.pages.append(Page(background: .paper(width: 595, height: 842, style: .grid))) }
                     // 第一頁放一個表格（測套索、表格一起用）
@@ -85,8 +86,10 @@ struct RootView: View {
                                                                         content: .table(TableData.make(rows: 3, cols: 3))))
                     }
                     s.save()
+                    // 從最後一頁開始（測拉過最後一頁新增頁面）
+                    if ProcessInfo.processInfo.arguments.contains("-uiTestOpenLastPage") { startPage = s.document.pages.last?.id }
                 }
-                open(meta.id, nil)
+                open(meta.id, startPage)
             }
             // UI 測試：模擬從別的 App 用 PaperNote 打開一個 PDF
             if ProcessInfo.processInfo.arguments.contains("-uiTestSharePDF") {
