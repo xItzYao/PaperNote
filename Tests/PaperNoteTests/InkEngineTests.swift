@@ -240,16 +240,16 @@ final class InkEngineTests: XCTestCase {
         var visible = CGRect(x: 40, y: 40, width: 130, height: 175)
         v.setVisibleRect(visible)
         waitUntilBuilt(v)
-        var worst = 0.0
+        var frames = FrameTimes()
         for _ in 0..<240 {
             visible = visible.offsetBy(dx: 1.2, dy: 2)
             let t = CACurrentMediaTime()
             v.setVisibleRect(visible)
-            worst = max(worst, CACurrentMediaTime() - t)
+            frames.add(CACurrentMediaTime() - t)
             RunLoop.main.run(until: Date().addingTimeInterval(0.002))
         }
-        print(String(format: "INKZOOM worst setVisibleRect %.2fms renders=%d", worst * 1000, v.fullRenders))
-        XCTAssertLessThan(worst, 0.008, "捲動時每一格最多 8ms")
+        print("INKZOOM setVisibleRect \(frames.summary) renders=\(v.fullRenders)")
+        assertFast(frames, under: 0.008, "捲動時每一格最多 8ms")
         waitUntilBuilt(v)
         XCTAssertTrue(try XCTUnwrap(v.detailRegion).contains(visible), "停下來後清晰範圍蓋住看得到的地方")
         XCTAssertFalse(v.layer.sublayers?.contains { $0 is CAShapeLayer } ?? false)

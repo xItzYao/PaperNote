@@ -58,7 +58,7 @@ final class PageOverviewTests: XCTestCase {
         collection.setContentOffset(.zero, animated: false)
         spin(1.0)
         // 一格一格往下捲：每一格（含這一格要做的事）都不能卡住畫面
-        var worst = 0.0
+        var frames = FrameTimes()
         let frame = 1.0 / 60
         var y: CGFloat = 0
         let maxY = collection.contentSize.height - collection.bounds.height
@@ -69,9 +69,9 @@ final class PageOverviewTests: XCTestCase {
             collection.contentOffset.y = y
             collection.layoutIfNeeded()
             spin(frame)
-            worst = max(worst, CACurrentMediaTime() - t - frame)
+            frames.add(CACurrentMediaTime() - t - frame)
         }
-        XCTAssertLessThan(worst, 0.05, "捲動時有一格卡了 \(Int(worst * 1000))ms")
+        assertFast(frames, under: 0.05, "捲動時每一格不卡超過 50ms")
         // 停下來之後縮圖還是要出來
         spin(3)
         let cells = collection.visibleCells.compactMap { $0 as? PageThumbCell }

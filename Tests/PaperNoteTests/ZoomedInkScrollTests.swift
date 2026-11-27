@@ -33,15 +33,15 @@ final class ZoomedInkScrollTests: XCTestCase {
         XCTAssertGreaterThan(ink.renderScale, 4, "測試的前提：放得夠大")
 
         // 一格一格往右下捲，量每一格主執行緒花多久
-        var worst = 0.0
+        var frames = FrameTimes()
         for _ in 0..<120 {
             let t = CACurrentMediaTime()
             canvas.contentOffset = CGPoint(x: canvas.contentOffset.x + 3, y: canvas.contentOffset.y + 5)
-            worst = max(worst, CACurrentMediaTime() - t)
+            frames.add(CACurrentMediaTime() - t)
             RunLoop.main.run(until: Date().addingTimeInterval(0.004))
         }
-        print(String(format: "ZOOMSCROLL worst=%.1fms scale=%.1f", worst * 1000, ink.renderScale))
-        XCTAssertLessThan(worst, 0.016, "捲動一格不超過一格畫面的時間")
+        print(String(format: "ZOOMSCROLL %@ scale=%.1f", frames.summary, ink.renderScale))
+        assertFast(frames, under: 0.016, "捲動一格不超過一格畫面的時間")
         settle()
         let visible = editor.visibleDocRect().intersection(ink.frame).offsetBy(dx: -ink.frame.minX, dy: -ink.frame.minY)
         let r = try XCTUnwrap(ink.detailRegion, "放很大時有清晰範圍")

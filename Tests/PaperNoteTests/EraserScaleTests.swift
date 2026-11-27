@@ -92,7 +92,7 @@ final class EraserScaleTests: XCTestCase {
     }
 
     /// 在第 10 頁來回擦過螢光筆，回傳每移動一下最久多久、全部多久；印出時間花在哪
-    private func eraseAcrossTheHighlights(partial: Bool) -> (worst: Double, total: Double) {
+    private func eraseAcrossTheHighlights(partial: Bool) -> (moves: FrameTimes, total: Double) {
         let o = editor.contentOrigin(9)
         var path: [CGPoint] = []
         for k in 0..<80 { path.append(CGPoint(x: o.x + 140 + CGFloat(k) * 4, y: o.y + 160 + sin(CGFloat(k) / 5) * 90)) }
@@ -100,13 +100,13 @@ final class EraserScaleTests: XCTestCase {
         return erase(along: path, partial: partial, label: "ERASESCALE")
     }
 
-    /// 沿著 path 擦（每個點是一次移動），回傳每移動一下最久多久、全部多久
-    private func erase(along path: [CGPoint], partial: Bool, label: String) -> (worst: Double, total: Double) {
+    /// 沿著 path 擦（每個點是一次移動），回傳每移動一下各花多久、全部多久
+    private func erase(along path: [CGPoint], partial: Bool, label: String) -> (moves: FrameTimes, total: Double) {
         EditorSettings.shared.pixelEraser = partial
         editor.setTool(.eraser)
         XCTAssertEqual(editor.canvas.drawing.strokes.count, 2505, "測試的前提：整本的 PencilKit 筆跡都在畫布上")
         StrokeEraser.counts = .init()
-        var worst = 0.0, worstLine = ""
+        var worst = 0.0, worstLine = "", moves = FrameTimes()
         let start = CACurrentMediaTime()
         editor.eraserBegan(at: path[0])
         for p in path.dropFirst() {
@@ -114,6 +114,7 @@ final class EraserScaleTests: XCTestCase {
             let t = CACurrentMediaTime()
             editor.eraserMoved([p])
             let dt = CACurrentMediaTime() - t
+            moves.add(dt)
             if dt > worst {
                 worst = dt
                 worstLine = String(format: "move %.0fms (stroke eraser %.0fms, rest %.0fms)", dt * 1000,
@@ -123,10 +124,10 @@ final class EraserScaleTests: XCTestCase {
         editor.eraserEnded()
         let total = CACurrentMediaTime() - start
         let c = StrokeEraser.counts
-        print(String(format: "%@ partial=%d moves=%d total=%.0fms worst=%@ strokeEraser=%.0fms samples=%d inside=%d derived=%d strokes=%d",
-                     label, partial ? 1 : 0, path.count - 1, total * 1000, worstLine, c.seconds * 1000, c.samples, c.inside, c.derived,
+        print(String(format: "%@ partial=%d moves=%d total=%.0fms worst=%@ %@ strokeEraser=%.0fms samples=%d inside=%d derived=%d strokes=%d",
+                     label, partial ? 1 : 0, path.count - 1, total * 1000, worstLine, moves.summary, c.seconds * 1000, c.samples, c.inside, c.derived,
                      editor.canvas.drawing.strokes.count))
-        return (worst, total)
+        return (moves, total)
     }
 
     /// 回報的問題（11/26）：快速來回擦一大片原子筆的字，擦掉的地方跟不上筆。
@@ -147,15 +148,15 @@ final class EraserScaleTests: XCTestCase {
     }
 
     /// 照實際的速度擦：筆每 1/60 秒到一個新位置；主執行緒忙的時候，這段時間到的位置像 UIKit 一樣併成一次送來。
-    /// 回傳擦一次最久花多久、一個位置從筆到那裡到被擦掉最久隔多久
-    private func scrubInRealTime(_ path: [CGPoint], partial: Bool, label: String) -> (worstStep: CFTimeInterval, worstDelay: CFTimeInterval) {
+    /// 回傳每擦一次花多久、每一批位置從筆到那裡到被擦掉隔多久
+    private func scrubInRealTime(_ path: [CGPoint], partial: Bool, label: String) -> (steps: FrameTimes, delays: FrameTimes) {
         EditorSettings.shared.pixelEraser = partial
         editor.setTool(.eraser)
         XCTAssertEqual(editor.canvas.drawing.strokes.count, 2505, "測試的前提：整本的 PencilKit 筆跡都在畫布上")
         let before = editor.canvas.drawing.strokes.count
         let frame = 1.0 / 60
         let start = CACurrentMediaTime()
-        var next = 1, worstStep = 0.0, worstDelay = 0.0, steps = 0, worstParts = ""
+        var next = 1, worstStep = 0.0, worstParts = "", stepTimes = FrameTimes(), delays = FrameTimes()
         editor.eraserBegan(at: path[0])
         while next < path.count {
             let now = CACurrentMediaTime()
@@ -174,29 +175,29 @@ final class EraserScaleTests: XCTestCase {
             let done = CACurrentMediaTime()
             if done - now > worstStep { worstParts = NotebookViewController.lastEraseStep.summary + " points=\(batch.count)" }
             worstStep = max(worstStep, done - now)
-            worstDelay = max(worstDelay, done - oldest)
-            steps += 1
+            stepTimes.add(done - now)
+            delays.add(done - oldest)
         }
         editor.eraserEnded()
-        print(String(format: "%@ partial=%d moves=%d steps=%d worstStep=%.0fms (%@) worstDelay=%.0fms strokes %d→%d",
-                     label, partial ? 1 : 0, path.count - 1, steps, worstStep * 1000, worstParts, worstDelay * 1000,
-                     before, editor.canvas.drawing.strokes.count))
+        print(String(format: "%@ partial=%d moves=%d steps=%d worstStep=%.0fms (%@) step %@ delay %@ strokes %d→%d",
+                     label, partial ? 1 : 0, path.count - 1, stepTimes.all.count, worstStep * 1000, worstParts, stepTimes.summary,
+                     delays.summary, before, editor.canvas.drawing.strokes.count))
         // 一個都不漏：沿著走過的路再擦一次（半徑小一點，避開剛好切在圓邊的地方），沒有東西可擦
         XCTAssertNil(StrokeEraser.erase(editor.canvas.drawing.strokes, along: path, radius: editor.eraserRadius * 0.5, partial: partial),
                      "走過的地方都擦掉了")
-        return (worstStep, worstDelay)
+        return (stepTimes, delays)
     }
 
     func testFastScrubbingAcrossPenWritingKeepsUp() {
         let r = scrubInRealTime(scrubAcrossPage7(), partial: true, label: "ERASEPEN")
-        XCTAssertLessThan(r.worstStep, 0.05, "擦一次不超過 50ms（之前整本的筆跡組兩次，一次 57～76ms）")
-        XCTAssertLessThan(r.worstDelay, 0.1, "擦掉的地方最多落後筆 0.1 秒")
+        assertFast(r.steps, under: 0.05, "擦一次不超過 50ms（之前整本的筆跡組兩次，一次 57～76ms）")
+        assertFast(r.delays, under: 0.1, "擦掉的地方落後筆不超過 0.1 秒")
     }
 
     func testFastWholeStrokeScrubbingAcrossPenWritingKeepsUp() {
         let r = scrubInRealTime(scrubAcrossPage7(), partial: false, label: "ERASEPENWHOLE")
-        XCTAssertLessThan(r.worstStep, 0.05, "擦一次不超過 50ms（之前整本的筆跡組兩次，一次 57～76ms）")
-        XCTAssertLessThan(r.worstDelay, 0.1, "擦掉的地方最多落後筆 0.1 秒")
+        assertFast(r.steps, under: 0.05, "擦一次不超過 50ms（之前整本的筆跡組兩次，一次 57～76ms）")
+        assertFast(r.delays, under: 0.1, "擦掉的地方落後筆不超過 0.1 秒")
     }
 
     /// 擦一下除了算擦哪裡，其他時間花在哪：讀畫布的筆跡、換上新的筆跡（PencilKit 重畫）、擦自製筆刷的字
@@ -256,13 +257,13 @@ final class EraserScaleTests: XCTestCase {
 
     func testPartialErasingHighlightsInABigNotebookStaysFast() {
         let r = eraseAcrossTheHighlights(partial: true)
-        XCTAssertLessThan(r.worst, 0.1, "每移動一下不超過 100ms")
+        assertFast(r.moves, under: 0.1, "每移動一下不超過 100ms")
         XCTAssertLessThan(r.total, 4, "擦完不超過 4 秒")
     }
 
     func testWholeStrokeErasingInABigNotebookStaysFast() {
         let r = eraseAcrossTheHighlights(partial: false)
-        XCTAssertLessThan(r.worst, 0.1, "每移動一下不超過 100ms")
+        assertFast(r.moves, under: 0.1, "每移動一下不超過 100ms")
         XCTAssertLessThan(r.total, 4, "擦完不超過 4 秒")
     }
 }

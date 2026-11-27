@@ -371,12 +371,14 @@ final class HighlighterEraseTests: XCTestCase {
                 let start = CACurrentMediaTime()
                 var worst: CFTimeInterval = 0
                 var worstParts = ""
+                var moves = FrameTimes()
                 editor.eraserBegan(at: path[0])
                 for (k, p) in path.dropFirst().enumerated() {
                     let t = CACurrentMediaTime()
                     let c0 = StrokeEraser.counts
                     editor.eraserMoved([p])
                     let took = CACurrentMediaTime() - t
+                    moves.add(took)
                     if took > worst {
                         worst = took
                         let c1 = StrokeEraser.counts
@@ -399,7 +401,7 @@ final class HighlighterEraseTests: XCTestCase {
                              name, speed, c.readMask * 1000 * Double(per), c.compare * 1000 * Double(per), c.assemble * 1000 * Double(per),
                              c.makeStroke * 1000 * Double(per), c.readBack * 1000 * Double(per), Double(c.elements) / Double(path.count - 1)))
                 XCTAssertTrue(editor.canvas.drawing.strokes.contains { $0.mask != nil }, "\(name) \(speed) 測試的前提：擦到了")
-                XCTAssertLessThan(worst, 0.05, "每移動一下不超過 50ms：\(line)")
+                assertFast(moves, under: 0.05, "每移動一下不超過 50ms：\(line)")
                 XCTAssertLessThan(total * per, 0.5, "橡皮擦每走 100pt 不超過 0.5 秒：\(line)")
             }
         }
@@ -441,19 +443,19 @@ final class HighlighterEraseTests: XCTestCase {
         for k in 0..<60 { path.append(CGPoint(x: f.minX + 200 + CGFloat(k % 2) * 3, y: f.minY + 40 + CGFloat(k) * 12)) }
         for k in 0..<60 { path.append(CGPoint(x: f.minX + 120 + CGFloat(k) * 5, y: f.minY + 300 + sin(CGFloat(k)) * 30)) }
         let start = CACurrentMediaTime()
-        var worst: CFTimeInterval = 0
+        var moves = FrameTimes()
         editor.eraserBegan(at: path[0])
         for p in path.dropFirst() {
             let t = CACurrentMediaTime()
             editor.eraserMoved([p])
-            worst = max(worst, CACurrentMediaTime() - t)
+            moves.add(CACurrentMediaTime() - t)
         }
         editor.eraserEnded()
         let total = CACurrentMediaTime() - start
-        print(String(format: "ERASEPERF total=%.0fms worst=%.0fms", total * 1000, worst * 1000))
+        print(String(format: "ERASEPERF total=%.0fms %@", total * 1000, moves.summary))
         XCTAssertEqual(editor.canvas.drawing.strokes.count, 34, "測試的前提：螢光筆局部擦，每一筆還是一筆")
         XCTAssertTrue(editor.canvas.drawing.strokes.allSatisfy { $0.mask != nil }, "測試的前提：每一筆都擦到了")
-        XCTAssertLessThan(worst, 0.1, "每移動一下不超過 100ms")
+        assertFast(moves, under: 0.1, "每移動一下不超過 100ms")
         XCTAssertLessThan(total, 3, "整個擦完不超過 3 秒")
         // 擦完：留下的部分還圈得到
         let lasso = UIBezierPath(rect: f.insetBy(dx: 10, dy: 10))
