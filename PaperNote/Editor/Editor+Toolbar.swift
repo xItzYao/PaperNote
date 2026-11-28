@@ -1022,6 +1022,7 @@ extension NotebookViewController {
                 UIAction(title: L("左手寫字"), state: s.palmRejection == "left" ? .on : .off) { _ in s.palmRejection = "left" },
                 UIAction(title: L("關閉"), state: s.palmRejection == "off" ? .on : .off) { _ in s.palmRejection = "off" },
             ]),
+            palmLabelingMenu(),
         ])
         let writing = UIMenu(title: L("書寫設定"), options: .displayInline, children: [
             UIAction(title: L("用手指書寫"), image: UIImage(systemName: "hand.draw"), state: s.fingerDrawing ? .on : .off) { [weak self] _ in

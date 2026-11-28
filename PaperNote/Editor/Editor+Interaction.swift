@@ -108,6 +108,7 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         canvas.addGestureRecognizer(palmBlocker)
 
         setupInkCapture()
+        setupPalmLabeling()
 
     }
 

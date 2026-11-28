@@ -114,6 +114,11 @@ final class EditorSettings {
         get { d.string(forKey: "palmRejection") ?? "right" }
         set { d.set(newValue, forKey: "palmRejection") }
     }
+    /// 手勢標記學習模式：碰完頁面時問是手指還是手掌（見 PalmLabeling）
+    var palmLabeling: Bool {
+        get { bool("palmLabeling", false) }
+        set { d.set(newValue, forKey: "palmLabeling") }
+    }
     var captureFreeform: Bool {
         get { bool("captureFreeform", false) }
         set { d.set(newValue, forKey: "captureFreeform") }
@@ -249,6 +254,9 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     var pencilDown = false
     var lastPencilTime: CFTimeInterval = 0
     var palmBlocker: PalmBlocker!
+    /// 手勢標記學習模式（見 PalmLabeling）
+    var palmLabelRecorder: TouchLabelRecorder!
+    weak var palmLabelPrompt: PalmLabelPrompt?
     // 電路圖
     var circuitMode: CircuitMode = .select
     var circuitTarget: ElementRef?
