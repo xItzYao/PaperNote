@@ -80,7 +80,12 @@ final class TabSwitchSpeedTests: XCTestCase {
         var switches = FrameTimes()
         for k in 0..<8 {
             let to = k % 2 == 0 ? a : b
-            switches.add(switchTab(to: to, tabs))
+            let s = switchTab(to: to, tabs)
+            switches.add(s)
+            // 每一段花多久（切分頁本身寫進除錯紀錄；剩下的是之後的排版、畫面更新）
+            let laps = DebugLog.text.components(separatedBy: "
+").last { $0.contains("tab switch ms") } ?? ""
+            print("TABSWITCH \(k) total=\(String(format: "%.0f", s * 1000)) \(laps)")
             spin(0.2)
             XCTAssertEqual(tabs.shownNotebookID, to)
         }

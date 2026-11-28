@@ -117,11 +117,21 @@ final class TabsViewController: UIViewController {
             if let next = store.state.active { show(next) } else { exitToLibrary() }
             return
         }
+        // 除錯紀錄：切分頁每一段花多久（回報過切分頁要等一秒）
+        var t = CACurrentMediaTime()
+        var laps: [String] = []
+        func lap(_ name: String) {
+            let now = CACurrentMediaTime()
+            laps.append(String(format: "%@=%.0f", name, (now - t) * 1000))
+            t = now
+        }
         for (other, e) in editors where other != id && e.parent != nil {
             e.saveAndRememberPage()
+            lap("save")
             e.willMove(toParent: nil)
             e.view.removeFromSuperview()
             e.removeFromParent()
+            lap("detach")
         }
         if vc.parent == nil {
             addChild(vc)
@@ -135,13 +145,18 @@ final class TabsViewController: UIViewController {
             ])
             vc.didMove(toParent: self)
         }
+        lap("attach")
         if let page = store.pendingPage.removeValue(forKey: id) { vc.jump(toPageID: page) }
         vc.didBecomeActiveTab()
+        lap("activate")
         store.activate(id)
         recent.removeAll { $0 == id }
         recent.insert(id, at: 0)
         evictIfNeeded()
+        lap("evict")
         rebuildTabs()
+        lap("tabs+layout")
+        DebugLog.add("tab switch ms: " + laps.joined(separator: " "))
     }
 
     private func editor(for id: UUID) -> NotebookViewController? {
