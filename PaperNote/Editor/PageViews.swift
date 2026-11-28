@@ -33,9 +33,15 @@ final class PageBackgroundView: UIView {
     required init?(coder: NSCoder) { fatalError() }
 
     override func draw(_ rect: CGRect) {
+        Self.countLock.lock(); Self._tilesDrawn += 1; Self.countLock.unlock()
         guard let s = snapshot, let ctx = UIGraphicsGetCurrentContext() else { return }
         PageRenderer.drawBackground(s, in: ctx, clip: rect)
     }
+
+    /// 總共畫了幾塊（測試用：看哪些改動會讓背景重畫）。每一塊在背景執行緒畫
+    private static let countLock = NSLock()
+    private static var _tilesDrawn = 0
+    static var tilesDrawn: Int { countLock.lock(); defer { countLock.unlock() }; return _tilesDrawn }
 }
 
 /// 表格、文字框的顯示
