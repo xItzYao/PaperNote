@@ -183,7 +183,8 @@ final class NotebookSession {
         }
     }
 
-    func backgroundSnapshot(for page: Page) -> BackgroundSnapshot {
+    /// highlights：螢光標示一起畫（縮圖、匯出）。畫面上的頁面另外疊一層（見 TextHighlightView），背景不含螢光標示
+    func backgroundSnapshot(for page: Page, highlights: Bool = true) -> BackgroundSnapshot {
         var paper: PaperStyle?
         var cgPage: CGPDFPage?
         var transform = CGAffineTransform.identity
@@ -197,7 +198,7 @@ final class NotebookSession {
             }
         }
         return BackgroundSnapshot(fullSize: fullSize(of: page), insets: page.insets, baseSize: baseSize(of: page),
-                                  paper: paper, pdfPage: cgPage, pdfTransform: transform, highlights: page.highlights)
+                                  paper: paper, pdfPage: cgPage, pdfTransform: transform, highlights: highlights ? page.highlights : [])
     }
 
     // MARK: Images

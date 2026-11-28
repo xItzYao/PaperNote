@@ -611,21 +611,31 @@ extension NotebookViewController {
         (settings.pixelEraser ? settings.eraserWidth / 2 : 4) / canvas.zoomScale
     }
 
-    func eraseHighlights(at p: CGPoint) {
-        guard tool == .eraser, let i = pageIndex(containing: p) else { return }
-        let o = contentOrigin(i)
-        let local = CGPoint(x: p.x - o.x, y: p.y - o.y)
+    /// 擦掉橡皮擦這一下經過的點碰到的螢光標示：同一頁一次改完（每個點各改一次的話，一下就要更新好幾次頁面）
+    func eraseHighlights(along path: [CGPoint]) {
+        guard tool == .eraser else { return }
+        var byPage: [Int: [CGPoint]] = [:]
+        for p in path {
+            guard let i = pageIndex(containing: p) else { continue }
+            let o = contentOrigin(i)
+            byPage[i, default: []].append(CGPoint(x: p.x - o.x, y: p.y - o.y))
+        }
         let radius = eraserRadius
-        func hit(_ r: CGRect) -> Bool { r.insetBy(dx: -radius, dy: -radius).contains(local) }
-        guard pages[i].highlights.contains(where: { $0.rects.contains(where: hit) }) else { return }
         let pixel = settings.pixelEraser
-        updatePage(i) { page in
-            if pixel {
-                // 局部擦除：只擦掉碰到的那一行
-                for k in page.highlights.indices { page.highlights[k].rects.removeAll(where: hit) }
-                page.highlights.removeAll { $0.rects.isEmpty }
-            } else {
-                page.highlights.removeAll { $0.rects.contains(where: hit) }
+        for (i, points) in byPage {
+            func hit(_ r: CGRect) -> Bool {
+                let reach = r.insetBy(dx: -radius, dy: -radius)
+                return points.contains { reach.contains($0) }
+            }
+            guard pages[i].highlights.contains(where: { $0.rects.contains(where: hit) }) else { continue }
+            updatePage(i) { page in
+                if pixel {
+                    // 局部擦除：只擦掉碰到的那一行
+                    for k in page.highlights.indices { page.highlights[k].rects.removeAll(where: hit) }
+                    page.highlights.removeAll { $0.rects.isEmpty }
+                } else {
+                    page.highlights.removeAll { $0.rects.contains(where: hit) }
+                }
             }
         }
     }

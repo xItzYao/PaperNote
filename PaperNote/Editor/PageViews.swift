@@ -4,7 +4,7 @@ final class FastTiledLayer: CATiledLayer {
     override class func fadeDuration() -> CFTimeInterval { 0.05 }
 }
 
-/// 頁面背景（紙張、螢光、PDF），用 CATiledLayer 讓放大時仍然清晰
+/// 頁面背景（紙張、PDF），用 CATiledLayer 讓放大時仍然清晰。螢光標示不畫在這裡（見 TextHighlightView）
 final class PageBackgroundView: UIView {
     override class var layerClass: AnyClass { FastTiledLayer.self }
 
@@ -92,10 +92,46 @@ final class DrawnElementView: UIView {
     }
 }
 
-/// 一個頁面：背景＋物件層。所有手勢都在畫布上處理，這裡不接收觸控。
+/// 螢光標示（PDF 上對齊文字的螢光筆、選取文字加的標示）：疊在背景上面，用 multiply 混合，
+/// 和以前畫在 PDF 底下一樣，字不會被蓋淡（白紙乘上黃色＝黃色，黑字乘上黃色還是黑的）。
+/// 不畫在背景裡：背景每改一次就要把整頁 PDF 重畫一次，擦螢光筆、畫螢光筆的時候會一直重畫
+final class TextHighlightView: UIView {
+    private(set) var highlights: [TextHighlight] = []
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isOpaque = false
+        isUserInteractionEnabled = false
+        layer.compositingFilter = "multiplyBlendMode"
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func set(_ new: [TextHighlight]) {
+        guard new != highlights else { return }
+        highlights = new
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.sublayers?.forEach { $0.removeFromSuperlayer() }
+        // 後面的蓋在前面的上面（和以前依序填色一樣）
+        for h in new {
+            let path = CGMutablePath()
+            for r in h.rects { path.addRect(r) }
+            let shape = CAShapeLayer()
+            shape.path = path
+            shape.fillColor = UIColor(hex: h.colorHex).cgColor
+            layer.addSublayer(shape)
+        }
+        CATransaction.commit()
+    }
+}
+
+/// 一個頁面：背景＋螢光標示＋物件層。所有手勢都在畫布上處理，這裡不接收觸控。
 final class PageContainerView: UIView {
     let pageID: UUID
     let background = PageBackgroundView()
+    let highlightView = TextHighlightView()
     let elementsLayer = UIView()
     /// 自製筆刷的筆跡。不在這個 view 裡：編輯器把它放在 PencilKit 筆跡上面（inkContainer），螢光筆才不會蓋住字
     let inkView = PageInkView()
@@ -112,6 +148,7 @@ final class PageContainerView: UIView {
         layer.shadowRadius = 6
         layer.shadowOffset = CGSize(width: 0, height: 2)
         addSubview(background)
+        addSubview(highlightView)
         addSubview(elementsLayer)
         elementsLayer.clipsToBounds = false
         // 筆跡不會畫到頁面外
@@ -123,13 +160,15 @@ final class PageContainerView: UIView {
     func configure(page: Page, session: NotebookSession, contentScale: CGFloat) {
         let size = session.fullSize(of: page)
         let base = session.baseSize(of: page)
-        let bgChanged = lastPage == nil || lastPage!.insets != page.insets || lastPage!.highlights != page.highlights
-            || lastPage!.background != page.background
+        let bgChanged = lastPage == nil || lastPage!.insets != page.insets || lastPage!.background != page.background
         if bgChanged {
             background.frame = CGRect(origin: .zero, size: size)
-            background.snapshot = session.backgroundSnapshot(for: page)
+            background.snapshot = session.backgroundSnapshot(for: page, highlights: false)
             layer.shadowPath = UIBezierPath(rect: CGRect(origin: .zero, size: size)).cgPath
         }
+        // 螢光標示的座標和物件一樣是內容座標（原本頁面的左上角為原點）
+        highlightView.frame = CGRect(x: page.insets.left, y: page.insets.top, width: base.width, height: base.height)
+        highlightView.set(page.highlights)
         elementsLayer.frame = CGRect(x: page.insets.left, y: page.insets.top, width: base.width, height: base.height)
         inkView.set(strokes: page.ink, offset: CGPoint(x: page.insets.left, y: page.insets.top), renderScale: contentScale)
 
