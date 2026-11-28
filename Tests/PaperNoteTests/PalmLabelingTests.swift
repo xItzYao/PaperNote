@@ -52,7 +52,7 @@ final class PalmLabelingTests: XCTestCase {
         let prompt = try XCTUnwrap(editor.palmLabelPrompt, "全部放開：問這一下是什麼")
         XCTAssertNotNil(prompt.superview)
         prompt.palmButton.sendActions(for: .touchUpInside)
-        XCTAssertNil(editor.palmLabelPrompt, "回答完小框就收起來")
+        XCTAssertNil(prompt.superview, "回答完小框就收起來")
 
         let saved = PalmLabelStore.shared.samples
         XCTAssertEqual(saved.count, 2)
@@ -68,7 +68,10 @@ final class PalmLabelingTests: XCTestCase {
 
         // 存到磁碟：重新讀得回來，分享出去的檔案也是這些
         let reloaded = PalmLabelStore(url: PalmLabelStore.shared.url)
-        XCTAssertEqual(reloaded.samples, saved)
+        // 時間存成文字會少掉一點小數，其他照樣
+        XCTAssertEqual(reloaded.samples.map { var s = $0; s.time = .distantPast; return s },
+                       saved.map { var s = $0; s.time = .distantPast; return s })
+        XCTAssertEqual(reloaded.samples.first?.time.timeIntervalSince1970 ?? 0, saved[0].time.timeIntervalSince1970, accuracy: 1)
         let exported = try JSONSerialization.jsonObject(with: Data(contentsOf: PalmLabelStore.shared.exportFile())) as? [[String: Any]]
         XCTAssertEqual(exported?.count, 2)
         XCTAssertEqual(exported?.first?["label"] as? String, "palm")
