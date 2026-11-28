@@ -217,6 +217,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     /// 畫布上次從各頁組起來、或拆回各頁時，每頁（畫布座標）的筆跡指紋。沒變的頁不重拆：
     /// 拆的時候座標要減回去，小數可能差一點點，存檔就會以為每一頁都改過
     var committedInk: [UUID: Data] = [:]
+    /// 上次拆回各頁之後，畫布上的筆跡變過（見 canvasViewDrawingDidChange）
+    var canvasInkChanged = true
     var saveWorkItem: DispatchWorkItem?
     var keyboardInset: CGFloat = 0
 
@@ -1041,10 +1043,14 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
         canvas.drawing = assembleDrawing()
         isApplyingDrawing = false
         committedInk = pageBuckets(canvas.drawing).mapValues { PKDrawing(strokes: $0).contentSignature }
+        canvasInkChanged = false
     }
 
     /// 畫布的筆跡拆回各頁。筆跡沒變的頁維持原本的資料，不重算座標
     func commitDrawing() {
+        // 畫布上的筆跡沒變：各頁的資料就是上次拆好的。不然每次存檔（切分頁也會存）都要把整本的筆跡分頁、一筆一筆算指紋
+        guard canvasInkChanged else { return }
+        canvasInkChanged = false
         var next: [UUID: PKDrawing] = [:]
         var ink: [UUID: Data] = [:]
         var indices: [UUID: Int] = [:]
@@ -1182,6 +1188,8 @@ final class NotebookViewController: UIViewController, PKCanvasViewDelegate {
     // MARK: - PKCanvasViewDelegate
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
+        // 寫字、程式換筆跡（復原、擦掉、套索）都會到這裡：下次存檔要重新拆到各頁
+        canvasInkChanged = true
         uiTestTrace("pk changed applying=\(isApplyingDrawing)", canvas.drawing.strokes)
         updateUITestDump()
         guard !isApplyingDrawing else { return }

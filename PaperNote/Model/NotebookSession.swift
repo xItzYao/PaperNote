@@ -8,12 +8,16 @@ final class NotebookSession {
     let directory: URL
     var document: NotebookDocument
     /// 每頁筆跡，座標為頁面內容座標（原始頁面左上角為原點，擴展區為負值或超出原尺寸）
-    var drawings: [UUID: PKDrawing] = [:]
+    var drawings: [UUID: PKDrawing] = [:] { didSet { drawingsChanged = true } }
+    /// 上次存檔之後 drawings 有被改過（沒改就不用一頁一頁算指紋比對）
+    private var drawingsChanged = false
 
     /// 每頁上次存的（或打開時的）筆跡指紋：一樣就不重寫（見 PKDrawing.contentSignature）
     private var savedInk: [UUID: Data] = [:]
-    /// 上次存的（或打開時的）document.json 內容：一樣就不重寫
-    private var savedDocumentData: Data?
+    /// 上次存的（或打開時的）document.json 的內容：一樣就不重寫。
+    /// 用 == 比，不是編成 JSON 再比：自製筆刷的每個點都要編碼，整本可能要一秒，沒改的頁（陣列還是同一份）一下就比完。
+    /// 每次切分頁都會存檔，什麼都沒改也要編碼整本的話，切分頁就要等那一秒
+    private var savedDocument: NotebookDocument?
     /// 上次畫縮圖之後有存過改動
     private(set) var needsThumbnails = false
     private var pdfCache: [String: PDFDocument] = [:]
@@ -40,7 +44,7 @@ final class NotebookSession {
         directory = LibraryStore.shared.notebookURL(id)
         let data = try Data(contentsOf: Self.documentURL(in: directory))
         document = try JSONDecoder.app.decode(NotebookDocument.self, from: data)
-        savedDocumentData = try? JSONEncoder.app.encode(document)
+        savedDocument = document
         for dir in [filesURL, drawingsURL, thumbsURL] {
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
@@ -224,19 +228,19 @@ final class NotebookSession {
     /// 雲端備份才不會以為有改
     func save() {
         var changed = false
-        do {
-            let data = try JSONEncoder.app.encode(document)
-            if data != savedDocumentData {
+        if document != savedDocument {
+            do {
+                let data = try JSONEncoder.app.encode(document)
                 try fm.createDirectory(at: directory, withIntermediateDirectories: true)
                 try data.write(to: Self.documentURL(in: directory), options: .atomic)
-                savedDocumentData = data
+                savedDocument = document
                 changed = true
+            } catch {
+                print("Save document failed: \(error)")
             }
-        } catch {
-            print("Save document failed: \(error)")
         }
         let ids = Set(document.pages.map(\.id) + trashedPages.map(\.page.id))
-        for page in document.pages {
+        for page in document.pages where drawingsChanged {
             let d = drawings[page.id] ?? PKDrawing()
             if d.strokes.isEmpty && savedInk[page.id] == nil { continue }
             let ink = d.contentSignature
@@ -252,6 +256,7 @@ final class NotebookSession {
             drawings[pid] = nil
             changed = true
         }
+        drawingsChanged = false
         if changed { needsThumbnails = true }
         let trashedCount = trashedPages.count
         let favorites = document.pages.enumerated().compactMap { i, p -> FavoriteRef? in

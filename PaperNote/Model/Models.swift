@@ -164,7 +164,7 @@ struct Page: Codable, Equatable, Identifiable {
 }
 
 /// 被刪除的頁面（30 天內可以還原）
-struct TrashedPage: Codable, Identifiable {
+struct TrashedPage: Codable, Equatable, Identifiable {
     var page: Page
     var deletedAt: Date
     var originalIndex: Int
@@ -172,7 +172,7 @@ struct TrashedPage: Codable, Identifiable {
     var id: UUID { page.id }
 }
 
-struct NotebookDocument: Codable {
+struct NotebookDocument: Codable, Equatable {
     var version = 1
     var pages: [Page]
     /// 最近刪除的頁面（舊版存檔沒有這個欄位）
