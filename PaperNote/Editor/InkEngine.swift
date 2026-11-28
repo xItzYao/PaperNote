@@ -349,7 +349,13 @@ final class InkCaptureRecognizer: UIGestureRecognizer {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
-        for t in touches where t !== tracked {
+        for t in touches {
+            // 上一筆的結束沒收到（見 UITouch.endsTracking）：那一筆就到這裡為止，接著收這一筆
+            if let old = tracked, t.endsTracking(of: old, in: event) {
+                DebugLog.add("ink capture: previous touch was lost (phase=\(old.phase.rawValue)), starting over")
+                tracked = nil
+                onEnd?(false)
+            }
             guard tracked == nil, t.type == .pencil || (allowFinger && t.type == .direct) else {
                 ignore(t, for: event)
                 continue

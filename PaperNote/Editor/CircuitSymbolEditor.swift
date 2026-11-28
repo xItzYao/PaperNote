@@ -528,7 +528,7 @@ final class SymbolStrokeRecognizer: UIGestureRecognizer {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
-        if let old = tracked, old.isOver(in: event) { tracked = nil }
+        if let old = tracked, let t = touches.first, t.endsTracking(of: old, in: event) { tracked = nil }
         guard tracked == nil, let t = touches.first else { return }
         tracked = t
         state = .began

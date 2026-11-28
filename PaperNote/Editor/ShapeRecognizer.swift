@@ -160,8 +160,8 @@ final class PencilHoldRecognizer: UIGestureRecognizer {
     private func location(_ t: UITouch) -> CGPoint { t.location(in: coordinateView) }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
-        // 上一筆的結束沒收到（見 UITouch.isOver）：當它取消了。不能用 finish，它會讓這一筆也失敗
-        if let old = tracked, old.isOver(in: event) {
+        // 上一筆的結束沒收到（見 UITouch.endsTracking）：當它取消了。不能用 finish，它會讓這一筆也失敗
+        if let old = tracked, let t = touches.first, t.endsTracking(of: old, in: event) {
             timer?.invalidate()
             if triggered { onEnd?(lastPoint, true) }
             tracked = nil
@@ -257,7 +257,7 @@ final class TouchTracker: UIGestureRecognizer {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
-        if let old = tracked, old.isOver(in: event) {
+        if let old = tracked, let t = touches.first, t.endsTracking(of: old, in: event) {
             DebugLog.add("touch tracker: previous touch was lost (phase=\(old.phase.rawValue)), starting over")
             tracked = nil
             onEnded?()
@@ -306,6 +306,16 @@ extension UITouch {
         if isOver { return true }
         guard let all = event.allTouches else { return false }
         return !all.contains(self)
+    }
+
+    /// 這個剛開始的觸碰表示記著的 old 已經結束了（辨識器一次只追一個觸碰，old 的結束沒收到就要換成這個）：
+    /// - old 已經放開，或系統收走了（isOver）
+    /// - 兩個都是 Pencil：只有一支筆，新的一筆開始，上一筆一定已經放開了。選單開著時下筆、選單關到一半，
+    ///   系統會把那一筆收走、放開的消息沒送來，而且它還一直留在之後每個事件的觸碰裡（phase 停在「移動中」），只看 isOver 認不出來。
+    ///   認不出來的話辨識器會一直等那一筆放開，之後的每一筆都被忽略：橡皮擦、自製筆刷都不能用
+    /// - 系統拿同一個觸碰物件當新的一筆（UIKit 會重複使用 UITouch）
+    func endsTracking(of old: UITouch, in event: UIEvent) -> Bool {
+        self === old || old.isOver(in: event) || (type == .pencil && old.type == .pencil)
     }
 }
 

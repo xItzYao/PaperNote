@@ -48,12 +48,15 @@ extension NotebookViewController: UIGestureRecognizerDelegate {
         pencilPointTracker.onBegan = { [weak self] _ in
             guard let self else { return }
             self.pencilDown = true
+            // 選單開著時用筆碰頁面：和手指一樣，請選單自己關完（見 finishToolbarMenus）。
+            // 系統沒關完的話，選單留下的容器會把之後的觸碰收走，筆的放開送不到頁面
+            let leftover = self.finishToolbarMenus()
             // 頁面還在慣性捲動時下筆：先停住，筆跡才不會跟著頁面滑走
             self.canvas.stopMomentum()
             self.holdToShape.pencilTouchedDown()
             let g = self.canvas.drawingGestureRecognizer
             let since = self.pkUsingSince.map { String(format: "%.1fs", CACurrentMediaTime() - $0) } ?? "nil"
-            DebugLog.add("pencil down tool=\(self.tool) customInk=\(self.customInkActive) drawGR enabled=\(g.isEnabled) state=\(g.state.rawValue) pkUsing=\(since) presented=\(self.presentedViewController.map { String(describing: type(of: $0)) } ?? "nil")")
+            DebugLog.add("pencil down tool=\(self.tool) customInk=\(self.customInkActive) drawGR enabled=\(g.isEnabled) state=\(g.state.rawValue) pkUsing=\(since) presented=\(self.presentedViewController.map { String(describing: type(of: $0)) } ?? "nil")\(leftover)")
             // 保險：筆、螢光筆用 PencilKit 寫時，PencilKit 的書寫手勢一定要開著（橡皮擦是 App 自己擦）
             if self.tool.isInking, !g.isEnabled { g.isEnabled = true }
             // 上一筆一直沒收到「結束」：PencilKit 卡在書寫中，之後的筆都會被忽略 → 重設書寫手勢

@@ -69,19 +69,82 @@ final class LostPencilTouchTests: XCTestCase {
         tracker.touchesEnded([next], with: FakeEvent([next]))
     }
 
-    func testAStrokeStillInProgressKeepsItsTouch() throws {
-        let tracker = try XCTUnwrap(editor.pencilPointTracker)
+    /// 手指可以好幾根一起按：還沒放開的那一根不會被後來的手指換掉
+    func testAFingerStrokeStillInProgressKeepsItsTouch() throws {
+        let tracker = TouchTracker(target: nil, action: nil)
+        tracker.allowFinger = true
         var began = 0
-        let saved = tracker.onBegan
-        defer { tracker.onBegan = saved }
         tracker.onBegan = { _ in began += 1 }
-        let first = FakeTouch(type: .pencil)
+        let first = FakeTouch(type: .direct)
         tracker.touchesBegan([first], with: FakeEvent([first]))
         first.fakePhase = .moved
-        let second = FakeTouch(type: .pencil)
+        let second = FakeTouch(type: .direct)
         tracker.touchesBegan([second], with: FakeEvent([first, second]))
-        XCTAssertEqual(began, 1, "還沒放開的那一筆不會被換掉")
+        XCTAssertEqual(began, 1, "還沒放開的那一根不會被換掉")
         tracker.touchesEnded([first], with: UIEvent())
+    }
+
+    /// 回報的問題（11/28）：打開右上「⋯」選單，直接用筆寫字讓選單關掉，換到橡皮擦一擦下去就卡死，
+    /// 再換回筆也寫不出來；之後的紀錄連「pencil down」都沒有。選單關到一半，系統把那一筆收走：
+    /// 放開的消息沒送來，而且它一直留在之後每個事件的觸碰裡（phase 停在「移動中」），
+    /// 辨識器以為上一筆還按著，之後的每一筆都忽略。只有一支筆：新的一筆開始，上一筆一定放開了
+    func testAPencilTouchStuckInTheEventDoesNotBlockTheNextStroke() throws {
+        let tracker = try XCTUnwrap(editor.pencilPointTracker)
+        let lost = FakeTouch(type: .pencil, location: CGPoint(x: 200, y: 300))
+        tracker.touchesBegan([lost], with: FakeEvent([lost]))
+        lost.fakePhase = .moved
+        editor.pencilDown = false
+        let next = FakeTouch(type: .pencil, location: CGPoint(x: 220, y: 320))
+        tracker.touchesBegan([next], with: FakeEvent([lost, next]))
+        XCTAssertTrue(editor.pencilDown, "下一筆要收到（收走的那一筆還留在事件裡）")
+        tracker.touchesEnded([next], with: FakeEvent([lost, next]))
+    }
+
+    func testTheEraserKeepsWorkingAfterAPencilTouchIsLost() throws {
+        editor.setTool(.eraser)
+        let eraser = editor.eraserCapture
+        let o = editor.contentOrigin(0)
+        let lost = FakeTouch(type: .pencil, location: CGPoint(x: o.x + 100, y: o.y + 100))
+        eraser.touchesBegan([lost], with: FakeEvent([lost]))
+        lost.fakePhase = .moved
+        XCTAssertEqual(editor.lastEraserPoint, lost.point)
+
+        let next = FakeTouch(type: .pencil, location: CGPoint(x: o.x + 300, y: o.y + 400))
+        eraser.touchesBegan([next], with: FakeEvent([lost, next]))
+        XCTAssertEqual(editor.lastEraserPoint, next.point, "下一筆橡皮擦要開始擦（不是一直等收走的那一筆）")
+        next.point = CGPoint(x: o.x + 340, y: o.y + 400)
+        next.fakePhase = .moved
+        eraser.touchesMoved([next], with: FakeEvent([lost, next]))
+        eraser.touchesEnded([next], with: FakeEvent([lost, next]))
+        XCTAssertNil(editor.lastEraserPoint, "這一筆正常結束")
+    }
+
+    func testCustomInkKeepsWritingAfterAPencilTouchIsLost() throws {
+        let ink = InkCaptureRecognizer(target: nil, action: nil)
+        var begins: [CGPoint] = [], ends: [Bool] = []
+        ink.onBegin = { begins.append($0.point) }
+        ink.onEnd = { ends.append($0) }
+        let lost = FakeTouch(type: .pencil, location: CGPoint(x: 10, y: 10))
+        ink.touchesBegan([lost], with: FakeEvent([lost]))
+        lost.fakePhase = .moved
+        let next = FakeTouch(type: .pencil, location: CGPoint(x: 50, y: 60))
+        ink.touchesBegan([next], with: FakeEvent([lost, next]))
+        XCTAssertEqual(begins, [lost.point, next.point], "下一筆要開始寫")
+        XCTAssertEqual(ends, [false], "收走的那一筆到這裡結束（寫好的字留著）")
+        ink.touchesEnded([next], with: FakeEvent([lost, next]))
+        XCTAssertEqual(ends, [false, false])
+    }
+
+    /// 選單開著時用筆碰頁面：和手指一樣，選單關完（系統沒收掉的選單容器拿掉）
+    func testAPencilTouchOnThePageClosesALeftoverMenu() throws {
+        final class FakeContextMenuContainerView: UIView {}
+        let leftover = FakeContextMenuContainerView(frame: window.bounds)
+        window.addSubview(leftover)
+        let tracker = try XCTUnwrap(editor.pencilPointTracker)
+        let pencil = FakeTouch(type: .pencil, location: CGPoint(x: 200, y: 300))
+        tracker.touchesBegan([pencil], with: FakeEvent([pencil]))
+        XCTAssertNil(leftover.superview, "選單留下的容器要拿掉，之後的觸碰才不會被它收走")
+        tracker.touchesEnded([pencil], with: FakeEvent([pencil]))
     }
 }
 

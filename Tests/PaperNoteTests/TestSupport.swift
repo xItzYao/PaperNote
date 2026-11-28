@@ -38,6 +38,7 @@ final class FakeTouch: UITouch {
     override var majorRadius: CGFloat { radius }
     override var phase: UITouch.Phase { fakePhase }
     override func location(in view: UIView?) -> CGPoint { point }
+    override func preciseLocation(in view: UIView?) -> CGPoint { point }
     override var view: UIView? { nil }
 }
 
